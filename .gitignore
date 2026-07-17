@@ -55,7 +55,9 @@ test
 
 *.pyc
 
-gohulu
-gostream
-
 !.opencode.json
+
+gospy
+
+.gospy/
+.cortexkit/
