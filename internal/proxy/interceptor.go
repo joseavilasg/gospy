@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"bytes"
-	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -70,18 +69,25 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 	contentType := resp.Header.Get("Content-Type")
 	LogResponse(ctx.Req.Method, ctx.Req.URL.String(), resp.StatusCode, contentType)
 
-	entries := ic.history.List()
-	if len(entries) > 0 {
-		entry := entries[0]
-		entry.Response = &history.ResponseRecord{
-			Status:  resp.StatusCode,
-			Headers: resp.Header,
-			Body:    body,
-		}
-		entry.Modified = false
+	reqURL := ctx.Req.URL.Scheme + "://" + ctx.Req.Host + ctx.Req.URL.Path
+	if ctx.Req.URL.RawQuery != "" {
+		reqURL += "?" + ctx.Req.URL.RawQuery
+	}
 
-		data, _ := json.MarshalIndent(entry, "", "  ")
-		_ = data
+	entries := ic.history.List()
+	for _, entry := range entries {
+		if entry.Request.Method == ctx.Req.Method &&
+			entry.Request.URL == reqURL &&
+			entry.Response == nil {
+			entry.Response = &history.ResponseRecord{
+				Status:  resp.StatusCode,
+				Headers: resp.Header,
+				Body:    body,
+			}
+			entry.Modified = false
+			_ = ic.history.Update(entry)
+			break
+		}
 	}
 
 	return resp

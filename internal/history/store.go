@@ -137,6 +137,23 @@ func (s *Store) Get(id string) (*Entry, error) {
 	return nil, fmt.Errorf("entry %s not found", id)
 }
 
+func (s *Store) Update(entry *Entry) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	data, err := json.MarshalIndent(entry, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal entry: %w", err)
+	}
+
+	path := filepath.Join(s.dir, entry.ID+".json")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("write entry: %w", err)
+	}
+
+	return nil
+}
+
 func (s *Store) Clear() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
