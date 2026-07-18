@@ -121,6 +121,15 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
         case 'copy-body':
             copyBody(btn.dataset.target);
             break;
+        case 'edit-body':
+            editBody(btn.dataset.target);
+            break;
+        case 'save-body':
+            saveBody(btn.dataset.target);
+            break;
+        case 'cancel-body':
+            cancelBody(btn.dataset.target);
+            break;
     }
 });
 
@@ -184,6 +193,134 @@ function copyBody(target) {
             }
         }
     });
+}
+
+let activeMonacoEditor = null;
+let savedToolbarHtml = null;
+
+function mapContentType(ct) {
+    if (!ct) return 'json';
+    const lower = ct.toLowerCase();
+    if (lower.includes('json')) return 'json';
+    if (lower.includes('html')) return 'html';
+    if (lower.includes('css')) return 'css';
+    if (lower.includes('javascript') || lower.includes('ecmascript')) return 'javascript';
+    if (lower.includes('xml')) return 'xml';
+    if (lower.includes('yaml') || lower.includes('yml')) return 'yaml';
+    if (lower.includes('sql')) return 'sql';
+    if (lower.includes('python')) return 'python';
+    return 'plaintext';
+}
+
+function editBody(target) {
+    const pre = document.querySelector(`pre[data-body-target="${target}"]`);
+    if (!pre) return;
+    const viewer = pre.closest('.body-viewer');
+    if (!viewer) return;
+
+    const existingTree = viewer.querySelector('.json-viewer-container');
+    if (existingTree) {
+        existingTree.remove();
+        pre.style.display = '';
+    }
+
+    const contentType = viewer.dataset.contentType || '';
+    const autoLang = mapContentType(contentType);
+    const savedLang = localStorage.getItem('gospy-editor-lang');
+    const lang = autoLang || savedLang || 'json';
+    const tools = viewer.querySelector('.body-tools');
+    savedToolbarHtml = tools.innerHTML;
+    tools.innerHTML = `
+        <div class="body-tools-group">
+            <button class="body-tool body-tool-save" data-action="save-body" data-target="${target}">Save</button>
+            <button class="body-tool body-tool-cancel" data-action="cancel-body" data-target="${target}">Cancel</button>
+        </div>
+        <select class="body-lang-select" id="editorLangSelect"></select>`;
+
+    const editorContainer = document.createElement('div');
+    editorContainer.className = 'monaco-editor-container';
+    pre.parentNode.insertBefore(editorContainer, pre.nextSibling);
+    pre.style.display = 'none';
+
+    const content = pre.dataset.decoded || pre.textContent || '';
+    createMonacoEditor(editorContainer, content, lang).then((editor) => {
+        activeMonacoEditor = editor;
+
+        const select = document.getElementById('editorLangSelect');
+        const languages = monaco.languages.getLanguages();
+        const seen = new Set();
+        languages.forEach((l) => {
+            if (seen.has(l.id)) return;
+            seen.add(l.id);
+            const opt = document.createElement('option');
+            opt.value = l.id;
+            opt.textContent = l.aliases?.[0] || l.id;
+            if (l.id === lang) opt.selected = true;
+            select.appendChild(opt);
+        });
+
+        select.addEventListener('change', () => {
+            const lang = select.value;
+            monaco.editor.setModelLanguage(editor.getModel(), lang);
+            if (!contentType || autoLang === 'plaintext') {
+                localStorage.setItem('gospy-editor-lang', lang);
+            }
+        });
+
+        editor.focus();
+    });
+}
+
+function saveBody(target) {
+    const pre = document.querySelector(`pre[data-body-target="${target}"]`);
+    if (!pre) return;
+    const viewer = pre.closest('.body-viewer');
+    if (!viewer) return;
+
+    if (activeMonacoEditor) {
+        const value = activeMonacoEditor.getValue();
+        try {
+            const parsed = JSON.parse(value);
+            pre.dataset.decoded = JSON.stringify(parsed, null, 2);
+        } catch {
+            pre.dataset.decoded = value;
+        }
+        pre.textContent = pre.dataset.decoded;
+        activeMonacoEditor.dispose();
+        activeMonacoEditor = null;
+    }
+
+    const container = viewer.querySelector('.monaco-editor-container');
+    if (container) container.remove();
+
+    pre.style.display = '';
+    const tools = viewer.querySelector('.body-tools');
+    if (savedToolbarHtml) {
+        tools.innerHTML = savedToolbarHtml;
+        savedToolbarHtml = null;
+    }
+}
+
+function cancelBody(target) {
+    const pre = document.querySelector(`pre[data-body-target="${target}"]`);
+    if (!pre) return;
+    const viewer = pre.closest('.body-viewer');
+    if (!viewer) return;
+
+    if (activeMonacoEditor) {
+        activeMonacoEditor.dispose();
+        activeMonacoEditor = null;
+    }
+
+    const container = viewer.querySelector('.monaco-editor-container');
+    if (container) container.remove();
+
+    pre.style.display = '';
+    const tools = viewer.querySelector('.body-tools');
+    if (savedToolbarHtml) {
+        tools.innerHTML = savedToolbarHtml;
+        savedToolbarHtml = null;
+    }
 }
 
 const ICON_COLLAPSE = '<svg width="12" height="12" viewBox="0 0 12 12"><polyline points="8,2 4,6 8,10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';

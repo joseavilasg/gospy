@@ -462,3 +462,46 @@ pre {
 .json-viewer .items-ph:hover {
     color: #e0e0e0 !important;
 }
+
+.monaco-editor-container {
+    border-radius: 0 0 4px 4px;
+    border: 1px solid #333;
+    height: 400px;
+    min-height: 200px;
+}
+.monaco-editor-container .monaco-editor {
+    border-radius: 0 0 4px 4px;
+}
+.body-tool-save {
+    color: #4caf50 !important;
+    border-color: #4caf50 !important;
+}
+.body-tool-save:hover {
+    background: #4caf50;
+    color: #fff !important;
+    border-color: #4caf50 !important;
+}
+.body-tool-cancel {
+    color: #f44336 !important;
+    border-color: #f44336 !important;
+}
+.body-tool-cancel:hover {
+    background: #f44336;
+    color: #fff !important;
+    border-color: #f44336 !important;
+}
+.body-lang-select {
+    background: #0d1117;
+    color: #e0e0e0;
+    border: 1px solid #333;
+    border-radius: 3px;
+    padding: 2px 4px;
+    font-size: 10px;
+    font-family: monospace;
+    cursor: pointer;
+    outline: none;
+    margin-left: auto;
+}
+.body-lang-select:hover {
+    border-color: #e0e0e0;
+}

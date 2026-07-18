@@ -1,7 +1,7 @@
 package webui
 
 import (
-	_ "embed"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -34,6 +34,12 @@ var jsonViewerJS string
 
 //go:embed json-viewer.css
 var jsonViewerCSS string
+
+//go:embed monaco-init.js
+var monacoInitJS string
+
+//go:embed monaco
+var monacoFS embed.FS
 
 type IgnoreChecker interface {
 	IsIgnored(host string) bool
@@ -78,6 +84,8 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/render.js", s.handleStatic(renderJS, "application/javascript"))
 	mux.HandleFunc("/json-viewer.js", s.handleStatic(jsonViewerJS, "application/javascript"))
 	mux.HandleFunc("/json-viewer.css", s.handleStatic(jsonViewerCSS, "text/css"))
+	mux.HandleFunc("/monaco-init.js", s.handleStatic(monacoInitJS, "application/javascript"))
+	mux.HandleFunc("/monaco/", handleMonacoFile)
 	mux.HandleFunc("/api/requests", s.handleListRequests)
 	mux.HandleFunc("/api/requests/", s.handleGetRequest)
 	mux.HandleFunc("/api/ignored", s.handleIgnored)
@@ -88,6 +96,21 @@ func (s *Server) ListenAndServe() error {
 	LogWebUI(s.addr)
 
 	return http.ListenAndServe(s.addr, mux)
+}
+
+func handleMonacoFile(w http.ResponseWriter, r *http.Request) {
+	ext := r.URL.Path[strings.LastIndex(r.URL.Path, "."):]
+	switch ext {
+	case ".js":
+		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	case ".css":
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	case ".map":
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	default:
+		w.Header().Set("Content-Type", "application/octet-stream")
+	}
+	http.FileServer(http.FS(monacoFS)).ServeHTTP(w, r)
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {

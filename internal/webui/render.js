@@ -157,6 +157,9 @@ export function renderDetail(req) {
     const reqCompression = req.request.compression || '';
     const respCompression = req.response ? (req.response.compression || '') : '';
 
+    const reqContentType = req.request.headers?.['content-type']?.[0] || req.request.headers?.['Content-Type']?.[0] || '';
+    const respContentType = req.response?.headers?.['content-type']?.[0] || req.response?.headers?.['Content-Type']?.[0] || '';
+
     const ignoreBtn = isIgnored
         ? `<button class="btn-active" data-action="unignore" data-host="${escapeHtml(host)}"><svg width="12" height="12" viewBox="0 0 16 16"><polyline points="3,8 7,12 13,4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg> Remove ignore</button>`
         : `<button class="btn-ignore-detail" data-action="ignore" data-host="${escapeHtml(host)}"><svg width="12" height="12" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/><line x1="5" y1="5" x2="11" y2="11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> Ignore host</button>`;
@@ -174,17 +177,19 @@ export function renderDetail(req) {
             ? `<button class="body-tool" data-action="toggle-body" data-target="request" data-mode="raw">Raw</button><button class="body-tool active" data-action="toggle-body" data-target="request" data-mode="decoded">Decoded</button>`
             : '';
         const reqCopyBtn = `<button class="body-tool" data-action="copy-body" data-target="request">Copy</button>`;
+        const reqEditBtn = `<button class="body-tool" data-action="edit-body" data-target="request">Edit</button>`;
         const reqIndicator = reqCompression
             ? `<span class="body-tools-indicator">${reqCompression} ✓</span>`
             : '';
         reqBodyHtml = `<div class="section-title" style="margin-top:12px">Body</div>
-        <div class="body-viewer" data-viewer="request">
+        <div class="body-viewer" data-viewer="request" data-content-type="${escapeHtml(reqContentType)}">
             <div class="body-tools">
                 ${reqIndicator}
                 <div class="body-tools-group">
                     <button class="body-tool" data-action="prettify-body" data-target="request">Pretty</button>
                     ${reqDecodeBtns}
                     ${reqCopyBtn}
+                    ${reqEditBtn}
                 </div>
             </div>
             <div class="body-divider"></div>
@@ -198,17 +203,19 @@ export function renderDetail(req) {
             ? `<button class="body-tool" data-action="toggle-body" data-target="response" data-mode="raw">Raw</button><button class="body-tool active" data-action="toggle-body" data-target="response" data-mode="decoded">Decoded</button>`
             : '';
         const respCopyBtn = `<button class="body-tool" data-action="copy-body" data-target="response">Copy</button>`;
+        const respEditBtn = `<button class="body-tool" data-action="edit-body" data-target="response">Edit</button>`;
         const respIndicator = respCompression
             ? `<span class="body-tools-indicator">${respCompression} ✓</span>`
             : '';
         respBodyHtml = `<div class="section-title" style="margin-top:12px">Body</div>
-        <div class="body-viewer" data-viewer="response">
+        <div class="body-viewer" data-viewer="response" data-content-type="${escapeHtml(respContentType)}">
             <div class="body-tools">
                 ${respIndicator}
                 <div class="body-tools-group">
                     <button class="body-tool" data-action="prettify-body" data-target="response">Pretty</button>
                     ${respDecodeBtns}
                     ${respCopyBtn}
+                    ${respEditBtn}
                 </div>
             </div>
             <div class="body-divider"></div>
