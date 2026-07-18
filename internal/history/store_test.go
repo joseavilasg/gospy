@@ -121,9 +121,9 @@ func TestStore_Persistence(t *testing.T) {
 		t.Fatalf("New() second load error = %v", err)
 	}
 
-	entries := store2.List()
+	entries := store2.ListSummary()
 	if len(entries) != 1 {
-		t.Errorf("List() after reload = %d entries, want 1", len(entries))
+		t.Errorf("ListSummary() after reload = %d entries, want 1", len(entries))
 	}
 }
 
@@ -204,8 +204,8 @@ func TestStore_Clear(t *testing.T) {
 	}
 
 	files, _ := filepath.Glob(filepath.Join(dir, "*.json"))
-	if len(files) != 0 {
-		t.Errorf("Clear() left %d files, want 0", len(files))
+	if len(files) != 1 {
+		t.Errorf("Clear() left %d files, want 1 (index.json)", len(files))
 	}
 }
 
@@ -239,14 +239,14 @@ func TestStore_ListSortedByTime(t *testing.T) {
 		}
 	}
 
-	entries := store.List()
-	if len(entries) != 3 {
-		t.Fatalf("List() = %d entries, want 3", len(entries))
+	summary := store.ListSummary()
+	if len(summary) != 3 {
+		t.Fatalf("ListSummary() = %d entries, want 3", len(summary))
 	}
 
-	for i := 0; i < len(entries)-1; i++ {
-		if entries[i].Timestamp.Before(entries[i+1].Timestamp) {
-			t.Errorf("entries[%d] (%v) before entries[%d] (%v)", i, entries[i].Timestamp, i+1, entries[i+1].Timestamp)
+	for i := 0; i < len(summary)-1; i++ {
+		if summary[i].Timestamp.Before(summary[i+1].Timestamp) {
+			t.Errorf("entries[%d] (%v) before entries[%d] (%v)", i, summary[i].Timestamp, i+1, summary[i+1].Timestamp)
 		}
 	}
 }
