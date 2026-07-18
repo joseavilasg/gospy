@@ -412,3 +412,53 @@ pre {
     border-radius: 0 0 4px 4px;
     margin-top: 0;
 }
+.json-viewer-container {
+    background: #0d1117;
+    padding: 10px;
+    border-radius: 0 0 4px 4px;
+    margin-top: 0;
+    max-height: 60vh;
+    overflow-y: auto;
+}
+.json-viewer {
+    color: #e0e0e0 !important;
+    background: transparent !important;
+    padding-left: 16px !important;
+    font-size: 11px !important;
+    font-family: monospace !important;
+    line-height: 1.5 !important;
+}
+.json-viewer ul {
+    border-left-color: #333 !important;
+}
+.json-viewer .type-string {
+    color: #a5d6ff !important;
+}
+.json-viewer .type-number {
+    color: #569cd6 !important;
+}
+.json-viewer .type-boolean {
+    color: #d19a66 !important;
+    font-weight: bold !important;
+}
+.json-viewer .type-null,
+.json-viewer .type-undefined {
+    color: #d19a66 !important;
+    font-style: italic !important;
+}
+.json-viewer .type-date {
+    color: #d7ba7d !important;
+}
+.json-viewer a.list-link {
+    color: #e0e0e0 !important;
+    text-decoration: none !important;
+}
+.json-viewer a.list-link:before {
+    color: #888 !important;
+}
+.json-viewer .items-ph {
+    color: #888 !important;
+}
+.json-viewer .items-ph:hover {
+    color: #e0e0e0 !important;
+}

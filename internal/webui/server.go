@@ -29,6 +29,12 @@ var apiJS string
 //go:embed render.js
 var renderJS string
 
+//go:embed json-viewer.js
+var jsonViewerJS string
+
+//go:embed json-viewer.css
+var jsonViewerCSS string
+
 type IgnoreChecker interface {
 	IsIgnored(host string) bool
 	Matches(host string) bool
@@ -70,6 +76,8 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/state.js", s.handleStatic(stateJS, "application/javascript"))
 	mux.HandleFunc("/api.js", s.handleStatic(apiJS, "application/javascript"))
 	mux.HandleFunc("/render.js", s.handleStatic(renderJS, "application/javascript"))
+	mux.HandleFunc("/json-viewer.js", s.handleStatic(jsonViewerJS, "application/javascript"))
+	mux.HandleFunc("/json-viewer.css", s.handleStatic(jsonViewerCSS, "text/css"))
 	mux.HandleFunc("/api/requests", s.handleListRequests)
 	mux.HandleFunc("/api/requests/", s.handleGetRequest)
 	mux.HandleFunc("/api/ignored", s.handleIgnored)

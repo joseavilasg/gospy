@@ -145,11 +145,27 @@ function prettifyBody(target) {
     const pre = document.querySelector(`pre[data-body-target="${target}"]`);
     if (!pre) return;
 
+    const viewer = pre.closest('.body-viewer');
+    if (!viewer) return;
+
+    const existingViewer = viewer.querySelector('.json-viewer-container');
+    if (existingViewer) {
+        existingViewer.remove();
+        pre.style.display = '';
+        return;
+    }
+
     try {
         const obj = JSON.parse(pre.textContent);
-        pre.textContent = JSON.stringify(obj, null, 2);
+        const container = document.createElement('div');
+        container.className = 'json-viewer-container';
+        const jsonViewer = new JSONViewer();
+        container.appendChild(jsonViewer.getContainer());
+        jsonViewer.showJSON(obj, -1, 1);
+        pre.style.display = 'none';
+        pre.parentNode.insertBefore(container, pre.nextSibling);
     } catch (e) {
-        // not JSON, nothing to prettify
+        // not JSON
     }
 }
 
