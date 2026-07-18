@@ -45,6 +45,7 @@
             display: flex;
             flex: 1;
             overflow: hidden;
+            position: relative;
         }
         .request-list {
             width: 350px;
@@ -171,7 +172,7 @@
             color: #a5d6ff;
             word-break: break-word;
         }
-        .refresh-btn {
+        .btn {
             background: #0f3460;
             border: none;
             color: #e0e0e0;
@@ -180,9 +181,7 @@
             cursor: pointer;
             font-size: 11px;
         }
-        .refresh-btn:hover {
-            background: #1a4a7a;
-        }
+        .btn:hover { background: #1a4a7a; }
         .auto-refresh {
             display: flex;
             align-items: center;
@@ -190,6 +189,100 @@
             font-size: 11px;
             color: #888;
         }
+        .badge {
+            background: #e94560;
+            color: #fff;
+            font-size: 9px;
+            padding: 1px 5px;
+            border-radius: 8px;
+            margin-left: 4px;
+        }
+        .ignored-panel {
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 300px;
+            height: 100%;
+            background: #0d1117;
+            border-left: 1px solid #0f3460;
+            z-index: 10;
+            display: none;
+            flex-direction: column;
+        }
+        .ignored-panel.open { display: flex; }
+        .ignored-panel-header {
+            padding: 12px;
+            border-bottom: 1px solid #0f3460;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .ignored-panel-header h3 {
+            font-size: 13px;
+            color: #e94560;
+        }
+        .ignored-panel-close {
+            background: none;
+            border: none;
+            color: #888;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .ignored-panel-close:hover { color: #e0e0e0; }
+        .ignored-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px;
+        }
+        .ignored-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 8px;
+            border-bottom: 1px solid #1a1a2e;
+            font-size: 11px;
+        }
+        .ignored-item .host { color: #aaa; }
+        .ignored-item .remove-btn {
+            background: none;
+            border: none;
+            color: #666;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .ignored-item .remove-btn:hover { color: #e94560; }
+        .detail-toolbar {
+            margin-bottom: 12px;
+        }
+        .btn-ignore-detail {
+            background: transparent;
+            border: 1px solid #555;
+            color: #888;
+            padding: 4px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .btn-ignore-detail:hover {
+            border-color: #e94560;
+            color: #e94560;
+        }
+        .btn-active {
+            background: #0f3460;
+            border: 1px solid #4caf50;
+            color: #4caf50;
+            padding: 4px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .btn-active:hover { background: #1a4a7a; }
     </style>
 </head>
 <body>
@@ -198,11 +291,12 @@
         <span class="stats" id="stats">0 requests</span>
         <input type="text" class="filter-input" id="filterInput" placeholder="Filter (method, url, status)...">
         <div style="flex:1"></div>
+        <button class="btn" onclick="toggleIgnoredPanel()">Ignored <span class="badge" id="ignoredCount">0</span></button>
         <div class="auto-refresh">
             <input type="checkbox" id="autoRefresh" checked>
             <label for="autoRefresh">Auto</label>
         </div>
-        <button class="refresh-btn" onclick="loadRequests()">Refresh</button>
+        <button class="btn" onclick="loadRequests()">Refresh</button>
     </header>
     <div class="container">
         <div class="request-list" id="requestList">
@@ -213,12 +307,20 @@
         <div class="detail-panel" id="detailPanel">
             <div class="empty">Select a request to view details</div>
         </div>
+        <div class="ignored-panel" id="ignoredPanel">
+            <div class="ignored-panel-header">
+                <h3>Ignored Hosts</h3>
+                <button class="ignored-panel-close" onclick="toggleIgnoredPanel()">&times;</button>
+            </div>
+            <div class="ignored-list" id="ignoredList"></div>
+        </div>
     </div>
 
     <script>
         let requests = [];
         let selectedId = null;
         let filterText = '';
+        let ignoredHosts = [];
 
         async function loadRequests() {
             try {
@@ -228,6 +330,74 @@
             } catch (e) {
                 console.error('Failed to load requests:', e);
             }
+        }
+
+        async function loadIgnored() {
+            try {
+                const resp = await fetch('/api/ignored');
+                ignoredHosts = await resp.json();
+                document.getElementById('ignoredCount').textContent = ignoredHosts.length;
+                renderIgnoredList();
+            } catch (e) {
+                console.error('Failed to load ignored:', e);
+            }
+        }
+
+        async function confirmIgnoreHost(host) {
+            if (!host) return;
+            if (!confirm('Ignore all requests from ' + host + '?')) return;
+            try {
+                const resp = await fetch('/api/ignored', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ host })
+                });
+                if (!resp.ok) throw new Error('Server returned ' + resp.status);
+                ignoredHosts.push(host);
+                document.getElementById('ignoredCount').textContent = ignoredHosts.length;
+                renderIgnoredList();
+                const btn = document.querySelector('.btn-ignore-detail');
+                if (btn) {
+                    btn.outerHTML = `<button class="btn-active" onclick="confirmUnignoreHost('${escapeHtml(host)}')"><svg width="12" height="12" viewBox="0 0 16 16"><polyline points="3,8 7,12 13,4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg> Remove ignore</button>`;
+                }
+                renderList();
+            } catch (e) {
+                console.error('Failed to ignore host:', e);
+            }
+        }
+
+        async function confirmUnignoreHost(host) {
+            try {
+                await fetch('/api/ignored/' + encodeURIComponent(host), { method: 'DELETE' });
+                ignoredHosts = ignoredHosts.filter(h => h !== host);
+                document.getElementById('ignoredCount').textContent = ignoredHosts.length;
+                renderIgnoredList();
+                const btn = document.querySelector('.btn-active');
+                if (btn) {
+                    btn.outerHTML = `<button class="btn-ignore-detail" onclick="confirmIgnoreHost('${escapeHtml(host)}')"><svg width="12" height="12" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/><line x1="5" y1="5" x2="11" y2="11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> Ignore host</button>`;
+                }
+                renderList();
+            } catch (e) {
+                console.error('Failed to unignore host:', e);
+            }
+        }
+
+        function renderIgnoredList() {
+            const list = document.getElementById('ignoredList');
+            if (ignoredHosts.length === 0) {
+                list.innerHTML = '<div style="padding:20px;color:#666;text-align:center">No ignored hosts</div>';
+                return;
+            }
+            list.innerHTML = ignoredHosts.map(h => `
+                <div class="ignored-item">
+                    <span class="host">${escapeHtml(h)}</span>
+                    <button class="remove-btn" onclick="confirmUnignoreHost('${escapeHtml(h)}')" title="Remove">&times;</button>
+                </div>
+            `).join('');
+        }
+
+        function toggleIgnoredPanel() {
+            document.getElementById('ignoredPanel').classList.toggle('open');
         }
 
         function getFilteredRequests() {
@@ -293,6 +463,9 @@
 
         function renderDetail(req) {
             const panel = document.getElementById('detailPanel');
+            const host = req.request.host || '';
+            const isIgnored = ignoredHosts.includes(host);
+
             const reqHeaders = req.request.headers ? Object.entries(req.request.headers).map(([k,v]) =>
                 `<div class="header-row"><span class="header-key">${escapeHtml(k)}:</span><span class="header-value">${escapeHtml(Array.isArray(v) ? v.join(', ') : v)}</span></div>`
             ).join('') : '<div style="color:#666">No headers</div>';
@@ -304,7 +477,14 @@
             const reqBody = req.request.body || '';
             const respBody = req.response ? (req.response.body || '') : '';
 
+            const ignoreBtn = isIgnored
+                ? `<button class="btn-active" onclick="confirmUnignoreHost('${escapeHtml(host)}')"><svg width="12" height="12" viewBox="0 0 16 16"><polyline points="3,8 7,12 13,4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg> Remove ignore</button>`
+                : `<button class="btn-ignore-detail" onclick="confirmIgnoreHost('${escapeHtml(host)}')"><svg width="12" height="12" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/><line x1="5" y1="5" x2="11" y2="11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> Ignore host</button>`;
+
             panel.innerHTML = `
+                <div class="detail-toolbar">
+                    ${ignoreBtn}
+                </div>
                 <div class="tabs">
                     <button class="tab active" onclick="showTab(this, 'request')">Request</button>
                     <button class="tab" onclick="showTab(this, 'response')">Response</button>
@@ -350,6 +530,7 @@
         });
 
         loadRequests();
+        loadIgnored();
         setInterval(() => {
             if (document.getElementById('autoRefresh').checked) loadRequests();
         }, 2000);

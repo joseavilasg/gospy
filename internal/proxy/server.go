@@ -17,7 +17,7 @@ type Server struct {
 	addr        string
 }
 
-func NewServer(addr string, caCert *ca.CA, hist *history.Store, ruleEngine *rules.Engine) *Server {
+func NewServer(addr string, caCert *ca.CA, hist *history.Store, ruleEngine *rules.Engine, ignoreStore *IgnoreStore) *Server {
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.Verbose = false
 
@@ -29,7 +29,7 @@ func NewServer(addr string, caCert *ca.CA, hist *history.Store, ruleEngine *rule
 
 	proxy.CertStore = ca.NewCertStorage(caCert)
 
-	interceptor := NewInterceptor(hist)
+	interceptor := NewInterceptor(hist, ignoreStore)
 
 	proxy.OnRequest().HandleConnect(goproxy.AlwaysMitm)
 

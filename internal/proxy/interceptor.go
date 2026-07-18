@@ -12,14 +12,21 @@ import (
 )
 
 type Interceptor struct {
-	history *history.Store
+	history     *history.Store
+	ignoreStore *IgnoreStore
 }
 
-func NewInterceptor(h *history.Store) *Interceptor {
-	return &Interceptor{history: h}
+func NewInterceptor(h *history.Store, ignore *IgnoreStore) *Interceptor {
+	return &Interceptor{history: h, ignoreStore: ignore}
 }
 
 func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+	if ic.ignoreStore.IsIgnored(req.Host) {
+		url := req.URL.Scheme + "://" + req.Host + req.URL.Path
+		LogIgnored(req.Method, url)
+		return req, nil
+	}
+
 	body := ""
 	if req.Body != nil {
 		var buf bytes.Buffer

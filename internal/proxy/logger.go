@@ -118,3 +118,14 @@ func LogError(msg string) {
 		msg,
 	)
 }
+
+func LogIgnored(method, url string) {
+	ts := time.Now().Format("15:04:05.000")
+	fmt.Printf("%s %s %s %s %s\n",
+		colorGray+ts+colorReset,
+		colorGray+"IGN"+colorReset,
+		colorGray+method+colorReset,
+		colorGray+url+colorReset,
+		"",
+	)
+}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"gospy/internal/ca"
@@ -21,6 +22,7 @@ func main() {
 	dataDir := flag.String("dir", ".gospy", "Data directory")
 	noSystemProxy := flag.Bool("no-system-proxy", false, "Don't auto-configure Windows system proxy")
 	resetProxy := flag.Bool("reset-proxy", false, "Restore system proxy to original settings (after crash)")
+	ignoreHosts := flag.String("ignore", "", "Comma-separated hosts to ignore (e.g. \"host1.com,host2.com\")")
 	flag.Parse()
 
 	fmt.Println(`
@@ -73,12 +75,27 @@ func main() {
 	ruleEngine := rules.NewEngine()
 	ruleEngine.Load(rulesStore.GetRules())
 
-	srv := proxy.NewServer(*proxyAddr, caCert, hist, ruleEngine)
+	ignoreStore := proxy.NewIgnoreStore(*dataDir + "/ignore.json")
+	if err := ignoreStore.Load(); err != nil {
+		proxy.LogError(fmt.Sprintf("Failed to load ignore list: %v", err))
+	}
+	if *ignoreHosts != "" {
+		for _, h := range strings.Split(*ignoreHosts, ",") {
+			h = strings.TrimSpace(h)
+			if h != "" {
+				if err := ignoreStore.Add(h); err != nil {
+					proxy.LogError(fmt.Sprintf("Failed to ignore host %s: %v", h, err))
+				}
+			}
+		}
+	}
+
+	srv := proxy.NewServer(*proxyAddr, caCert, hist, ruleEngine, ignoreStore)
 
 	proxy.LogInfo(fmt.Sprintf("Proxy listening on %s", *proxyAddr))
 
 	go func() {
-		if err := webui.NewServer(*uiAddr, hist).ListenAndServe(); err != nil {
+		if err := webui.NewServer(*uiAddr, hist, ignoreStore).ListenAndServe(); err != nil {
 			proxy.LogError(fmt.Sprintf("Web UI error: %v", err))
 		}
 	}()

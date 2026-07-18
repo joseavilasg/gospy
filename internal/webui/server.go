@@ -13,15 +13,24 @@ import (
 //go:embed index.html
 var indexHTML string
 
-type Server struct {
-	history *history.Store
-	addr    string
+type IgnoreChecker interface {
+	IsIgnored(host string) bool
+	List() []string
+	Add(host string) error
+	Remove(host string) error
 }
 
-func NewServer(addr string, h *history.Store) *Server {
+type Server struct {
+	history     *history.Store
+	ignoreStore IgnoreChecker
+	addr        string
+}
+
+func NewServer(addr string, h *history.Store, ignore IgnoreChecker) *Server {
 	return &Server{
-		history: h,
-		addr:    addr,
+		history:     h,
+		ignoreStore: ignore,
+		addr:        addr,
 	}
 }
 
@@ -31,6 +40,8 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/api/requests", s.handleListRequests)
 	mux.HandleFunc("/api/requests/", s.handleGetRequest)
+	mux.HandleFunc("/api/ignored", s.handleIgnored)
+	mux.HandleFunc("/api/ignored/", s.handleIgnoredHost)
 
 	LogWebUI(s.addr)
 
@@ -50,9 +61,16 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListRequests(w http.ResponseWriter, r *http.Request) {
 	entries := s.history.List()
 
+	filtered := make([]*history.Entry, 0, len(entries))
+	for _, e := range entries {
+		if !s.ignoreStore.IsIgnored(e.Request.Host) {
+			filtered = append(filtered, e)
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	json.NewEncoder(w).Encode(entries)
+	json.NewEncoder(w).Encode(filtered)
 }
 
 func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
@@ -71,6 +89,54 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	json.NewEncoder(w).Encode(entry)
+}
+
+func (s *Server) handleIgnored(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	switch r.Method {
+	case http.MethodGet:
+		json.NewEncoder(w).Encode(s.ignoreStore.List())
+	case http.MethodPost:
+		var body struct {
+			Host string `json:"host"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Host == "" {
+			http.Error(w, `{"error":"invalid host"}`, http.StatusBadRequest)
+			return
+		}
+		if err := s.ignoreStore.Add(body.Host); err != nil {
+			http.Error(w, `{"error":"failed to add"}`, http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(s.ignoreStore.List())
+	default:
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleIgnoredHost(w http.ResponseWriter, r *http.Request) {
+	host := strings.TrimPrefix(r.URL.Path, "/api/ignored/")
+	if host == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if r.Method == http.MethodDelete {
+		if err := s.ignoreStore.Remove(host); err != nil {
+			http.Error(w, `{"error":"failed to remove"}`, http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(s.ignoreStore.List())
+		return
+	}
+
+	http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 }
 
 func LogWebUI(addr string) {
