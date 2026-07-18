@@ -4,11 +4,13 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"gospy/internal/history"
+	"gospy/internal/proxy"
 )
 
 //go:embed index.html
@@ -158,9 +160,27 @@ func (s *Server) handleListRequests(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/requests/")
+	path := strings.TrimPrefix(r.URL.Path, "/api/requests/")
+	parts := strings.SplitN(path, "/", 2)
+	id := parts[0]
+
 	if id == "" {
 		http.NotFound(w, r)
+		return
+	}
+
+	if len(parts) > 1 {
+		sub := parts[1]
+		switch {
+		case sub == "body" && r.Method == http.MethodPut:
+			s.handleSaveBody(w, r, id)
+		case sub == "body" && r.Method == http.MethodDelete:
+			s.handleRevertBody(w, r, id)
+		case sub == "replay" && r.Method == http.MethodPost:
+			s.handleReplay(w, r, id)
+		default:
+			http.NotFound(w, r)
+		}
 		return
 	}
 
@@ -173,6 +193,132 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	json.NewEncoder(w).Encode(entry)
+}
+
+func (s *Server) handleSaveBody(w http.ResponseWriter, r *http.Request, id string) {
+	var body struct {
+		Target string `json:"target"`
+		Body   string `json:"body"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
+		return
+	}
+	if body.Target != "request" && body.Target != "response" {
+		http.Error(w, `{"error":"target must be request or response"}`, http.StatusBadRequest)
+		return
+	}
+
+	if err := s.history.SaveEditedBody(id, body.Target, body.Body); err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}
+
+func (s *Server) handleRevertBody(w http.ResponseWriter, r *http.Request, id string) {
+	target := r.URL.Query().Get("target")
+	if target != "request" && target != "response" {
+		http.Error(w, `{"error":"target must be request or response"}`, http.StatusBadRequest)
+		return
+	}
+
+	if err := s.history.RevertBody(id, target); err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}
+
+func (s *Server) handleReplay(w http.ResponseWriter, r *http.Request, id string) {
+	var bodyOverride struct {
+		Body string `json:"body"`
+	}
+	json.NewDecoder(r.Body).Decode(&bodyOverride)
+
+	original, err := s.history.Get(id)
+	if err != nil {
+		http.Error(w, `{"error":"original request not found"}`, http.StatusNotFound)
+		return
+	}
+
+	reqURL := original.Request.URL
+	if reqURL == "" {
+		host := original.Request.Host
+		if !strings.HasPrefix(host, "http") {
+			host = "http://" + host
+		}
+		reqURL = host
+	}
+
+	var reqBody io.Reader
+	if bodyOverride.Body != "" {
+		reqBody = strings.NewReader(bodyOverride.Body)
+	} else if original.Request.Body != "" {
+		reqBody = strings.NewReader(original.Request.Body)
+	}
+
+	httpReq, err := http.NewRequestWithContext(r.Context(), original.Request.Method, reqURL, reqBody)
+	if err != nil {
+		http.Error(w, `{"error":"failed to build request: `+err.Error()+`"}`, http.StatusBadRequest)
+		return
+	}
+
+	skipHeaders := map[string]bool{
+		"Host": true, "Proxy-Connection": true, "Accept-Encoding": true,
+		"Connection": true, "Proxy-Authorization": true,
+	}
+	for k, v := range original.Request.Headers {
+		if !skipHeaders[k] {
+			httpReq.Header[k] = v
+		}
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(httpReq)
+
+	newEntry := &history.Entry{
+		Request: history.RequestRecord{
+			Method:  original.Request.Method,
+			URL:     original.Request.URL,
+			Host:    original.Request.Host,
+			Headers: original.Request.Headers,
+			Body:    bodyOverride.Body,
+		},
+		ReplayedFrom: original.ID,
+	}
+
+	if err == nil {
+		defer resp.Body.Close()
+		respBodyBytes, _ := io.ReadAll(resp.Body)
+		newEntry.Response = &history.ResponseRecord{
+			Status:  resp.StatusCode,
+			Headers: resp.Header,
+			Body:    string(respBodyBytes),
+		}
+	}
+
+	if err := s.history.Save(newEntry); err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
+		return
+	}
+
+	proxy.LogRequest(newEntry.ID, original.Request.Method, reqURL)
+	if err == nil {
+		if vals, ok := newEntry.Response.Headers["Content-Type"]; ok && len(vals) > 0 {
+			proxy.LogResponse(newEntry.ID, original.Request.Method, reqURL, newEntry.Response.Status, vals[0])
+		} else {
+			proxy.LogResponse(newEntry.ID, original.Request.Method, reqURL, newEntry.Response.Status, "")
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{"id": newEntry.ID})
 }
 
 func (s *Server) handleIgnored(w http.ResponseWriter, r *http.Request) {

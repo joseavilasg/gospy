@@ -59,8 +59,11 @@ function buildItemHtml(r) {
     const time = new Date(r.timestamp).toLocaleTimeString();
     const selected = r.id === selectedId ? ' selected' : '';
     const statusClass = status ? (status < 300 ? 'status-2xx' : status < 400 ? 'status-3xx' : status < 500 ? 'status-4xx' : 'status-5xx') : '';
+    const replayBadge = r.replayedFrom
+        ? '<span class="replay-badge" title="Replayed request">↻</span>'
+        : '';
 
-    return `<div class="request-item${selected}" title="${escapeHtml(url)}" data-id="${r.id}"><span class="method method-${method}">${method}</span><span class="url">${escapeHtml(url)}</span>${status != null ? `<span class="status ${statusClass}">${status}</span>` : ''}<span class="time">${time}</span></div>`;
+    return `<div class="request-item${selected}" title="${escapeHtml(url)}" data-id="${r.id}"><span class="method method-${method}">${method}</span><span class="url">${escapeHtml(url)}</span>${status != null ? `<span class="status ${statusClass}">${status}</span>` : ''}${replayBadge}<span class="time">${time}</span></div>`;
 }
 
 export function renderList() {
@@ -171,55 +174,81 @@ export function renderDetail(req) {
         focusBtn = `<button class="btn-focus-detail" data-action="focus" data-host="${escapeHtml(host)}"><svg width="12" height="12" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="8" cy="8" r="3" fill="currentColor"/></svg> Add to focus</button>`;
     }
 
-    let reqBodyHtml = '';
-    if (reqBody) {
-        const reqDecodeBtns = reqCompression
-            ? `<button class="body-tool" data-action="toggle-body" data-target="request" data-mode="raw">Raw</button><button class="body-tool active" data-action="toggle-body" data-target="request" data-mode="decoded">Decoded</button>`
-            : '';
-        const reqCopyBtn = `<button class="body-tool" data-action="copy-body" data-target="request">Copy</button>`;
-        const reqEditBtn = `<button class="body-tool" data-action="edit-body" data-target="request">Edit</button>`;
-        const reqIndicator = reqCompression
-            ? `<span class="body-tools-indicator">${reqCompression} ✓</span>`
-            : '';
-        reqBodyHtml = `<div class="section-title" style="margin-top:12px">Body</div>
-        <div class="body-viewer" data-viewer="request" data-content-type="${escapeHtml(reqContentType)}">
+    const SVG_COPY = '<svg width="12" height="12" viewBox="0 0 16 16"><rect x="5" y="5" width="9" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-7A1.5 1.5 0 013.5 1h7A1.5 1.5 0 0112 2.5V5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
+    const SVG_COPY_SMALL = '<svg width="10" height="10" viewBox="0 0 16 16"><rect x="5" y="5" width="9" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-7A1.5 1.5 0 013.5 1h7A1.5 1.5 0 0112 2.5V5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
+    const SVG_EDIT = '<svg width="12" height="12" viewBox="0 0 16 16"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+    const SVG_REVERT = '<svg width="12" height="12" viewBox="0 0 16 16"><path d="M3 7h7a3 3 0 010 6H8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><polyline points="6,4 3,7 6,10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+    function buildBodyViewer(target, body, rawBody, compression, hasEdited, editedBody, contentType) {
+        const badges = [];
+        if (compression) badges.push(`<span class="body-badge body-badge-compression">${escapeHtml(compression)}</span>`);
+        if (hasEdited) badges.push(`<span class="body-badge body-badge-edited">edited</span>`);
+        const badgesHtml = badges.join('');
+
+        const viewModeHtml = `<button class="body-tool body-view active" data-action="set-view" data-target="${target}" data-view="pretty">Pretty</button><button class="body-tool body-view" data-action="set-view" data-target="${target}" data-view="raw">Raw</button>`;
+
+        const defaultContent = compression ? 'decoded' : 'original';
+        const contentBtns = [`<button class="body-tool body-content${defaultContent === 'original' ? ' active' : ''}" data-action="set-content" data-target="${target}" data-content="original">Original</button>`];
+        if (compression) contentBtns.push(`<button class="body-tool body-content${defaultContent === 'decoded' ? ' active' : ''}" data-action="set-content" data-target="${target}" data-content="decoded">Decoded</button>`);
+        if (hasEdited) contentBtns.push(`<button class="body-tool body-content" data-action="set-content" data-target="${target}" data-content="edited">Edited</button>`);
+
+        const actions = [`<button class="body-action" data-action="copy-body" data-target="${target}" title="Copy">${SVG_COPY}</button>`, `<button class="body-action" data-action="edit-body" data-target="${target}" title="Edit">${SVG_EDIT}</button>`];
+        if (hasEdited) actions.push(`<button class="body-action body-action-revert" data-action="revert-body" data-target="${target}" title="Revert">${SVG_REVERT}</button>`);
+
+        const displayBody = body;
+
+        const hasContentMode = compression || hasEdited;
+
+        return `<div class="section-title" style="margin-top:12px">Body</div>
+        <div class="body-viewer" data-viewer="${target}" data-content-type="${escapeHtml(contentType)}">
             <div class="body-tools">
-                ${reqIndicator}
-                <div class="body-tools-group">
-                    <button class="body-tool" data-action="prettify-body" data-target="request">Pretty</button>
-                    ${reqDecodeBtns}
-                    ${reqCopyBtn}
-                    ${reqEditBtn}
+                <div class="body-badges">${badgesHtml}</div>
+                <div class="body-center">
+                    <div class="body-tools-group">${viewModeHtml}</div>
+                    ${hasContentMode ? `<div class="body-tools-group">${contentBtns.join('')}</div>` : ''}
                 </div>
+                <div class="body-actions">${actions.join('')}</div>
             </div>
             <div class="body-divider"></div>
-            <pre class="body-content" data-body-target="request" data-decoded="${escapeHtml(reqBody)}" data-raw="${escapeHtml(reqRawBody)}" data-compression="${reqCompression}">${escapeHtml(reqBody)}</pre>
+            <pre class="body-content" data-body-target="${target}" data-decoded="${escapeHtml(body)}" data-raw="${escapeHtml(rawBody)}" data-edited="${escapeHtml(hasEdited ? editedBody : '')}" data-compression="${compression}" data-view-mode="pretty" data-content-mode="${defaultContent}">${escapeHtml(displayBody)}</pre>
         </div>`;
+    }
+
+    let reqBodyHtml = '';
+    if (reqBody) {
+        const reqHasEdited = req.request.editedBody && req.request.editedBody !== '';
+        reqBodyHtml = buildBodyViewer('request', reqBody, reqRawBody, reqCompression, reqHasEdited, req.request.editedBody, reqContentType);
     }
 
     let respBodyHtml = '';
     if (respBody) {
-        const respDecodeBtns = respCompression
-            ? `<button class="body-tool" data-action="toggle-body" data-target="response" data-mode="raw">Raw</button><button class="body-tool active" data-action="toggle-body" data-target="response" data-mode="decoded">Decoded</button>`
-            : '';
-        const respCopyBtn = `<button class="body-tool" data-action="copy-body" data-target="response">Copy</button>`;
-        const respEditBtn = `<button class="body-tool" data-action="edit-body" data-target="response">Edit</button>`;
-        const respIndicator = respCompression
-            ? `<span class="body-tools-indicator">${respCompression} ✓</span>`
-            : '';
-        respBodyHtml = `<div class="section-title" style="margin-top:12px">Body</div>
-        <div class="body-viewer" data-viewer="response" data-content-type="${escapeHtml(respContentType)}">
-            <div class="body-tools">
-                ${respIndicator}
-                <div class="body-tools-group">
-                    <button class="body-tool" data-action="prettify-body" data-target="response">Pretty</button>
-                    ${respDecodeBtns}
-                    ${respCopyBtn}
-                    ${respEditBtn}
-                </div>
+        const respHasEdited = req.response && req.response.editedBody && req.response.editedBody !== '';
+        respBodyHtml = buildBodyViewer('response', respBody, respRawBody, respCompression, respHasEdited, req.response.editedBody, respContentType);
+    }
+
+    let replayedFromHtml = '';
+    if (req.replayedFrom) {
+        const origEntry = requests.find(r => r.id === req.replayedFrom);
+        if (origEntry) {
+            replayedFromHtml = `<div class="replayed-from"><span class="replayed-from-icon">↻</span> Replayed from: <a data-action="goto-replay" data-id="${req.replayedFrom}">${escapeHtml(origEntry.method)} ${escapeHtml(origEntry.url)}</a> · ${new Date(origEntry.timestamp).toLocaleTimeString()}</div>`;
+        } else {
+            replayedFromHtml = `<div class="replayed-from"><span class="replayed-from-icon">↻</span> Replayed from: <a data-action="goto-replay" data-id="${req.replayedFrom}">${req.replayedFrom.slice(0, 8)}</a></div>`;
+        }
+    }
+
+    const replays = requests.filter(r => r.replayedFrom === req.id);
+    let replaysHtml = '';
+    if (replays.length > 0) {
+        replaysHtml = `
+        <div class="replays-section">
+            <div class="replays-header" data-action="toggle-replays">Replays (${replays.length}) <span class="replays-toggle">▾</span></div>
+            <div class="replays-list">
+                ${replays.map(r => {
+                    const rStatus = r.status != null ? r.status : '';
+                    const rStatusClass = rStatus ? (rStatus < 300 ? 'status-2xx' : rStatus < 400 ? 'status-3xx' : rStatus < 500 ? 'status-4xx' : 'status-5xx') : '';
+                    return `<div class="replay-item" data-action="goto-replay" data-id="${r.id}"><span class="method method-${r.method}">${r.method}</span><span class="url">${escapeHtml(r.url)}</span>${rStatus ? `<span class="status ${rStatusClass}">${rStatus}</span>` : ''}<span class="time">${new Date(r.timestamp).toLocaleTimeString()}</span></div>`;
+                }).join('')}
             </div>
-            <div class="body-divider"></div>
-            <pre class="body-content" data-body-target="response" data-decoded="${escapeHtml(respBody)}" data-raw="${escapeHtml(respRawBody)}" data-compression="${respCompression}">${escapeHtml(respBody)}</pre>
         </div>`;
     }
 
@@ -227,10 +256,18 @@ export function renderDetail(req) {
         <div class="detail-toolbar">
             ${ignoreBtn}
             ${focusBtn}
+            <button class="btn-replay" data-action="send-replay">↻ Replay</button>
         </div>
-        <div class="tabs">
-            <button class="tab active" data-action="tab" data-tab="request">Request</button>
-            <button class="tab" data-action="tab" data-tab="response">Response</button>
+        ${replayedFromHtml}
+        <div class="tabs-row">
+            <div class="tabs">
+                <button class="tab active" data-action="tab" data-tab="request">Request</button>
+                <button class="tab" data-action="tab" data-tab="response">Response</button>
+            </div>
+            <div class="detail-id-group">
+                <span class="detail-id">${escapeHtml(req.id)}</span>
+                <button class="detail-id-copy" data-action="copy-id" title="Copy ID">${SVG_COPY_SMALL}</button>
+            </div>
         </div>
 
         <div id="tab-request" class="tab-content">
@@ -252,7 +289,10 @@ export function renderDetail(req) {
 
             ${respBodyHtml}
         </div>
+
+        ${replaysHtml}
     `;
+    panel.dispatchEvent(new CustomEvent('detail-rendered'));
 }
 
 export function showTab(btn, tab) {

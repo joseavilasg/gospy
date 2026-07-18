@@ -52,8 +52,6 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 		url += "?" + req.URL.RawQuery
 	}
 
-	LogRequest(req.Method, url)
-
 	entry := &history.Entry{
 		Request: history.RequestRecord{
 			Method:      req.Method,
@@ -68,6 +66,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 	}
 
 	_ = ic.history.Save(entry)
+	LogRequest(entry.ID, req.Method, url)
 
 	return req, nil
 }
@@ -92,7 +91,6 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 	}
 
 	contentType := resp.Header.Get("Content-Type")
-	LogResponse(ctx.Req.Method, ctx.Req.URL.String(), resp.StatusCode, contentType)
 
 	reqURL := ctx.Req.URL.Scheme + "://" + ctx.Req.Host + ctx.Req.URL.Path
 	if ctx.Req.URL.RawQuery != "" {
@@ -113,6 +111,7 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 			}
 			entry.Modified = false
 			_ = ic.history.Update(entry)
+			LogResponse(entry.ID, ctx.Req.Method, reqURL, resp.StatusCode, contentType)
 			break
 		}
 	}

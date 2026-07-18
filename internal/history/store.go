@@ -13,12 +13,13 @@ import (
 )
 
 type Entry struct {
-	ID        string          `json:"id"`
-	Timestamp time.Time       `json:"timestamp"`
-	Request   RequestRecord   `json:"request"`
-	Response  *ResponseRecord `json:"response,omitempty"`
-	Action    string          `json:"action"`
-	Modified  bool            `json:"modified"`
+	ID           string          `json:"id"`
+	Timestamp    time.Time       `json:"timestamp"`
+	Request      RequestRecord   `json:"request"`
+	Response     *ResponseRecord `json:"response,omitempty"`
+	Action       string          `json:"action"`
+	Modified     bool            `json:"modified"`
+	ReplayedFrom string          `json:"replayedFrom,omitempty"`
 }
 
 type RequestRecord struct {
@@ -29,6 +30,7 @@ type RequestRecord struct {
 	Body        string              `json:"body,omitempty"`
 	RawBody     string              `json:"rawBody,omitempty"`
 	Compression string              `json:"compression,omitempty"`
+	EditedBody  string              `json:"editedBody,omitempty"`
 }
 
 type ResponseRecord struct {
@@ -37,6 +39,7 @@ type ResponseRecord struct {
 	Body        string              `json:"body,omitempty"`
 	RawBody     string              `json:"rawBody,omitempty"`
 	Compression string              `json:"compression,omitempty"`
+	EditedBody  string              `json:"editedBody,omitempty"`
 }
 
 type Store struct {
@@ -47,12 +50,13 @@ type Store struct {
 }
 
 type ListEntry struct {
-	ID        string    `json:"id"`
-	Timestamp time.Time `json:"timestamp"`
-	Method    string    `json:"method"`
-	URL       string    `json:"url"`
-	Host      string    `json:"host"`
-	Status    *int      `json:"status,omitempty"`
+	ID           string    `json:"id"`
+	Timestamp    time.Time `json:"timestamp"`
+	Method       string    `json:"method"`
+	URL          string    `json:"url"`
+	Host         string    `json:"host"`
+	Status       *int      `json:"status,omitempty"`
+	ReplayedFrom string    `json:"replayedFrom,omitempty"`
 }
 
 func New(dir string) (*Store, error) {
@@ -103,9 +107,10 @@ func (s *Store) buildIndex() error {
 	}
 
 	type entryHeader struct {
-		ID        string `json:"id"`
-		Timestamp string `json:"timestamp"`
-		Request   struct {
+		ID           string `json:"id"`
+		Timestamp    string `json:"timestamp"`
+		ReplayedFrom string `json:"replayedFrom,omitempty"`
+		Request      struct {
 			Method string `json:"method"`
 			URL    string `json:"url"`
 			Host   string `json:"host"`
@@ -129,10 +134,11 @@ func (s *Store) buildIndex() error {
 		file.Close()
 
 		le := &ListEntry{
-			ID:     h.ID,
-			Method: h.Request.Method,
-			URL:    h.Request.URL,
-			Host:   h.Request.Host,
+			ID:           h.ID,
+			Method:       h.Request.Method,
+			URL:          h.Request.URL,
+			Host:         h.Request.Host,
+			ReplayedFrom: h.ReplayedFrom,
 		}
 		if t, err := time.Parse(time.RFC3339Nano, h.Timestamp); err == nil {
 			le.Timestamp = t
@@ -178,11 +184,12 @@ func (s *Store) Save(entry *Entry) error {
 	}
 
 	le := &ListEntry{
-		ID:        entry.ID,
-		Timestamp: entry.Timestamp,
-		Method:    entry.Request.Method,
-		URL:       entry.Request.URL,
-		Host:      entry.Request.Host,
+		ID:           entry.ID,
+		Timestamp:    entry.Timestamp,
+		Method:       entry.Request.Method,
+		URL:          entry.Request.URL,
+		Host:         entry.Request.Host,
+		ReplayedFrom: entry.ReplayedFrom,
 	}
 	if entry.Response != nil {
 		le.Status = &entry.Response.Status
@@ -292,6 +299,66 @@ func (s *Store) Update(entry *Entry) error {
 	s.mu.Unlock()
 
 	return err
+}
+
+func (s *Store) SaveEditedBody(id, target, body string) error {
+	entry, err := s.Get(id)
+	if err != nil {
+		return err
+	}
+
+	if target == "request" {
+		entry.Request.EditedBody = body
+	} else {
+		if entry.Response == nil {
+			return fmt.Errorf("no response to edit")
+		}
+		entry.Response.EditedBody = body
+	}
+
+	return s.Update(entry)
+}
+
+func (s *Store) RevertBody(id, target string) error {
+	entry, err := s.Get(id)
+	if err != nil {
+		return err
+	}
+
+	if target == "request" {
+		entry.Request.EditedBody = ""
+	} else {
+		if entry.Response == nil {
+			return fmt.Errorf("no response to revert")
+		}
+		entry.Response.EditedBody = ""
+	}
+
+	return s.Update(entry)
+}
+
+func (s *Store) Replay(id string, modifiedBody string) (*Entry, error) {
+	original, err := s.Get(id)
+	if err != nil {
+		return nil, err
+	}
+
+	newEntry := &Entry{
+		Request: RequestRecord{
+			Method:  original.Request.Method,
+			URL:     original.Request.URL,
+			Host:    original.Request.Host,
+			Headers: original.Request.Headers,
+			Body:    modifiedBody,
+		},
+		Action:       "passthrough",
+		ReplayedFrom: original.ID,
+	}
+
+	if err := s.Save(newEntry); err != nil {
+		return nil, err
+	}
+	return newEntry, nil
 }
 
 func (s *Store) Clear() error {

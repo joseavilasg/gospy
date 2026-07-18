@@ -51,11 +51,12 @@ func colorStatus(code int) string {
 	}
 }
 
-func LogRequest(method, url string) {
+func LogRequest(id, method, url string) {
 	ts := time.Now().Format("15:04:05.000")
-	fmt.Printf("%s %s %s%s%s → %s\n",
+	fmt.Printf("%s %s %s %s%s%s → %s\n",
 		colorGray+ts+colorReset,
 		colorBold+"REQ"+colorReset,
+		colorGray+"["+id+"]"+colorReset,
 		colorMethod(method),
 		colorReset,
 		" ",
@@ -63,15 +64,16 @@ func LogRequest(method, url string) {
 	)
 }
 
-func LogResponse(method, url string, status int, contentType string) {
+func LogResponse(id, method, url string, status int, contentType string) {
 	ts := time.Now().Format("15:04:05.000")
 	ct := contentType
 	if ct == "" {
 		ct = "-"
 	}
-	fmt.Printf("%s %s %s %s%s%s %s %s\n",
+	fmt.Printf("%s %s %s %s %s%s%s %s %s\n",
 		colorGray+ts+colorReset,
 		colorBold+"RES"+colorReset,
+		colorGray+"["+id+"]"+colorReset,
 		colorStatus(status),
 		colorMethod(method),
 		colorReset,

@@ -431,3 +431,155 @@ func TestStore_ListSinceNone(t *testing.T) {
 		t.Errorf("ListSince() future time = %d entries, want 0", len(result))
 	}
 }
+
+func TestStore_SaveEditedBody(t *testing.T) {
+	dir := t.TempDir()
+
+	store, err := New(dir)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	entry := &Entry{
+		Request: RequestRecord{
+			Method: "POST",
+			URL:    "http://example.com/api",
+			Host:   "example.com",
+			Body:   `{"key":"original"}`,
+		},
+		Action: "passthrough",
+	}
+	if err := store.Save(entry); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	if err := store.SaveEditedBody(entry.ID, "request", `{"key":"edited"}`); err != nil {
+		t.Fatalf("SaveEditedBody() error = %v", err)
+	}
+
+	retrieved, err := store.Get(entry.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+
+	if retrieved.Request.EditedBody != `{"key":"edited"}` {
+		t.Errorf("EditedBody = %q, want %q", retrieved.Request.EditedBody, `{"key":"edited"}`)
+	}
+	if retrieved.Request.Body != `{"key":"original"}` {
+		t.Errorf("Body = %q, want %q (original preserved)", retrieved.Request.Body, `{"key":"original"}`)
+	}
+}
+
+func TestStore_RevertBody(t *testing.T) {
+	dir := t.TempDir()
+
+	store, err := New(dir)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	entry := &Entry{
+		Request: RequestRecord{
+			Method:     "POST",
+			URL:        "http://example.com/api",
+			Host:       "example.com",
+			Body:       `{"key":"original"}`,
+			EditedBody: `{"key":"edited"}`,
+		},
+		Action: "passthrough",
+	}
+	if err := store.Save(entry); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	if err := store.RevertBody(entry.ID, "request"); err != nil {
+		t.Fatalf("RevertBody() error = %v", err)
+	}
+
+	retrieved, err := store.Get(entry.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+
+	if retrieved.Request.EditedBody != "" {
+		t.Errorf("EditedBody after revert = %q, want empty", retrieved.Request.EditedBody)
+	}
+	if retrieved.Request.Body != `{"key":"original"}` {
+		t.Errorf("Body = %q, want original", retrieved.Request.Body)
+	}
+}
+
+func TestStore_Replay(t *testing.T) {
+	dir := t.TempDir()
+
+	store, err := New(dir)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	original := &Entry{
+		Request: RequestRecord{
+			Method:  "POST",
+			URL:     "http://example.com/api",
+			Host:    "example.com",
+			Headers: map[string][]string{"Content-Type": {"application/json"}},
+			Body:    `{"key":"original"}`,
+		},
+		Response: &ResponseRecord{
+			Status: 200,
+			Body:   `{"result":"ok"}`,
+		},
+		Action: "passthrough",
+	}
+	if err := store.Save(original); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	replayed, err := store.Replay(original.ID, `{"key":"modified"}`)
+	if err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+
+	if replayed.ID == original.ID {
+		t.Error("Replay() returned same ID as original")
+	}
+	if replayed.ReplayedFrom != original.ID {
+		t.Errorf("ReplayedFrom = %q, want %q", replayed.ReplayedFrom, original.ID)
+	}
+	if replayed.Request.Body != `{"key":"modified"}` {
+		t.Errorf("Body = %q, want modified body", replayed.Request.Body)
+	}
+	if replayed.Request.Method != "POST" {
+		t.Errorf("Method = %q, want POST", replayed.Request.Method)
+	}
+	if replayed.Request.URL != "http://example.com/api" {
+		t.Errorf("URL = %q, want original URL", replayed.Request.URL)
+	}
+	if replayed.Response != nil {
+		t.Error("Replay() should not carry over response")
+	}
+
+	index := store.ListSummary()
+	if len(index) != 2 {
+		t.Fatalf("ListSummary() = %d entries, want 2", len(index))
+	}
+
+	var foundOriginal, foundReplay bool
+	for _, le := range index {
+		if le.ID == original.ID {
+			foundOriginal = true
+		}
+		if le.ID == replayed.ID {
+			foundReplay = true
+			if le.ReplayedFrom != original.ID {
+				t.Errorf("Index ReplayedFrom = %q, want %q", le.ReplayedFrom, original.ID)
+			}
+		}
+	}
+	if !foundOriginal {
+		t.Error("Original not found in index")
+	}
+	if !foundReplay {
+		t.Error("Replayed entry not found in index")
+	}
+}

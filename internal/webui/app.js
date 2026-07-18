@@ -1,4 +1,4 @@
-import { setFilterText, setFocusEnabled, setLastTimestamp } from './state.js';
+import { setFilterText, setFocusEnabled, setLastTimestamp, selectedId } from './state.js';
 import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost } from './api.js';
 import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, onListScroll, invalidateFilterCache, escapeHtml } from './render.js';
 
@@ -112,11 +112,11 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
         case 'tab':
             showTab(btn, btn.dataset.tab);
             break;
-        case 'toggle-body':
-            toggleBody(btn.dataset.target, btn.dataset.mode);
+        case 'set-view':
+            setView(btn.dataset.target, btn.dataset.view);
             break;
-        case 'prettify-body':
-            prettifyBody(btn.dataset.target);
+        case 'set-content':
+            setContent(btn.dataset.target, btn.dataset.content);
             break;
         case 'copy-body':
             copyBody(btn.dataset.target);
@@ -130,51 +130,101 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
         case 'cancel-body':
             cancelBody(btn.dataset.target);
             break;
+        case 'send-replay':
+            sendReplay();
+            break;
+        case 'revert-body':
+            revertBody(btn.dataset.target);
+            break;
+        case 'goto-replay':
+            selectRequest(btn.dataset.id);
+            break;
+        case 'copy-id': {
+            const idSpan = btn.closest('.detail-id-group')?.querySelector('.detail-id');
+            if (idSpan) {
+                navigator.clipboard.writeText(idSpan.textContent).then(() => {
+                    btn.classList.add('copied');
+                    setTimeout(() => btn.classList.remove('copied'), 1500);
+                });
+            }
+            break;
+        }
+        case 'toggle-replays':
+            const replaysList = btn.closest('.replays-section').querySelector('.replays-list');
+            if (replaysList) replaysList.classList.toggle('collapsed');
+            const toggle = btn.querySelector('.replays-toggle');
+            if (toggle) toggle.textContent = replaysList.classList.contains('collapsed') ? '▸' : '▾';
+            break;
     }
 });
 
-function toggleBody(target, mode) {
+document.getElementById('detailPanel').addEventListener('detail-rendered', () => {
+    renderCurrentContent('request');
+    renderCurrentContent('response');
+});
+
+function setView(target, view) {
     const pre = document.querySelector(`pre[data-body-target="${target}"]`);
     if (!pre) return;
-
-    const decoded = pre.dataset.decoded;
-    const raw = pre.dataset.raw;
-
-    pre.textContent = mode === 'raw' ? (raw || '[no raw data]') : decoded;
-
+    pre.dataset.viewMode = view;
     const viewer = pre.closest('.body-viewer');
     if (viewer) {
-        viewer.querySelectorAll('.body-tool[data-action="toggle-body"]').forEach(b => {
-            b.classList.toggle('active', b.dataset.mode === mode);
+        viewer.querySelectorAll('[data-action="set-view"]').forEach(b => {
+            b.classList.toggle('active', b.dataset.view === view);
         });
     }
+    renderCurrentContent(target);
 }
 
-function prettifyBody(target) {
+function setContent(target, content) {
     const pre = document.querySelector(`pre[data-body-target="${target}"]`);
     if (!pre) return;
+    pre.dataset.contentMode = content;
+    const viewer = pre.closest('.body-viewer');
+    if (viewer) {
+        viewer.querySelectorAll('[data-action="set-content"]').forEach(b => {
+            b.classList.toggle('active', b.dataset.content === content);
+        });
+    }
+    renderCurrentContent(target);
+}
 
+function renderCurrentContent(target) {
+    const pre = document.querySelector(`pre[data-body-target="${target}"]`);
+    if (!pre) return;
     const viewer = pre.closest('.body-viewer');
     if (!viewer) return;
 
-    const existingViewer = viewer.querySelector('.json-viewer-container');
-    if (existingViewer) {
-        existingViewer.remove();
-        pre.style.display = '';
-        return;
+    const contentMode = pre.dataset.contentMode || 'original';
+    const viewMode = pre.dataset.viewMode || 'raw';
+
+    let content;
+    switch (contentMode) {
+        case 'edited': content = pre.dataset.edited || ''; break;
+        case 'decoded': content = pre.dataset.decoded || ''; break;
+        default: content = pre.dataset.raw || pre.dataset.decoded || ''; break;
     }
 
-    try {
-        const obj = JSON.parse(pre.textContent);
-        const container = document.createElement('div');
-        container.className = 'json-viewer-container';
-        const jsonViewer = new JSONViewer();
-        container.appendChild(jsonViewer.getContainer());
-        jsonViewer.showJSON(obj, -1, 1);
-        pre.style.display = 'none';
-        pre.parentNode.insertBefore(container, pre.nextSibling);
-    } catch (e) {
-        // not JSON
+    const existingTree = viewer.querySelector('.json-viewer-container');
+    if (existingTree) existingTree.remove();
+
+    if (viewMode === 'pretty') {
+        try {
+            const obj = JSON.parse(content);
+            const container = document.createElement('div');
+            container.className = 'json-viewer-container';
+            viewer.appendChild(container);
+            const jsonViewer = new JSONViewer();
+            container.appendChild(jsonViewer.getContainer());
+            jsonViewer.showJSON(obj, -1, 1);
+            pre.style.display = 'none';
+        } catch (e) {
+            pre.textContent = content || '[not valid JSON]';
+            pre.style.display = '';
+        }
+    } else {
+        pre.textContent = content || '[no data]';
+        pre.style.display = '';
     }
 }
 
@@ -182,14 +232,14 @@ function copyBody(target) {
     const pre = document.querySelector(`pre[data-body-target="${target}"]`);
     if (!pre) return;
 
-    navigator.clipboard.writeText(pre.textContent).then(() => {
+    const content = pre.dataset.edited || pre.dataset.decoded || pre.textContent || '';
+    navigator.clipboard.writeText(content).then(() => {
         const viewer = pre.closest('.body-viewer');
         if (viewer) {
             const btn = viewer.querySelector('[data-action="copy-body"]');
             if (btn) {
-                const orig = btn.textContent;
-                btn.textContent = 'Copied!';
-                setTimeout(() => btn.textContent = orig, 1500);
+                btn.classList.add('copied');
+                setTimeout(() => btn.classList.remove('copied'), 1500);
             }
         }
     });
@@ -279,25 +329,36 @@ function saveBody(target) {
 
     if (activeMonacoEditor) {
         const value = activeMonacoEditor.getValue();
+        let formatted = value;
         try {
             const parsed = JSON.parse(value);
-            pre.dataset.decoded = JSON.stringify(parsed, null, 2);
+            formatted = JSON.stringify(parsed, null, 2);
         } catch {
-            pre.dataset.decoded = value;
+            // not JSON, use raw
         }
-        pre.textContent = pre.dataset.decoded;
-        activeMonacoEditor.dispose();
-        activeMonacoEditor = null;
-    }
 
-    const container = viewer.querySelector('.monaco-editor-container');
-    if (container) container.remove();
+        fetch(`/api/requests/${selectedId}/body`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ target, body: formatted })
+        }).then(r => r.json()).then(() => {
+            pre.dataset.edited = formatted;
+            pre.textContent = formatted;
+            pre.dataset.decoded = formatted;
 
-    pre.style.display = '';
-    const tools = viewer.querySelector('.body-tools');
-    if (savedToolbarHtml) {
-        tools.innerHTML = savedToolbarHtml;
-        savedToolbarHtml = null;
+            activeMonacoEditor.dispose();
+            activeMonacoEditor = null;
+            const container = viewer.querySelector('.monaco-editor-container');
+            if (container) container.remove();
+            pre.style.display = '';
+
+            if (savedToolbarHtml) {
+                viewer.querySelector('.body-tools').innerHTML = savedToolbarHtml;
+                savedToolbarHtml = null;
+            }
+
+            refreshDetail();
+        }).catch(e => console.error('Failed to save body:', e));
     }
 }
 
@@ -320,6 +381,42 @@ function cancelBody(target) {
     if (savedToolbarHtml) {
         tools.innerHTML = savedToolbarHtml;
         savedToolbarHtml = null;
+    }
+}
+
+function sendReplay() {
+    if (!confirm('Send replay? This will execute the request and create a new entry.')) return;
+
+    let body = '';
+    if (activeMonacoEditor) {
+        body = activeMonacoEditor.getValue();
+    } else {
+        const pre = document.querySelector('pre[data-body-target="request"]');
+        if (pre) body = pre.dataset.edited || pre.dataset.decoded || '';
+    }
+
+    fetch(`/api/requests/${selectedId}/replay`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body })
+    }).then(r => r.json()).then(({ id }) => {
+        if (activeMonacoEditor) cancelBody('request');
+        setLastTimestamp('');
+        loadRequests().then(() => selectRequest(id));
+    }).catch(e => console.error('Replay failed:', e));
+}
+
+function revertBody(target) {
+    fetch(`/api/requests/${selectedId}/body?target=${target}`, {
+        method: 'DELETE'
+    }).then(r => r.json()).then(() => {
+        refreshDetail();
+    }).catch(e => console.error('Revert failed:', e));
+}
+
+function refreshDetail() {
+    if (selectedId) {
+        selectRequest(selectedId);
     }
 }
 
