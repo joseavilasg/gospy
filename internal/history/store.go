@@ -22,17 +22,21 @@ type Entry struct {
 }
 
 type RequestRecord struct {
-	Method  string              `json:"method"`
-	URL     string              `json:"url"`
-	Host    string              `json:"host"`
-	Headers map[string][]string `json:"headers"`
-	Body    string              `json:"body,omitempty"`
+	Method      string              `json:"method"`
+	URL         string              `json:"url"`
+	Host        string              `json:"host"`
+	Headers     map[string][]string `json:"headers"`
+	Body        string              `json:"body,omitempty"`
+	RawBody     string              `json:"rawBody,omitempty"`
+	Compression string              `json:"compression,omitempty"`
 }
 
 type ResponseRecord struct {
-	Status  int                 `json:"status"`
-	Headers map[string][]string `json:"headers"`
-	Body    string              `json:"body,omitempty"`
+	Status      int                 `json:"status"`
+	Headers     map[string][]string `json:"headers"`
+	Body        string              `json:"body,omitempty"`
+	RawBody     string              `json:"rawBody,omitempty"`
+	Compression string              `json:"compression,omitempty"`
 }
 
 type Store struct {

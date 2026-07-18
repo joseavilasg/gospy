@@ -361,3 +361,54 @@ pre {
 .list-toggle:hover { color: #e0e0e0; background: #0f3460; }
 .container.list-hidden .request-list { display: none; }
 .container.list-hidden .list-toggle { border-left: none; }
+.body-viewer {
+    margin-top: 12px;
+}
+.body-tools {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #0d1117;
+    border-radius: 4px 4px 0 0;
+    padding: 8px;
+}
+.body-divider {
+    background: #0d1117;
+}
+.body-divider::after {
+    content: '';
+    display: block;
+    height: 1px;
+    background: #333;
+    margin: 0 8px;
+}
+.body-tools-indicator {
+    color: #4caf50;
+    font-size: 10px;
+    font-weight: bold;
+}
+.body-tools-group {
+    display: flex;
+    gap: 4px;
+}
+.body-tool {
+    background: transparent;
+    border: 1px solid #333;
+    color: #888;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 10px;
+    cursor: pointer;
+}
+.body-tool.active {
+    border-color: #4caf50;
+    color: #4caf50;
+}
+.body-tool:hover {
+    border-color: #e0e0e0;
+    color: #e0e0e0;
+}
+.body-viewer pre.body-content {
+    border-radius: 0 0 4px 4px;
+    margin-top: 0;
+}

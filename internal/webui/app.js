@@ -1,6 +1,6 @@
 import { setFilterText, setFocusEnabled, setLastTimestamp } from './state.js';
 import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost } from './api.js';
-import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, onListScroll, invalidateFilterCache } from './render.js';
+import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, onListScroll, invalidateFilterCache, escapeHtml } from './render.js';
 
 document.getElementById('filterInput').addEventListener('input', (e) => {
     setFilterText(e.target.value.trim());
@@ -112,8 +112,63 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
         case 'tab':
             showTab(btn, btn.dataset.tab);
             break;
+        case 'toggle-body':
+            toggleBody(btn.dataset.target, btn.dataset.mode);
+            break;
+        case 'prettify-body':
+            prettifyBody(btn.dataset.target);
+            break;
+        case 'copy-body':
+            copyBody(btn.dataset.target);
+            break;
     }
 });
+
+function toggleBody(target, mode) {
+    const pre = document.querySelector(`pre[data-body-target="${target}"]`);
+    if (!pre) return;
+
+    const decoded = pre.dataset.decoded;
+    const raw = pre.dataset.raw;
+
+    pre.textContent = mode === 'raw' ? (raw || '[no raw data]') : decoded;
+
+    const viewer = pre.closest('.body-viewer');
+    if (viewer) {
+        viewer.querySelectorAll('.body-tool[data-action="toggle-body"]').forEach(b => {
+            b.classList.toggle('active', b.dataset.mode === mode);
+        });
+    }
+}
+
+function prettifyBody(target) {
+    const pre = document.querySelector(`pre[data-body-target="${target}"]`);
+    if (!pre) return;
+
+    try {
+        const obj = JSON.parse(pre.textContent);
+        pre.textContent = JSON.stringify(obj, null, 2);
+    } catch (e) {
+        // not JSON, nothing to prettify
+    }
+}
+
+function copyBody(target) {
+    const pre = document.querySelector(`pre[data-body-target="${target}"]`);
+    if (!pre) return;
+
+    navigator.clipboard.writeText(pre.textContent).then(() => {
+        const viewer = pre.closest('.body-viewer');
+        if (viewer) {
+            const btn = viewer.querySelector('[data-action="copy-body"]');
+            if (btn) {
+                const orig = btn.textContent;
+                btn.textContent = 'Copied!';
+                setTimeout(() => btn.textContent = orig, 1500);
+            }
+        }
+    });
+}
 
 const ICON_COLLAPSE = '<svg width="12" height="12" viewBox="0 0 12 12"><polyline points="8,2 4,6 8,10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const ICON_EXPAND = '<svg width="12" height="12" viewBox="0 0 12 12"><polyline points="4,2 8,6 4,10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';

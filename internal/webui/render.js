@@ -152,6 +152,10 @@ export function renderDetail(req) {
 
     const reqBody = req.request.body || '';
     const respBody = req.response ? (req.response.body || '') : '';
+    const reqRawBody = req.request.rawBody || '';
+    const respRawBody = req.response ? (req.response.rawBody || '') : '';
+    const reqCompression = req.request.compression || '';
+    const respCompression = req.response ? (req.response.compression || '') : '';
 
     const ignoreBtn = isIgnored
         ? `<button class="btn-active" data-action="unignore" data-host="${escapeHtml(host)}"><svg width="12" height="12" viewBox="0 0 16 16"><polyline points="3,8 7,12 13,4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg> Remove ignore</button>`
@@ -162,6 +166,54 @@ export function renderDetail(req) {
         focusBtn = `<button class="btn-active btn-focus-active" data-action="unfocus" data-host="${escapeHtml(host)}"><svg width="12" height="12" viewBox="0 0 16 16"><polyline points="3,8 7,12 13,4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg> Focused</button>`;
     } else {
         focusBtn = `<button class="btn-focus-detail" data-action="focus" data-host="${escapeHtml(host)}"><svg width="12" height="12" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="8" cy="8" r="3" fill="currentColor"/></svg> Add to focus</button>`;
+    }
+
+    let reqBodyHtml = '';
+    if (reqBody) {
+        const reqDecodeBtns = reqCompression
+            ? `<button class="body-tool" data-action="toggle-body" data-target="request" data-mode="raw">Raw</button><button class="body-tool active" data-action="toggle-body" data-target="request" data-mode="decoded">Decoded</button>`
+            : '';
+        const reqCopyBtn = `<button class="body-tool" data-action="copy-body" data-target="request">Copy</button>`;
+        const reqIndicator = reqCompression
+            ? `<span class="body-tools-indicator">${reqCompression} ✓</span>`
+            : '';
+        reqBodyHtml = `<div class="section-title" style="margin-top:12px">Body</div>
+        <div class="body-viewer" data-viewer="request">
+            <div class="body-tools">
+                ${reqIndicator}
+                <div class="body-tools-group">
+                    <button class="body-tool" data-action="prettify-body" data-target="request">Pretty</button>
+                    ${reqDecodeBtns}
+                    ${reqCopyBtn}
+                </div>
+            </div>
+            <div class="body-divider"></div>
+            <pre class="body-content" data-body-target="request" data-decoded="${escapeHtml(reqBody)}" data-raw="${escapeHtml(reqRawBody)}" data-compression="${reqCompression}">${escapeHtml(reqBody)}</pre>
+        </div>`;
+    }
+
+    let respBodyHtml = '';
+    if (respBody) {
+        const respDecodeBtns = respCompression
+            ? `<button class="body-tool" data-action="toggle-body" data-target="response" data-mode="raw">Raw</button><button class="body-tool active" data-action="toggle-body" data-target="response" data-mode="decoded">Decoded</button>`
+            : '';
+        const respCopyBtn = `<button class="body-tool" data-action="copy-body" data-target="response">Copy</button>`;
+        const respIndicator = respCompression
+            ? `<span class="body-tools-indicator">${respCompression} ✓</span>`
+            : '';
+        respBodyHtml = `<div class="section-title" style="margin-top:12px">Body</div>
+        <div class="body-viewer" data-viewer="response">
+            <div class="body-tools">
+                ${respIndicator}
+                <div class="body-tools-group">
+                    <button class="body-tool" data-action="prettify-body" data-target="response">Pretty</button>
+                    ${respDecodeBtns}
+                    ${respCopyBtn}
+                </div>
+            </div>
+            <div class="body-divider"></div>
+            <pre class="body-content" data-body-target="response" data-decoded="${escapeHtml(respBody)}" data-raw="${escapeHtml(respRawBody)}" data-compression="${respCompression}">${escapeHtml(respBody)}</pre>
+        </div>`;
     }
 
     panel.innerHTML = `
@@ -181,7 +233,7 @@ export function renderDetail(req) {
             <div class="section-title" style="margin-top:12px">Headers</div>
             <pre>${reqHeaders}</pre>
 
-            ${reqBody ? `<div class="section-title" style="margin-top:12px">Body</div><pre>${escapeHtml(reqBody)}</pre>` : ''}
+            ${reqBodyHtml}
         </div>
 
         <div id="tab-response" class="tab-content" style="display:none">
@@ -191,7 +243,7 @@ export function renderDetail(req) {
             <div class="section-title" style="margin-top:12px">Headers</div>
             <pre>${respHeaders}</pre>
 
-            ${respBody ? `<div class="section-title" style="margin-top:12px">Body</div><pre>${escapeHtml(respBody)}</pre>` : ''}
+            ${respBodyHtml}
         </div>
     `;
 }

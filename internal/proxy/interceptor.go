@@ -2,12 +2,16 @@ package proxy
 
 import (
 	"bytes"
+	"compress/flate"
+	"compress/gzip"
+	"compress/zlib"
 	"io"
 	"net/http"
 	"strings"
 
 	"gospy/internal/history"
 
+	"github.com/andybalholm/brotli"
 	"github.com/elazarl/goproxy"
 )
 
@@ -28,10 +32,17 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 	}
 
 	body := ""
+	rawBody := ""
+	compression := ""
 	if req.Body != nil {
 		var buf bytes.Buffer
 		if _, err := io.Copy(&buf, req.Body); err == nil {
-			body = buf.String()
+			data := buf.Bytes()
+			ce := req.Header.Get("Content-Encoding")
+			result := decompressBody(data, ce)
+			body = result.Decoded
+			rawBody = result.Raw
+			compression = result.Compression
 		}
 		req.Body = io.NopCloser(&buf)
 	}
@@ -45,11 +56,13 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 
 	entry := &history.Entry{
 		Request: history.RequestRecord{
-			Method:  req.Method,
-			URL:     url,
-			Host:    req.Host,
-			Headers: req.Header,
-			Body:    body,
+			Method:      req.Method,
+			URL:         url,
+			Host:        req.Host,
+			Headers:     req.Header,
+			Body:        body,
+			RawBody:     rawBody,
+			Compression: compression,
 		},
 		Action: "passthrough",
 	}
@@ -65,10 +78,15 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 	}
 
 	body := ""
+	rawBody := ""
+	compression := ""
 	if resp.Body != nil {
 		var buf bytes.Buffer
 		if _, err := io.Copy(&buf, resp.Body); err == nil {
-			body = buf.String()
+			result := decompressBody(buf.Bytes(), resp.Header.Get("Content-Encoding"))
+			body = result.Decoded
+			rawBody = result.Raw
+			compression = result.Compression
 		}
 		resp.Body = io.NopCloser(&buf)
 	}
@@ -87,9 +105,11 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 			entry.Request.URL == reqURL &&
 			entry.Response == nil {
 			entry.Response = &history.ResponseRecord{
-				Status:  resp.StatusCode,
-				Headers: resp.Header,
-				Body:    body,
+				Status:      resp.StatusCode,
+				Headers:     resp.Header,
+				Body:        body,
+				RawBody:     rawBody,
+				Compression: compression,
 			}
 			entry.Modified = false
 			_ = ic.history.Update(entry)
@@ -135,4 +155,58 @@ func IsTextResponse(contentType string) bool {
 		}
 	}
 	return false
+}
+
+type decompressResult struct {
+	Decoded     string
+	Raw         string
+	Compression string
+}
+
+func decompressBody(data []byte, contentEncoding string) decompressResult {
+	if len(data) == 0 {
+		return decompressResult{}
+	}
+
+	raw := string(data)
+
+	// gzip: magic 0x1f 0x8b
+	if len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b {
+		reader, err := gzip.NewReader(bytes.NewReader(data))
+		if err == nil {
+			defer reader.Close()
+			if decompressed, err := io.ReadAll(reader); err == nil {
+				return decompressResult{Decoded: string(decompressed), Raw: raw, Compression: "gzip"}
+			}
+		}
+	}
+
+	// zlib: magic 0x78 (CMF byte)
+	if data[0] == 0x78 {
+		reader, err := zlib.NewReader(bytes.NewReader(data))
+		if err == nil {
+			defer reader.Close()
+			if decompressed, err := io.ReadAll(reader); err == nil {
+				return decompressResult{Decoded: string(decompressed), Raw: raw, Compression: "zlib"}
+			}
+		}
+	}
+
+	// brotli: content-encoding: br
+	if len(contentEncoding) > 0 && strings.Contains(strings.ToLower(contentEncoding), "br") {
+		reader := brotli.NewReader(bytes.NewReader(data))
+		if decompressed, err := io.ReadAll(reader); err == nil {
+			return decompressResult{Decoded: string(decompressed), Raw: raw, Compression: "brotli"}
+		}
+	}
+
+	// raw deflate: solo si header dice "deflate"
+	if len(contentEncoding) > 0 && strings.Contains(strings.ToLower(contentEncoding), "deflate") {
+		reader := flate.NewReader(bytes.NewReader(data))
+		if decompressed, err := io.ReadAll(reader); err == nil {
+			return decompressResult{Decoded: string(decompressed), Raw: raw, Compression: "deflate"}
+		}
+	}
+
+	return decompressResult{Decoded: raw}
 }
