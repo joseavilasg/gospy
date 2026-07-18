@@ -259,6 +259,9 @@ pre {
 .ignored-item .remove-btn:hover { color: #e94560; }
 .detail-toolbar {
     margin-bottom: 12px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
 }
 .btn-ignore-detail {
     background: transparent;
@@ -300,7 +303,6 @@ pre {
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    margin-left: 6px;
 }
 .btn-focus-detail:hover {
     border-color: #2196f3;
