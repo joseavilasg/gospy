@@ -277,3 +277,157 @@ func TestStore_FilePerEntry(t *testing.T) {
 		t.Errorf("Entry file %s not created", filePath)
 	}
 }
+
+func TestStore_ListSummary(t *testing.T) {
+	dir := t.TempDir()
+
+	store, err := New(dir)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	entry := &Entry{
+		Request: RequestRecord{
+			Method:  "POST",
+			URL:     "http://example.com/api",
+			Host:    "example.com",
+			Headers: map[string][]string{"Content-Type": {"application/json"}},
+			Body:    `{"key":"value"}`,
+		},
+		Response: &ResponseRecord{
+			Status:  200,
+			Headers: map[string][]string{"X-Custom": {"yes"}},
+			Body:    "response body",
+		},
+		Action: "passthrough",
+	}
+
+	if err := store.Save(entry); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	summary := store.ListSummary()
+	if len(summary) != 1 {
+		t.Fatalf("ListSummary() = %d entries, want 1", len(summary))
+	}
+
+	s := summary[0]
+	if s.ID != entry.ID {
+		t.Errorf("ListEntry.ID = %q, want %q", s.ID, entry.ID)
+	}
+	if s.Method != "POST" {
+		t.Errorf("ListEntry.Method = %q, want %q", s.Method, "POST")
+	}
+	if s.URL != "http://example.com/api" {
+		t.Errorf("ListEntry.URL = %q, want %q", s.URL, "http://example.com/api")
+	}
+	if s.Host != "example.com" {
+		t.Errorf("ListEntry.Host = %q, want %q", s.Host, "example.com")
+	}
+	if s.Status == nil {
+		t.Fatal("ListEntry.Status is nil, want 200")
+	}
+	if *s.Status != 200 {
+		t.Errorf("ListEntry.Status = %d, want 200", *s.Status)
+	}
+}
+
+func TestStore_ListSummaryNoResponse(t *testing.T) {
+	dir := t.TempDir()
+
+	store, err := New(dir)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	entry := &Entry{
+		Request: RequestRecord{
+			Method: "GET",
+			URL:    "http://example.com/",
+			Host:   "example.com",
+		},
+		Action: "passthrough",
+	}
+
+	if err := store.Save(entry); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	summary := store.ListSummary()
+	if len(summary) != 1 {
+		t.Fatalf("ListSummary() = %d entries, want 1", len(summary))
+	}
+
+	if summary[0].Status != nil {
+		t.Errorf("ListEntry.Status = %v, want nil", *summary[0].Status)
+	}
+}
+
+func TestStore_ListSince(t *testing.T) {
+	dir := t.TempDir()
+
+	store, err := New(dir)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	now := time.Now()
+	times := []time.Time{
+		now.Add(-3 * time.Hour),
+		now.Add(-1 * time.Hour),
+		now.Add(-2 * time.Hour),
+	}
+
+	for _, ts := range times {
+		entry := &Entry{
+			Timestamp: ts,
+			Request: RequestRecord{
+				Method: "GET",
+				URL:    "http://example.com/",
+				Host:   "example.com",
+			},
+			Action: "passthrough",
+		}
+		if err := store.Save(entry); err != nil {
+			t.Fatalf("Save() error = %v", err)
+		}
+	}
+
+	result := store.ListSince(now.Add(-2*time.Hour - 30*time.Minute))
+	if len(result) != 2 {
+		t.Fatalf("ListSince() = %d entries, want 2", len(result))
+	}
+
+	for _, entry := range result {
+		if !entry.Timestamp.After(now.Add(-2*time.Hour - 30*time.Minute)) {
+			t.Errorf("ListSince() returned entry with timestamp %v before cutoff", entry.Timestamp)
+		}
+	}
+}
+
+func TestStore_ListSinceNone(t *testing.T) {
+	dir := t.TempDir()
+
+	store, err := New(dir)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	entry := &Entry{
+		Request: RequestRecord{
+			Method: "GET",
+			URL:    "http://example.com/",
+			Host:   "example.com",
+		},
+		Action: "passthrough",
+	}
+
+	if err := store.Save(entry); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	result := store.ListSince(time.Now().Add(1 * time.Hour))
+	if len(result) != 0 {
+		t.Errorf("ListSince() future time = %d entries, want 0", len(result))
+	}
+}
