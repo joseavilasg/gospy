@@ -1,6 +1,6 @@
-import { setFilterText } from './state.js';
-import { loadRequests, loadIgnored, confirmIgnoreHost, confirmUnignoreHost } from './api.js';
-import { renderList, renderDetail, selectRequest, showTab, toggleIgnoredPanel } from './render.js';
+import { setFilterText, setFocusEnabled } from './state.js';
+import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost } from './api.js';
+import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel } from './render.js';
 
 document.getElementById('filterInput').addEventListener('input', (e) => {
     setFilterText(e.target.value.trim());
@@ -8,9 +8,35 @@ document.getElementById('filterInput').addEventListener('input', (e) => {
 });
 
 document.getElementById('ignoredBtn').addEventListener('click', toggleIgnoredPanel);
+document.getElementById('focusBtn').addEventListener('click', toggleFocusedPanel);
 
 document.getElementById('refreshBtn').addEventListener('click', () => {
     loadRequests();
+});
+
+document.getElementById('focusEnabled').addEventListener('change', (e) => {
+    setFocusEnabled(e.target.checked);
+    renderList();
+});
+
+document.getElementById('focusAddBtn').addEventListener('click', () => {
+    const input = document.getElementById('focusInput');
+    const pattern = input.value.trim();
+    if (pattern) {
+        confirmFocusHost(pattern);
+        input.value = '';
+    }
+});
+
+document.getElementById('focusInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        const input = e.target;
+        const pattern = input.value.trim();
+        if (pattern) {
+            confirmFocusHost(pattern);
+            input.value = '';
+        }
+    }
 });
 
 document.getElementById('ignoredPanel').addEventListener('click', (e) => {
@@ -21,6 +47,17 @@ document.getElementById('ignoredPanel').addEventListener('click', (e) => {
     const btn = e.target.closest('[data-action="unignore-item"]');
     if (btn) {
         confirmUnignoreHost(btn.dataset.host);
+    }
+});
+
+document.getElementById('focusedPanel').addEventListener('click', (e) => {
+    if (e.target.closest('.ignored-panel-close')) {
+        toggleFocusedPanel();
+        return;
+    }
+    const btn = e.target.closest('[data-action="unfocus-item"]');
+    if (btn) {
+        confirmUnfocusHost(btn.dataset.host);
     }
 });
 
@@ -41,6 +78,12 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
         case 'unignore':
             confirmUnignoreHost(btn.dataset.host);
             break;
+        case 'focus':
+            confirmFocusHost(btn.dataset.host);
+            break;
+        case 'unfocus':
+            confirmUnfocusHost(btn.dataset.host);
+            break;
         case 'tab':
             showTab(btn, btn.dataset.tab);
             break;
@@ -49,6 +92,7 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
 
 loadRequests();
 loadIgnored();
+loadFocused();
 setInterval(() => {
     if (document.getElementById('autoRefresh').checked) loadRequests();
 }, 2000);

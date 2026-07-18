@@ -23,6 +23,7 @@ func main() {
 	noSystemProxy := flag.Bool("no-system-proxy", false, "Don't auto-configure Windows system proxy")
 	resetProxy := flag.Bool("reset-proxy", false, "Restore system proxy to original settings (after crash)")
 	ignoreHosts := flag.String("ignore", "", "Comma-separated hosts to ignore (e.g. \"host1.com,host2.com\")")
+	focusHosts := flag.String("focus", "", "Comma-separated hosts to focus on (e.g. \"host1.com,host2.com\")")
 	flag.Parse()
 
 	fmt.Println(`
@@ -90,12 +91,27 @@ func main() {
 		}
 	}
 
+	focusStore := proxy.NewFocusStore(*dataDir + "/focus.json")
+	if err := focusStore.Load(); err != nil {
+		proxy.LogError(fmt.Sprintf("Failed to load focus list: %v", err))
+	}
+	if *focusHosts != "" {
+		for _, h := range strings.Split(*focusHosts, ",") {
+			h = strings.TrimSpace(h)
+			if h != "" {
+				if err := focusStore.Add(h); err != nil {
+					proxy.LogError(fmt.Sprintf("Failed to focus host %s: %v", h, err))
+				}
+			}
+		}
+	}
+
 	srv := proxy.NewServer(*proxyAddr, caCert, hist, ruleEngine, ignoreStore)
 
 	proxy.LogInfo(fmt.Sprintf("Proxy listening on %s", *proxyAddr))
 
 	go func() {
-		if err := webui.NewServer(*uiAddr, hist, ignoreStore).ListenAndServe(); err != nil {
+		if err := webui.NewServer(*uiAddr, hist, ignoreStore, focusStore).ListenAndServe(); err != nil {
 			proxy.LogError(fmt.Sprintf("Web UI error: %v", err))
 		}
 	}()

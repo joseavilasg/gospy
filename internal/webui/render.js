@@ -1,15 +1,28 @@
-import { requests, selectedId, filterText, ignoredHosts, setSelectedId } from './state.js';
-import { confirmIgnoreHost, confirmUnignoreHost } from './api.js';
+import { requests, selectedId, filterText, ignoredHosts, focusedHosts, focusEnabled, setSelectedId } from './state.js';
 
 export function escapeHtml(str) {
     if (!str) return '';
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+function hostMatchesFocus(host) {
+    if (!focusEnabled || focusedHosts.length === 0) return true;
+    for (const pattern of focusedHosts) {
+        if (pattern === host) return true;
+        if (pattern.includes('*')) {
+            const regex = '^' + pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$';
+            if (new RegExp(regex).test(host)) return true;
+        }
+    }
+    return false;
+}
+
 export function getFilteredRequests() {
-    if (!filterText) return requests;
+    let result = requests.filter(r => hostMatchesFocus(r.request.host));
+
+    if (!filterText) return result;
     const q = filterText.toLowerCase();
-    return requests.filter(r => {
+    return result.filter(r => {
         const method = (r.request.method || '').toLowerCase();
         const url = (r.request.url || r.request.host || '').toLowerCase();
         const status = r.response ? String(r.response.status) : '';
@@ -22,7 +35,7 @@ export function renderList() {
     const filtered = getFilteredRequests();
     const total = requests.length;
 
-    if (filterText) {
+    if (filterText || (focusEnabled && focusedHosts.length > 0)) {
         document.getElementById('stats').textContent = filtered.length + ' / ' + total + ' requests';
     } else {
         document.getElementById('stats').textContent = total + ' requests';
@@ -71,6 +84,7 @@ export function renderDetail(req) {
     const panel = document.getElementById('detailPanel');
     const host = req.request.host || '';
     const isIgnored = ignoredHosts.includes(host);
+    const isFocused = focusedHosts.includes(host);
 
     const reqHeaders = req.request.headers ? Object.entries(req.request.headers).map(([k,v]) =>
         `<div class="header-row"><span class="header-key">${escapeHtml(k)}:</span><span class="header-value">${escapeHtml(Array.isArray(v) ? v.join(', ') : v)}</span></div>`
@@ -87,9 +101,17 @@ export function renderDetail(req) {
         ? `<button class="btn-active" data-action="unignore" data-host="${escapeHtml(host)}"><svg width="12" height="12" viewBox="0 0 16 16"><polyline points="3,8 7,12 13,4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg> Remove ignore</button>`
         : `<button class="btn-ignore-detail" data-action="ignore" data-host="${escapeHtml(host)}"><svg width="12" height="12" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2"/><line x1="5" y1="5" x2="11" y2="11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> Ignore host</button>`;
 
+    let focusBtn;
+    if (isFocused) {
+        focusBtn = `<button class="btn-active btn-focus-active" data-action="unfocus" data-host="${escapeHtml(host)}"><svg width="12" height="12" viewBox="0 0 16 16"><polyline points="3,8 7,12 13,4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg> Focused</button>`;
+    } else {
+        focusBtn = `<button class="btn-focus-detail" data-action="focus" data-host="${escapeHtml(host)}"><svg width="12" height="12" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="8" cy="8" r="3" fill="currentColor"/></svg> Add to focus</button>`;
+    }
+
     panel.innerHTML = `
         <div class="detail-toolbar">
             ${ignoreBtn}
+            ${focusBtn}
         </div>
         <div class="tabs">
             <button class="tab active" data-action="tab" data-tab="request">Request</button>
@@ -133,12 +155,30 @@ export function renderIgnoredList() {
     }
     list.innerHTML = ignoredHosts.map(h => `
         <div class="ignored-item">
-            <span class="host">${escapeHtml(h)}</span>
+            <span class="host" title="${escapeHtml(h)}">${escapeHtml(h)}</span>
             <button class="remove-btn" data-action="unignore-item" data-host="${escapeHtml(h)}" title="Remove">&times;</button>
+        </div>
+    `).join('');
+}
+
+export function renderFocusedList() {
+    const list = document.getElementById('focusedList');
+    if (focusedHosts.length === 0) {
+        list.innerHTML = '<div style="padding:20px;color:#666;text-align:center">No focused hosts</div>';
+        return;
+    }
+    list.innerHTML = focusedHosts.map(h => `
+        <div class="ignored-item">
+            <span class="host" title="${escapeHtml(h)}">${escapeHtml(h)}</span>
+            <button class="remove-btn" data-action="unfocus-item" data-host="${escapeHtml(h)}" title="Remove">&times;</button>
         </div>
     `).join('');
 }
 
 export function toggleIgnoredPanel() {
     document.getElementById('ignoredPanel').classList.toggle('open');
+}
+
+export function toggleFocusedPanel() {
+    document.getElementById('focusedPanel').classList.toggle('open');
 }

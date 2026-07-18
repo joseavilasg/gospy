@@ -12,12 +12,17 @@
         <span class="stats" id="stats">0 requests</span>
         <input type="text" class="filter-input" id="filterInput" placeholder="Filter (method, url, status)...">
         <div style="flex:1"></div>
-        <button class="btn" id="ignoredBtn">Ignored <span class="badge" id="ignoredCount">0</span></button>
+        <button class="btn" id="focusBtn">Focus <span class="badge" id="focusedCount">0</span></button>
         <div class="auto-refresh">
-            <input type="checkbox" id="autoRefresh" checked>
-            <label for="autoRefresh">Auto</label>
+            <input type="checkbox" id="focusEnabled" title="Enable focus filter">
         </div>
+        <div class="header-sep"></div>
         <button class="btn" id="refreshBtn">Refresh</button>
+        <div class="auto-refresh">
+            <input type="checkbox" id="autoRefresh" checked title="Auto-refresh requests">
+        </div>
+        <div class="header-sep"></div>
+        <button class="btn" id="ignoredBtn">Ignored <span class="badge" id="ignoredCount">0</span></button>
     </header>
     <div class="container">
         <div class="request-list" id="requestList">
@@ -34,6 +39,17 @@
                 <button class="ignored-panel-close">&times;</button>
             </div>
             <div class="ignored-list" id="ignoredList"></div>
+        </div>
+        <div class="ignored-panel" id="focusedPanel">
+            <div class="ignored-panel-header">
+                <h3>Focused Hosts</h3>
+                <button class="ignored-panel-close">&times;</button>
+            </div>
+            <div class="ignored-list" id="focusedList"></div>
+            <div class="focus-add">
+                <input type="text" id="focusInput" placeholder="Add host or wildcard...">
+                <button id="focusAddBtn">+</button>
+            </div>
         </div>
     </div>
 

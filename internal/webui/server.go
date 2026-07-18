@@ -35,16 +35,26 @@ type IgnoreChecker interface {
 	Remove(host string) error
 }
 
+type FocusChecker interface {
+	IsFocused(host string) bool
+	Matches(host string) bool
+	List() []string
+	Add(host string) error
+	Remove(host string) error
+}
+
 type Server struct {
 	history     *history.Store
 	ignoreStore IgnoreChecker
+	focusStore  FocusChecker
 	addr        string
 }
 
-func NewServer(addr string, h *history.Store, ignore IgnoreChecker) *Server {
+func NewServer(addr string, h *history.Store, ignore IgnoreChecker, focus FocusChecker) *Server {
 	return &Server{
 		history:     h,
 		ignoreStore: ignore,
+		focusStore:  focus,
 		addr:        addr,
 	}
 }
@@ -62,6 +72,8 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/api/requests/", s.handleGetRequest)
 	mux.HandleFunc("/api/ignored", s.handleIgnored)
 	mux.HandleFunc("/api/ignored/", s.handleIgnoredHost)
+	mux.HandleFunc("/api/focused", s.handleFocused)
+	mux.HandleFunc("/api/focused/", s.handleFocusedHost)
 
 	LogWebUI(s.addr)
 
@@ -90,9 +102,10 @@ func (s *Server) handleListRequests(w http.ResponseWriter, r *http.Request) {
 
 	filtered := make([]*history.Entry, 0, len(entries))
 	for _, e := range entries {
-		if !s.ignoreStore.IsIgnored(e.Request.Host) {
-			filtered = append(filtered, e)
+		if s.ignoreStore.IsIgnored(e.Request.Host) {
+			continue
 		}
+		filtered = append(filtered, e)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -160,6 +173,54 @@ func (s *Server) handleIgnoredHost(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		json.NewEncoder(w).Encode(s.ignoreStore.List())
+		return
+	}
+
+	http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+}
+
+func (s *Server) handleFocused(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	switch r.Method {
+	case http.MethodGet:
+		json.NewEncoder(w).Encode(s.focusStore.List())
+	case http.MethodPost:
+		var body struct {
+			Host string `json:"host"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Host == "" {
+			http.Error(w, `{"error":"invalid host"}`, http.StatusBadRequest)
+			return
+		}
+		if err := s.focusStore.Add(body.Host); err != nil {
+			http.Error(w, `{"error":"failed to add"}`, http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(s.focusStore.List())
+	default:
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleFocusedHost(w http.ResponseWriter, r *http.Request) {
+	host := strings.TrimPrefix(r.URL.Path, "/api/focused/")
+	if host == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if r.Method == http.MethodDelete {
+		if err := s.focusStore.Remove(host); err != nil {
+			http.Error(w, `{"error":"failed to remove"}`, http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(s.focusStore.List())
 		return
 	}
 
