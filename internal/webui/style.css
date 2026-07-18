@@ -342,3 +342,22 @@ pre {
     font-weight: bold;
 }
 .focus-add button:hover { background: #1976d2; }
+.list-toggle {
+    width: 16px;
+    height: 24px;
+    align-self: flex-start;
+    background: #16213e;
+    border: none;
+    border-bottom: 1px solid #0f3460;
+    border-right: 1px solid #0f3460;
+    color: #888;
+    cursor: pointer;
+    font-size: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+.list-toggle:hover { color: #e0e0e0; background: #0f3460; }
+.container.list-hidden .request-list { display: none; }
+.container.list-hidden .list-toggle { border-left: none; }
