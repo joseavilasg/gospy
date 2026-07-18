@@ -183,9 +183,11 @@ export function renderFocusedList() {
 }
 
 export function toggleIgnoredPanel() {
+    document.getElementById('focusedPanel').classList.remove('open');
     document.getElementById('ignoredPanel').classList.toggle('open');
 }
 
 export function toggleFocusedPanel() {
+    document.getElementById('ignoredPanel').classList.remove('open');
     document.getElementById('focusedPanel').classList.toggle('open');
 }
