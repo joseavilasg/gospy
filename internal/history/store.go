@@ -41,6 +41,15 @@ type Store struct {
 	entries []*Entry
 }
 
+type ListEntry struct {
+	ID        string    `json:"id"`
+	Timestamp time.Time `json:"timestamp"`
+	Method    string    `json:"method"`
+	URL       string    `json:"url"`
+	Host      string    `json:"host"`
+	Status    *int      `json:"status,omitempty"`
+}
+
 func New(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("create history dir: %w", err)
@@ -121,6 +130,50 @@ func (s *Store) List() []*Entry {
 
 	result := make([]*Entry, len(s.entries))
 	copy(result, s.entries)
+	return result
+}
+
+func (s *Store) ListSummary() []*ListEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	result := make([]*ListEntry, 0, len(s.entries))
+	for _, e := range s.entries {
+		le := &ListEntry{
+			ID:        e.ID,
+			Timestamp: e.Timestamp,
+			Method:    e.Request.Method,
+			URL:       e.Request.URL,
+			Host:      e.Request.Host,
+		}
+		if e.Response != nil {
+			le.Status = &e.Response.Status
+		}
+		result = append(result, le)
+	}
+	return result
+}
+
+func (s *Store) ListSince(since time.Time) []*ListEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	result := make([]*ListEntry, 0)
+	for _, e := range s.entries {
+		if e.Timestamp.After(since) {
+			le := &ListEntry{
+				ID:        e.ID,
+				Timestamp: e.Timestamp,
+				Method:    e.Request.Method,
+				URL:       e.Request.URL,
+				Host:      e.Request.Host,
+			}
+			if e.Response != nil {
+				le.Status = &e.Response.Status
+			}
+			result = append(result, le)
+		}
+	}
 	return result
 }
 

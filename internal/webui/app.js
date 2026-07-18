@@ -1,9 +1,11 @@
-import { setFilterText, setFocusEnabled } from './state.js';
+import { setFilterText, setFocusEnabled, setLastTimestamp } from './state.js';
 import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost } from './api.js';
-import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel } from './render.js';
+import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, onListScroll, invalidateFilterCache } from './render.js';
 
 document.getElementById('filterInput').addEventListener('input', (e) => {
     setFilterText(e.target.value.trim());
+    invalidateFilterCache();
+    document.getElementById('requestList').scrollTop = 0;
     renderList();
 });
 
@@ -11,11 +13,14 @@ document.getElementById('ignoredBtn').addEventListener('click', toggleIgnoredPan
 document.getElementById('focusBtn').addEventListener('click', toggleFocusedPanel);
 
 document.getElementById('refreshBtn').addEventListener('click', () => {
+    setLastTimestamp('');
     loadRequests();
 });
 
 document.getElementById('focusEnabled').addEventListener('change', (e) => {
     setFocusEnabled(e.target.checked);
+    invalidateFilterCache();
+    document.getElementById('requestList').scrollTop = 0;
     renderList();
 });
 
@@ -108,6 +113,15 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
             showTab(btn, btn.dataset.tab);
             break;
     }
+});
+
+let scrollRAF = null;
+document.getElementById('requestList').addEventListener('scroll', () => {
+    if (scrollRAF) return;
+    scrollRAF = requestAnimationFrame(() => {
+        onListScroll();
+        scrollRAF = null;
+    });
 });
 
 loadRequests();

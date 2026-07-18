@@ -1,5 +1,11 @@
 import { requests, selectedId, filterText, ignoredHosts, focusedHosts, focusEnabled, setSelectedId } from './state.js';
 
+const ITEM_HEIGHT = 35;
+const BUFFER = 5;
+let lastFiltered = [];
+let lastRange = { start: -1, end: -1 };
+let filteredCache = null;
+
 export function escapeHtml(str) {
     if (!str) return '';
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -24,22 +30,43 @@ function hostMatchesIgnore(host) {
 }
 
 export function getFilteredRequests() {
-    let result = requests.filter(r => !hostMatchesIgnore(r.request.host));
-    result = result.filter(r => hostMatchesFocus(r.request.host));
+    if (filteredCache) return filteredCache;
+    let result = requests.filter(r => !hostMatchesIgnore(r.host));
+    result = result.filter(r => hostMatchesFocus(r.host));
 
-    if (!filterText) return result;
-    const q = filterText.toLowerCase();
-    return result.filter(r => {
-        const method = (r.request.method || '').toLowerCase();
-        const url = (r.request.url || r.request.host || '').toLowerCase();
-        const status = r.response ? String(r.response.status) : '';
-        return method.includes(q) || url.includes(q) || status.includes(q);
-    });
+    if (filterText) {
+        const q = filterText.toLowerCase();
+        result = result.filter(r => {
+            const method = (r.method || '').toLowerCase();
+            const url = (r.url || r.host || '').toLowerCase();
+            const status = r.status != null ? String(r.status) : '';
+            return method.includes(q) || url.includes(q) || status.includes(q);
+        });
+    }
+
+    filteredCache = result;
+    return result;
+}
+
+export function invalidateFilterCache() {
+    filteredCache = null;
+}
+
+function buildItemHtml(r) {
+    const method = r.method;
+    const url = r.url || r.host;
+    const status = r.status ?? null;
+    const time = new Date(r.timestamp).toLocaleTimeString();
+    const selected = r.id === selectedId ? ' selected' : '';
+    const statusClass = status ? (status < 300 ? 'status-2xx' : status < 400 ? 'status-3xx' : status < 500 ? 'status-4xx' : 'status-5xx') : '';
+
+    return `<div class="request-item${selected}" title="${escapeHtml(url)}" data-id="${r.id}"><span class="method method-${method}">${method}</span><span class="url">${escapeHtml(url)}</span>${status != null ? `<span class="status ${statusClass}">${status}</span>` : ''}<span class="time">${time}</span></div>`;
 }
 
 export function renderList() {
     const list = document.getElementById('requestList');
     const filtered = getFilteredRequests();
+    lastFiltered = filtered;
     const total = requests.length;
 
     if (filterText || (focusEnabled && focusedHosts.length > 0)) {
@@ -50,41 +77,63 @@ export function renderList() {
 
     if (requests.length === 0) {
         list.innerHTML = '<div style="padding:20px;color:#666;text-align:center">Waiting for requests...</div>';
+        lastRange = { start: -1, end: -1 };
         return;
     }
 
+    lastRange = { start: -1, end: -1 };
+    renderVisibleItems(list, filtered);
+}
+
+function renderVisibleItems(list, filtered) {
+    if (!filtered) filtered = lastFiltered;
+    if (!filtered || filtered.length === 0) return;
+
+    const totalHeight = filtered.length * ITEM_HEIGHT;
     const scrollTop = list.scrollTop;
+    const viewportHeight = list.clientHeight || 600;
+    const start = Math.max(0, Math.floor(scrollTop / ITEM_HEIGHT) - BUFFER);
+    const end = Math.min(filtered.length, Math.ceil((scrollTop + viewportHeight) / ITEM_HEIGHT) + BUFFER);
 
-    list.innerHTML = filtered.map(r => {
-        const method = r.request.method;
-        const url = r.request.url || r.request.host;
-        const status = r.response ? r.response.status : null;
-        const time = new Date(r.timestamp).toLocaleTimeString();
-        const selected = r.id === selectedId ? ' selected' : '';
-        const statusClass = status ? (status < 300 ? 'status-2xx' : status < 400 ? 'status-3xx' : status < 500 ? 'status-4xx' : 'status-5xx') : '';
+    if (start === lastRange.start && end === lastRange.end) return;
+    lastRange = { start, end };
 
-        return `
-            <div class="request-item${selected}" title="${escapeHtml(url)}" data-id="${r.id}">
-                <span class="method method-${method}">${method}</span>
-                <span class="url">${escapeHtml(url)}</span>
-                ${status ? `<span class="status ${statusClass}">${status}</span>` : ''}
-                <span class="time">${time}</span>
-            </div>
-        `;
-    }).join('');
+    const scrollTopSave = list.scrollTop;
+    const visibleItems = filtered.slice(start, end);
 
-    if (selectedId) {
-        list.scrollTop = scrollTop;
-    } else {
-        list.scrollTop = 0;
+    let html = `<div style="height:${totalHeight}px;position:relative">`;
+    if (start > 0) html += `<div style="height:${start * ITEM_HEIGHT}px"></div>`;
+    for (let i = 0; i < visibleItems.length; i++) {
+        html += buildItemHtml(visibleItems[i]);
     }
+    if (end < filtered.length) html += `<div style="height:${(filtered.length - end) * ITEM_HEIGHT}px"></div>`;
+    html += '</div>';
+
+    list.innerHTML = html;
+    list.scrollTop = scrollTopSave;
+}
+
+export function onListScroll() {
+    const list = document.getElementById('requestList');
+    renderVisibleItems(list, lastFiltered);
 }
 
 export function selectRequest(id) {
+    const oldEl = document.querySelector('.request-item.selected');
+    if (oldEl) oldEl.classList.remove('selected');
+
     setSelectedId(id);
-    renderList();
-    const req = requests.find(r => r.id === id);
-    if (req) renderDetail(req);
+
+    const newEl = document.querySelector(`[data-id="${id}"]`);
+    if (newEl) {
+        newEl.classList.add('selected');
+        newEl.scrollIntoView({ block: 'nearest' });
+    }
+
+    fetch(`/api/requests/${id}`)
+        .then(resp => resp.json())
+        .then(entry => renderDetail(entry))
+        .catch(e => console.error('Failed to load request detail:', e));
 }
 
 export function renderDetail(req) {

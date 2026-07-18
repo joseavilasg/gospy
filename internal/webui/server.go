@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"gospy/internal/history"
 )
@@ -99,11 +100,22 @@ func (s *Server) handleStatic(content, contentType string) http.HandlerFunc {
 }
 
 func (s *Server) handleListRequests(w http.ResponseWriter, r *http.Request) {
-	entries := s.history.List()
+	var entries []*history.ListEntry
 
-	filtered := make([]*history.Entry, 0, len(entries))
+	if since := r.URL.Query().Get("since"); since != "" {
+		t, err := time.Parse(time.RFC3339Nano, since)
+		if err == nil {
+			entries = s.history.ListSince(t)
+		}
+	}
+
+	if entries == nil {
+		entries = s.history.ListSummary()
+	}
+
+	filtered := make([]*history.ListEntry, 0, len(entries))
 	for _, e := range entries {
-		if s.ignoreStore.Matches(e.Request.Host) {
+		if s.ignoreStore.Matches(e.Host) {
 			continue
 		}
 		filtered = append(filtered, e)
