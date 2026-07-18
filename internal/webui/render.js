@@ -5,20 +5,27 @@ export function escapeHtml(str) {
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function hostMatchesFocus(host) {
-    if (!focusEnabled || focusedHosts.length === 0) return true;
-    for (const pattern of focusedHosts) {
-        if (pattern === host) return true;
-        if (pattern.includes('*')) {
-            const regex = '^' + pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$';
-            if (new RegExp(regex).test(host)) return true;
-        }
+function hostMatchesPattern(host, pattern) {
+    if (pattern === host) return true;
+    if (pattern.includes('*')) {
+        const regex = '^' + pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$';
+        return new RegExp(regex).test(host);
     }
     return false;
 }
 
+function hostMatchesFocus(host) {
+    if (!focusEnabled || focusedHosts.length === 0) return true;
+    return focusedHosts.some(p => hostMatchesPattern(host, p));
+}
+
+function hostMatchesIgnore(host) {
+    return ignoredHosts.some(p => hostMatchesPattern(host, p));
+}
+
 export function getFilteredRequests() {
-    let result = requests.filter(r => hostMatchesFocus(r.request.host));
+    let result = requests.filter(r => !hostMatchesIgnore(r.request.host));
+    result = result.filter(r => hostMatchesFocus(r.request.host));
 
     if (!filterText) return result;
     const q = filterText.toLowerCase();

@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -95,6 +97,28 @@ func (s *IgnoreStore) IsIgnored(host string) bool {
 	for _, h := range s.hosts {
 		if h == host {
 			return true
+		}
+	}
+	return false
+}
+
+func (s *IgnoreStore) Matches(host string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.hosts) == 0 {
+		return false
+	}
+	for _, pattern := range s.hosts {
+		if pattern == host {
+			return true
+		}
+		if strings.Contains(pattern, "*") {
+			regex := regexp.QuoteMeta(pattern)
+			regex = strings.ReplaceAll(regex, "\\*", ".*")
+			if matched, _ := regexp.MatchString("^"+regex+"$", host); matched {
+				return true
+			}
 		}
 	}
 	return false

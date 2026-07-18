@@ -39,6 +39,26 @@ document.getElementById('focusInput').addEventListener('keydown', (e) => {
     }
 });
 
+document.getElementById('ignoreAddBtn').addEventListener('click', () => {
+    const input = document.getElementById('ignoreInput');
+    const pattern = input.value.trim();
+    if (pattern) {
+        confirmIgnoreHost(pattern);
+        input.value = '';
+    }
+});
+
+document.getElementById('ignoreInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        const input = e.target;
+        const pattern = input.value.trim();
+        if (pattern) {
+            confirmIgnoreHost(pattern);
+            input.value = '';
+        }
+    }
+});
+
 document.getElementById('ignoredPanel').addEventListener('click', (e) => {
     if (e.target.closest('.ignored-panel-close')) {
         toggleIgnoredPanel();

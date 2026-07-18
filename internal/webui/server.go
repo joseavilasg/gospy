@@ -30,6 +30,7 @@ var renderJS string
 
 type IgnoreChecker interface {
 	IsIgnored(host string) bool
+	Matches(host string) bool
 	List() []string
 	Add(host string) error
 	Remove(host string) error
@@ -102,7 +103,7 @@ func (s *Server) handleListRequests(w http.ResponseWriter, r *http.Request) {
 
 	filtered := make([]*history.Entry, 0, len(entries))
 	for _, e := range entries {
-		if s.ignoreStore.IsIgnored(e.Request.Host) {
+		if s.ignoreStore.Matches(e.Request.Host) {
 			continue
 		}
 		filtered = append(filtered, e)
