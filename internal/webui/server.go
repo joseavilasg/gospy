@@ -13,6 +13,21 @@ import (
 //go:embed index.html
 var indexHTML string
 
+//go:embed style.css
+var styleCSS string
+
+//go:embed app.js
+var appJS string
+
+//go:embed state.js
+var stateJS string
+
+//go:embed api.js
+var apiJS string
+
+//go:embed render.js
+var renderJS string
+
 type IgnoreChecker interface {
 	IsIgnored(host string) bool
 	List() []string
@@ -38,6 +53,11 @@ func (s *Server) ListenAndServe() error {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/", s.handleIndex)
+	mux.HandleFunc("/style.css", s.handleStatic(styleCSS, "text/css"))
+	mux.HandleFunc("/app.js", s.handleStatic(appJS, "application/javascript"))
+	mux.HandleFunc("/state.js", s.handleStatic(stateJS, "application/javascript"))
+	mux.HandleFunc("/api.js", s.handleStatic(apiJS, "application/javascript"))
+	mux.HandleFunc("/render.js", s.handleStatic(renderJS, "application/javascript"))
 	mux.HandleFunc("/api/requests", s.handleListRequests)
 	mux.HandleFunc("/api/requests/", s.handleGetRequest)
 	mux.HandleFunc("/api/ignored", s.handleIgnored)
@@ -56,6 +76,13 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, indexHTML)
+}
+
+func (s *Server) handleStatic(content, contentType string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", contentType)
+		fmt.Fprint(w, content)
+	}
 }
 
 func (s *Server) handleListRequests(w http.ResponseWriter, r *http.Request) {
