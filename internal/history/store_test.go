@@ -583,3 +583,123 @@ func TestStore_Replay(t *testing.T) {
 		t.Error("Replayed entry not found in index")
 	}
 }
+
+func TestStore_SaveEditedHeaders(t *testing.T) {
+	dir := t.TempDir()
+
+	store, err := New(dir)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	entry := &Entry{
+		Request: RequestRecord{
+			Method:  "GET",
+			URL:     "http://example.com/api",
+			Host:    "example.com",
+			Headers: map[string][]string{"Authorization": {"Bearer old-token"}},
+		},
+		Action: "passthrough",
+	}
+	if err := store.Save(entry); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	newHeaders := map[string][]string{
+		"Authorization": {"Bearer new-token"},
+		"X-Custom":      {"value1", "value2"},
+	}
+	if err := store.SaveEditedHeaders(entry.ID, newHeaders); err != nil {
+		t.Fatalf("SaveEditedHeaders() error = %v", err)
+	}
+
+	retrieved, err := store.Get(entry.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+
+	if retrieved.Request.EditedHeaders == nil {
+		t.Fatal("EditedHeaders is nil, want non-nil")
+	}
+	if retrieved.Request.EditedHeaders["Authorization"][0] != "Bearer new-token" {
+		t.Errorf("EditedHeaders[Authorization] = %v, want [Bearer new-token]", retrieved.Request.EditedHeaders["Authorization"])
+	}
+	if len(retrieved.Request.EditedHeaders["X-Custom"]) != 2 {
+		t.Errorf("EditedHeaders[X-Custom] has %d values, want 2", len(retrieved.Request.EditedHeaders["X-Custom"]))
+	}
+	if retrieved.Request.Headers["Authorization"][0] != "Bearer old-token" {
+		t.Errorf("Original Headers modified: Headers[Authorization] = %v, want [Bearer old-token]", retrieved.Request.Headers["Authorization"])
+	}
+}
+
+func TestStore_RevertHeaders(t *testing.T) {
+	dir := t.TempDir()
+
+	store, err := New(dir)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	entry := &Entry{
+		Request: RequestRecord{
+			Method:        "GET",
+			URL:           "http://example.com/api",
+			Host:          "example.com",
+			Headers:       map[string][]string{"Authorization": {"Bearer old-token"}},
+			EditedHeaders: map[string][]string{"Authorization": {"Bearer new-token"}},
+		},
+		Action: "passthrough",
+	}
+	if err := store.Save(entry); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	if err := store.RevertHeaders(entry.ID); err != nil {
+		t.Fatalf("RevertHeaders() error = %v", err)
+	}
+
+	retrieved, err := store.Get(entry.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+
+	if retrieved.Request.EditedHeaders != nil {
+		t.Errorf("EditedHeaders = %v, want nil after revert", retrieved.Request.EditedHeaders)
+	}
+	if retrieved.Request.Headers["Authorization"][0] != "Bearer old-token" {
+		t.Errorf("Original Headers lost: Headers[Authorization] = %v, want [Bearer old-token]", retrieved.Request.Headers["Authorization"])
+	}
+}
+
+func TestStore_ReplayWithEditedHeaders(t *testing.T) {
+	dir := t.TempDir()
+
+	store, err := New(dir)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	original := &Entry{
+		Request: RequestRecord{
+			Method:        "GET",
+			URL:           "http://example.com/api",
+			Host:          "example.com",
+			Headers:       map[string][]string{"Authorization": {"Bearer old-token"}},
+			EditedHeaders: map[string][]string{"Authorization": {"Bearer new-token"}},
+		},
+		Response: &ResponseRecord{Status: 200, Body: `{"ok":true}`},
+		Action:   "passthrough",
+	}
+	if err := store.Save(original); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	replayed, err := store.Replay(original.ID, "")
+	if err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+
+	if replayed.Request.Headers["Authorization"][0] != "Bearer new-token" {
+		t.Errorf("Replay should use EditedHeaders: Headers[Authorization] = %v, want [Bearer new-token]", replayed.Request.Headers["Authorization"])
+	}
+}

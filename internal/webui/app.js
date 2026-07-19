@@ -1,6 +1,6 @@
 import { setFilterText, setFocusEnabled, setLastTimestamp, selectedId } from './state.js';
 import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost } from './api.js';
-import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, onListScroll, invalidateFilterCache, escapeHtml } from './render.js';
+import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT } from './render.js';
 
 document.getElementById('filterInput').addEventListener('input', (e) => {
     setFilterText(e.target.value.trim());
@@ -154,6 +154,39 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
             if (replaysList) replaysList.classList.toggle('collapsed');
             const toggle = btn.querySelector('.replays-toggle');
             if (toggle) toggle.textContent = replaysList.classList.contains('collapsed') ? '▸' : '▾';
+            break;
+        case 'edit-headers':
+            editHeaders(btn.closest('.tab-content')?.querySelector('.headers-container'));
+            break;
+        case 'save-headers':
+            saveHeaders(selectedId);
+            break;
+        case 'cancel-headers':
+            cancelHeadersEdit(btn.closest('.headers-container'));
+            break;
+        case 'add-header':
+            addHeaderRow(btn.closest('.headers-container'));
+            break;
+        case 'remove-header':
+            removeHeaderRow(btn);
+            break;
+        case 'set-header-content': {
+            const mode = btn.dataset.content;
+            const container = btn.closest('.tab-content')?.querySelector('.headers-container');
+            if (!container) break;
+            container.innerHTML = mode === 'original'
+                ? container.dataset.originalHtml
+                : (container.dataset.editedHtml || container.dataset.originalHtml);
+            container.dataset.headerMode = mode;
+            btn.closest('.body-tools-group')?.querySelectorAll('.body-tool').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            break;
+        }
+        case 'revert-headers':
+            if (!selectedId) break;
+            fetch(`/api/requests/${selectedId}/headers`, { method: 'DELETE' })
+                .then(r => r.json()).then(() => refreshDetail())
+                .catch(e => console.error('Revert headers failed:', e));
             break;
     }
 });
@@ -353,11 +386,26 @@ function saveBody(target) {
             pre.style.display = '';
 
             if (savedToolbarHtml) {
-                viewer.querySelector('.body-tools').innerHTML = savedToolbarHtml;
+                const toolsDiv = viewer.querySelector('.body-tools');
+                let html = savedToolbarHtml;
+                if (!toolsDiv.querySelector('.body-badge-edited')) {
+                    html = `<div class="body-badges"><span class="body-badge body-badge-edited">edited</span></div>` +
+                        `<div class="body-center"><div class="body-tools-group">` +
+                        `<button class="body-tool body-view active" data-action="set-view" data-target="${target}" data-view="pretty">Pretty</button>` +
+                        `<button class="body-tool body-view" data-action="set-view" data-target="${target}" data-view="raw">Raw</button>` +
+                        `</div><div class="body-tools-group">` +
+                        `<button class="body-tool body-content" data-action="set-content" data-target="${target}" data-content="original">Original</button>` +
+                        `<button class="body-tool body-content active" data-action="set-content" data-target="${target}" data-content="edited">Edited</button>` +
+                        `</div></div>` +
+                        `<div class="body-actions">` +
+                        `<button class="body-action" data-action="copy-body" data-target="${target}" title="Copy"><svg width="12" height="12" viewBox="0 0 16 16"><rect x="5" y="5" width="9" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-7A1.5 1.5 0 013.5 1h7A1.5 1.5 0 0112 2.5V5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button>` +
+                        `<button class="body-action" data-action="edit-body" data-target="${target}" title="Edit">${SVG_EDIT}</button>` +
+                        `<button class="body-action body-action-revert" data-action="revert-body" data-target="${target}" title="Revert">${SVG_REVERT}</button>` +
+                        `</div>`;
+                }
+                toolsDiv.innerHTML = html;
                 savedToolbarHtml = null;
             }
-
-            refreshDetail();
         }).catch(e => console.error('Failed to save body:', e));
     }
 }
@@ -450,3 +498,120 @@ loadFocused();
 setInterval(() => {
     if (document.getElementById('autoRefresh').checked) loadRequests();
 }, 2000);
+
+function editHeaders(container) {
+    if (!container || container.dataset.editing === 'true') return;
+    container.dataset.editing = 'true';
+    container.dataset.original = container.innerHTML;
+
+    container.querySelectorAll('.header-row').forEach(row => {
+        const key = row.dataset.key || '';
+        const values = JSON.parse(row.dataset.values || '[]');
+        const val = values.join(', ');
+        row.innerHTML = `<input class="header-key-input" value="${escapeHtml(key)}" /><span class="header-colon">:</span><input class="header-value-input" value="${escapeHtml(val)}" /><button class="header-remove" data-action="remove-header" title="Remove">&times;</button>`;
+    });
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'headers-toolbar';
+    toolbar.innerHTML = `<button class="body-tool body-tool-save" data-action="save-headers">Save</button><button class="body-tool body-tool-cancel" data-action="cancel-headers">Cancel</button><button class="body-tool" data-action="add-header">+ Add</button>`;
+    container.appendChild(toolbar);
+}
+
+function saveHeaders(id) {
+    const container = document.querySelector('.headers-container[data-target="request"]');
+    if (!container) return;
+
+    const headers = {};
+    container.querySelectorAll('.header-row').forEach(row => {
+        const keyInput = row.querySelector('.header-key-input');
+        const valInput = row.querySelector('.header-value-input');
+        if (keyInput && valInput) {
+            const key = keyInput.value.trim();
+            if (key) {
+                headers[key] = [valInput.value];
+            }
+        }
+    });
+
+    fetch(`/api/requests/${id}/headers`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ headers })
+    }).then(r => r.json()).then(() => {
+        const container = document.querySelector('.headers-container[data-target="request"]');
+        if (!container) return;
+
+        function buildViewRows(hdrs) {
+            if (!hdrs || Object.keys(hdrs).length === 0) return '<div style="color:#666">No headers</div>';
+            return Object.entries(hdrs).map(([k, v]) => {
+                const val = Array.isArray(v) ? v.join(', ') : v;
+                const dv = Array.isArray(v) ? JSON.stringify(v) : JSON.stringify([v]);
+                return `<div class="header-row" data-key="${escapeHtml(k)}" data-values='${escapeHtml(dv)}'><span class="header-key">${escapeHtml(k)}:</span><span class="header-value">${escapeHtml(val)}</span></div>`;
+            }).join('');
+        }
+
+        const editedHtml = buildViewRows(headers);
+        const origHtml = container.dataset.originalHtml || container.dataset.editedHtml || '';
+
+        container.innerHTML = editedHtml;
+        container.dataset.editedHtml = editedHtml;
+        container.dataset.originalHtml = origHtml;
+        container.dataset.headerMode = 'edited';
+        delete container.dataset.editing;
+        delete container.dataset.original;
+
+        const tabContent = container.closest('.tab-content');
+        if (!tabContent) return;
+
+        const titles = tabContent.querySelectorAll('.section-title');
+        let headerTitle = null;
+        for (const t of titles) {
+            if (t.textContent.trim().startsWith('Headers')) { headerTitle = t; break; }
+        }
+
+        if (headerTitle) {
+            headerTitle.innerHTML = `Headers <span class="body-badge body-badge-edited">edited</span>`;
+            if (!headerTitle.nextElementSibling?.classList.contains('header-toolbar')) {
+                headerTitle.insertAdjacentHTML('afterend', `
+                    <div class="header-toolbar">
+                        <div class="body-badges"><span class="body-badge body-badge-edited">edited</span></div>
+                        <div class="body-center">
+                            <div class="body-tools-group">
+                                <button class="body-tool body-content" data-action="set-header-content" data-content="original">Original</button>
+                                <button class="body-tool body-content active" data-action="set-header-content" data-content="edited">Edited</button>
+                            </div>
+                        </div>
+                        <div class="body-actions">
+                            <button class="body-action" data-action="edit-headers" title="Edit">${SVG_EDIT}</button>
+                            <button class="body-action body-action-revert" data-action="revert-headers" title="Revert">${SVG_REVERT}</button>
+                        </div>
+                    </div>
+                    <div class="header-divider"></div>`);
+            }
+        }
+    }).catch(e => console.error('Save headers failed:', e));
+}
+
+function cancelHeadersEdit(container) {
+    if (!container) return;
+    container.innerHTML = container.dataset.original;
+    delete container.dataset.editing;
+    delete container.dataset.original;
+}
+
+function addHeaderRow(container) {
+    if (!container) return;
+    const toolbar = container.querySelector('.headers-toolbar');
+    const row = document.createElement('div');
+    row.className = 'header-row';
+    row.dataset.key = '';
+    row.dataset.values = '[""]';
+    row.innerHTML = `<input class="header-key-input" value="" placeholder="Key" /><span class="header-colon">:</span><input class="header-value-input" value="" placeholder="Value" /><button class="header-remove" data-action="remove-header" title="Remove">&times;</button>`;
+    container.insertBefore(row, toolbar);
+    row.querySelector('.header-key-input').focus();
+}
+
+function removeHeaderRow(btn) {
+    const row = btn.closest('.header-row');
+    if (row) row.remove();
+}

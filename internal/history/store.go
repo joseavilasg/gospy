@@ -23,14 +23,15 @@ type Entry struct {
 }
 
 type RequestRecord struct {
-	Method      string              `json:"method"`
-	URL         string              `json:"url"`
-	Host        string              `json:"host"`
-	Headers     map[string][]string `json:"headers"`
-	Body        string              `json:"body,omitempty"`
-	RawBody     string              `json:"rawBody,omitempty"`
-	Compression string              `json:"compression,omitempty"`
-	EditedBody  string              `json:"editedBody,omitempty"`
+	Method        string              `json:"method"`
+	URL           string              `json:"url"`
+	Host          string              `json:"host"`
+	Headers       map[string][]string `json:"headers"`
+	EditedHeaders map[string][]string `json:"editedHeaders,omitempty"`
+	Body          string              `json:"body,omitempty"`
+	RawBody       string              `json:"rawBody,omitempty"`
+	Compression   string              `json:"compression,omitempty"`
+	EditedBody    string              `json:"editedBody,omitempty"`
 }
 
 type ResponseRecord struct {
@@ -337,10 +338,33 @@ func (s *Store) RevertBody(id, target string) error {
 	return s.Update(entry)
 }
 
+func (s *Store) SaveEditedHeaders(id string, headers map[string][]string) error {
+	entry, err := s.Get(id)
+	if err != nil {
+		return err
+	}
+	entry.Request.EditedHeaders = headers
+	return s.Update(entry)
+}
+
+func (s *Store) RevertHeaders(id string) error {
+	entry, err := s.Get(id)
+	if err != nil {
+		return err
+	}
+	entry.Request.EditedHeaders = nil
+	return s.Update(entry)
+}
+
 func (s *Store) Replay(id string, modifiedBody string) (*Entry, error) {
 	original, err := s.Get(id)
 	if err != nil {
 		return nil, err
+	}
+
+	headers := original.Request.Headers
+	if original.Request.EditedHeaders != nil {
+		headers = original.Request.EditedHeaders
 	}
 
 	newEntry := &Entry{
@@ -348,7 +372,7 @@ func (s *Store) Replay(id string, modifiedBody string) (*Entry, error) {
 			Method:  original.Request.Method,
 			URL:     original.Request.URL,
 			Host:    original.Request.Host,
-			Headers: original.Request.Headers,
+			Headers: headers,
 			Body:    modifiedBody,
 		},
 		Action:       "passthrough",

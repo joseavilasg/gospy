@@ -176,6 +176,10 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 			s.handleSaveBody(w, r, id)
 		case sub == "body" && r.Method == http.MethodDelete:
 			s.handleRevertBody(w, r, id)
+		case sub == "headers" && r.Method == http.MethodPut:
+			s.handleSaveHeaders(w, r, id)
+		case sub == "headers" && r.Method == http.MethodDelete:
+			s.handleRevertHeaders(w, r, id)
 		case sub == "replay" && r.Method == http.MethodPost:
 			s.handleReplay(w, r, id)
 		default:
@@ -234,6 +238,34 @@ func (s *Server) handleRevertBody(w http.ResponseWriter, r *http.Request, id str
 	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 }
 
+func (s *Server) handleSaveHeaders(w http.ResponseWriter, r *http.Request, id string) {
+	var payload struct {
+		Headers map[string][]string `json:"headers"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
+		return
+	}
+
+	if err := s.history.SaveEditedHeaders(id, payload.Headers); err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}
+
+func (s *Server) handleRevertHeaders(w http.ResponseWriter, r *http.Request, id string) {
+	if err := s.history.RevertHeaders(id); err != nil {
+		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+}
+
 func (s *Server) handleReplay(w http.ResponseWriter, r *http.Request, id string) {
 	var bodyOverride struct {
 		Body string `json:"body"`
@@ -272,7 +304,11 @@ func (s *Server) handleReplay(w http.ResponseWriter, r *http.Request, id string)
 		"Host": true, "Proxy-Connection": true, "Accept-Encoding": true,
 		"Connection": true, "Proxy-Authorization": true,
 	}
-	for k, v := range original.Request.Headers {
+	headers := original.Request.Headers
+	if original.Request.EditedHeaders != nil {
+		headers = original.Request.EditedHeaders
+	}
+	for k, v := range headers {
 		if !skipHeaders[k] {
 			httpReq.Header[k] = v
 		}
@@ -286,7 +322,7 @@ func (s *Server) handleReplay(w http.ResponseWriter, r *http.Request, id string)
 			Method:  original.Request.Method,
 			URL:     original.Request.URL,
 			Host:    original.Request.Host,
-			Headers: original.Request.Headers,
+			Headers: headers,
 			Body:    bodyOverride.Body,
 		},
 		ReplayedFrom: original.ID,

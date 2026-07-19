@@ -6,6 +6,9 @@ let lastFiltered = [];
 let lastRange = { start: -1, end: -1 };
 let filteredCache = null;
 
+export const SVG_EDIT = '<svg width="12" height="12" viewBox="0 0 16 16"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+export const SVG_REVERT = '<svg width="12" height="12" viewBox="0 0 16 16"><path d="M3 7h7a3 3 0 010 6H8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><polyline points="6,4 3,7 6,10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
 export function escapeHtml(str) {
     if (!str) return '';
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -145,9 +148,23 @@ export function renderDetail(req) {
     const isIgnored = ignoredHosts.includes(host);
     const isFocused = focusedHosts.includes(host);
 
-    const reqHeaders = req.request.headers ? Object.entries(req.request.headers).map(([k,v]) =>
-        `<div class="header-row"><span class="header-key">${escapeHtml(k)}:</span><span class="header-value">${escapeHtml(Array.isArray(v) ? v.join(', ') : v)}</span></div>`
-    ).join('') : '<div style="color:#666">No headers</div>';
+    const reqOriginalHeaders = req.request.headers || {};
+    const reqEditedHeaders = req.request.editedHeaders;
+    const reqHasEditedHeaders = reqEditedHeaders && Object.keys(reqEditedHeaders).length > 0;
+
+    function buildHeaderRows(headers) {
+        return Object.entries(headers).length > 0
+            ? Object.entries(headers).map(([k,v]) => {
+                const val = Array.isArray(v) ? v.join(', ') : v;
+                const dataValues = Array.isArray(v) ? JSON.stringify(v) : JSON.stringify([v]);
+                return `<div class="header-row" data-key="${escapeHtml(k)}" data-values='${escapeHtml(dataValues)}'><span class="header-key">${escapeHtml(k)}:</span><span class="header-value">${escapeHtml(val)}</span></div>`;
+            }).join('')
+            : '<div style="color:#666">No headers</div>';
+    }
+
+    const reqOriginalHtml = buildHeaderRows(reqOriginalHeaders);
+    const reqEditedHtml = reqHasEditedHeaders ? buildHeaderRows(reqEditedHeaders) : '';
+    const reqHeadersHtml = reqHasEditedHeaders ? reqEditedHtml : reqOriginalHtml;
 
     const respHeaders = req.response && req.response.headers ? Object.entries(req.response.headers).map(([k,v]) =>
         `<div class="header-row"><span class="header-key">${escapeHtml(k)}:</span><span class="header-value">${escapeHtml(Array.isArray(v) ? v.join(', ') : v)}</span></div>`
@@ -176,9 +193,6 @@ export function renderDetail(req) {
 
     const SVG_COPY = '<svg width="12" height="12" viewBox="0 0 16 16"><rect x="5" y="5" width="9" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-7A1.5 1.5 0 013.5 1h7A1.5 1.5 0 0112 2.5V5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
     const SVG_COPY_SMALL = '<svg width="10" height="10" viewBox="0 0 16 16"><rect x="5" y="5" width="9" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-7A1.5 1.5 0 013.5 1h7A1.5 1.5 0 0112 2.5V5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
-    const SVG_EDIT = '<svg width="12" height="12" viewBox="0 0 16 16"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>';
-    const SVG_REVERT = '<svg width="12" height="12" viewBox="0 0 16 16"><path d="M3 7h7a3 3 0 010 6H8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><polyline points="6,4 3,7 6,10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-
     function buildBodyViewer(target, body, rawBody, compression, hasEdited, editedBody, contentType) {
         const badges = [];
         if (compression) badges.push(`<span class="body-badge body-badge-compression">${escapeHtml(compression)}</span>`);
@@ -274,8 +288,29 @@ export function renderDetail(req) {
             <div class="section-title">Request</div>
             <pre>${escapeHtml(req.request.method)} ${escapeHtml(req.request.url || req.request.host)}</pre>
 
-            <div class="section-title" style="margin-top:12px">Headers</div>
-            <pre>${reqHeaders}</pre>
+            <div class="section-title" style="margin-top:12px">
+                Headers
+                ${!reqHasEditedHeaders ? `<button class="header-edit-btn" data-action="edit-headers" title="Edit headers">${SVG_EDIT}</button>` : ''}
+            </div>
+            ${reqHasEditedHeaders ? `
+            <div class="header-toolbar">
+                <div class="body-badges"><span class="body-badge body-badge-edited">edited</span></div>
+                <div class="body-center">
+                    <div class="body-tools-group">
+                        <button class="body-tool body-content" data-action="set-header-content" data-content="original">Original</button>
+                        <button class="body-tool body-content active" data-action="set-header-content" data-content="edited">Edited</button>
+                    </div>
+                </div>
+                <div class="body-actions">
+                    <button class="body-action" data-action="edit-headers" title="Edit">${SVG_EDIT}</button>
+                    <button class="body-action body-action-revert" data-action="revert-headers" title="Revert">${SVG_REVERT}</button>
+                </div>
+            </div>
+            <div class="header-divider"></div>` : ''}
+            <div class="headers-container${reqHasEditedHeaders ? '' : ' headers-container-standalone'}" data-target="request"
+                 data-original-html="${escapeHtml(reqOriginalHtml)}"
+                 data-edited-html="${escapeHtml(reqEditedHtml)}"
+                 data-header-mode="${reqHasEditedHeaders ? 'edited' : 'original'}">${reqHeadersHtml}</div>
 
             ${reqBodyHtml}
         </div>

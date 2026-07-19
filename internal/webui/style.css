@@ -170,6 +170,81 @@ pre {
     color: #a5d6ff;
     word-break: break-word;
 }
+.headers-container {
+    background: #0d1117;
+    border-radius: 0 0 6px 6px;
+    padding: 10px;
+    font-family: monospace;
+    font-size: 11px;
+}
+.headers-container-standalone {
+    border-radius: 6px;
+}
+.header-edit-btn {
+    background: transparent;
+    border: none;
+    color: #666;
+    cursor: pointer;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    vertical-align: middle;
+    margin-left: 6px;
+    border-radius: 2px;
+}
+.header-edit-btn:hover { color: #c9d1d9; }
+.header-key-input, .header-value-input {
+    background: #0d1117;
+    border: 1px solid #333;
+    color: #c9d1d9;
+    font-family: monospace;
+    font-size: 11px;
+    padding: 2px 4px;
+    border-radius: 2px;
+    outline: none;
+}
+.header-key-input:focus, .header-value-input:focus {
+    border-color: #58a6ff;
+}
+.header-key-input { width: 25%; flex-shrink: 0; }
+.header-value-input { flex: 1; }
+.header-colon { color: #666; margin: 0 4px; align-self: center; }
+.header-remove {
+    background: transparent;
+    border: none;
+    color: #666;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 0 4px;
+    align-self: center;
+}
+.header-remove:hover { color: #f44336; }
+.header-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 8px;
+    background: #0d1117;
+    border-radius: 6px 6px 0 0;
+    margin-top: 6px;
+}
+.header-divider {
+    background: #0d1117;
+}
+.header-divider::after {
+    content: '';
+    display: block;
+    height: 1px;
+    background: #333;
+    margin: 0 8px;
+}
+.headers-toolbar {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid #21262d;
+}
 .btn {
     background: #0f3460;
     border: none;
@@ -539,8 +614,8 @@ pre {
     border-color: #4caf50 !important;
 }
 .body-tool-save:hover {
-    background: #4caf50;
-    color: #fff !important;
+    background: rgba(76, 175, 80, 0.15);
+    color: #4caf50 !important;
     border-color: #4caf50 !important;
 }
 .body-tool-cancel {
@@ -548,8 +623,8 @@ pre {
     border-color: #f44336 !important;
 }
 .body-tool-cancel:hover {
-    background: #f44336;
-    color: #fff !important;
+    background: rgba(244, 67, 54, 0.15);
+    color: #f44336 !important;
     border-color: #f44336 !important;
 }
 .body-lang-select {
