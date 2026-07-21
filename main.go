@@ -81,7 +81,7 @@ func main() {
 		proxy.LogError(fmt.Sprintf("Failed to load ignore list: %v", err))
 	}
 	if *ignoreHosts != "" {
-		for _, h := range strings.Split(*ignoreHosts, ",") {
+		for h := range strings.SplitSeq(*ignoreHosts, ",") {
 			h = strings.TrimSpace(h)
 			if h != "" {
 				if err := ignoreStore.Add(h); err != nil {
@@ -96,7 +96,7 @@ func main() {
 		proxy.LogError(fmt.Sprintf("Failed to load focus list: %v", err))
 	}
 	if *focusHosts != "" {
-		for _, h := range strings.Split(*focusHosts, ",") {
+		for h := range strings.SplitSeq(*focusHosts, ",") {
 			h = strings.TrimSpace(h)
 			if h != "" {
 				if err := focusStore.Add(h); err != nil {
@@ -111,7 +111,7 @@ func main() {
 	proxy.LogInfo(fmt.Sprintf("Proxy listening on %s", *proxyAddr))
 
 	go func() {
-		if err := webui.NewServer(*uiAddr, hist, ignoreStore, focusStore).ListenAndServe(); err != nil {
+		if err := webui.NewServer(*uiAddr, hist, ignoreStore, focusStore, rulesStore, ruleEngine).ListenAndServe(); err != nil {
 			proxy.LogError(fmt.Sprintf("Web UI error: %v", err))
 		}
 	}()

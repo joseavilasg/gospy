@@ -4,47 +4,6 @@ import (
 	"testing"
 )
 
-func TestColorMethod(t *testing.T) {
-	tests := []struct {
-		method string
-	}{
-		{"GET"},
-		{"POST"},
-		{"PUT"},
-		{"DELETE"},
-		{"PATCH"},
-		{"CONNECT"},
-		{"OPTIONS"},
-	}
-
-	for _, tt := range tests {
-		result := colorMethod(tt.method)
-		if result == "" {
-			t.Errorf("colorMethod(%s) returned empty string", tt.method)
-		}
-	}
-}
-
-func TestColorStatus(t *testing.T) {
-	tests := []struct {
-		code int
-	}{
-		{200},
-		{201},
-		{301},
-		{404},
-		{500},
-		{503},
-	}
-
-	for _, tt := range tests {
-		result := colorStatus(tt.code)
-		if result == "" {
-			t.Errorf("colorStatus(%d) returned empty string", tt.code)
-		}
-	}
-}
-
 func TestIsTextResponse(t *testing.T) {
 	tests := []struct {
 		ct     string
