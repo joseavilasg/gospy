@@ -29,15 +29,13 @@ func NewServer(addr string, caCert *ca.CA, hist *history.Store, ruleEngine *rule
 
 	proxy.CertStore = ca.NewCertStorage(caCert)
 
-	interceptor := NewInterceptor(hist, ignoreStore)
+	interceptor := NewInterceptor(hist, ignoreStore, ruleEngine)
 
 	proxy.OnRequest().HandleConnect(goproxy.AlwaysMitm)
 
 	proxy.OnRequest().DoFunc(interceptor.HandleRequest)
 
 	proxy.OnResponse().DoFunc(interceptor.HandleResponse)
-
-	_ = ruleEngine
 
 	return &Server{
 		proxy:       proxy,
