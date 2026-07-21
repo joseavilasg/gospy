@@ -36,7 +36,7 @@ func TestStore_Save(t *testing.T) {
 			Host:    "example.com",
 			Headers: map[string][]string{"Accept": {"application/json"}},
 		},
-		Action: "passthrough",
+		AppliedAction: "passthrough",
 	}
 
 	if err := store.Save(entry); err != nil {
@@ -72,7 +72,7 @@ func TestStore_SaveWithResponse(t *testing.T) {
 			Headers: map[string][]string{"Location": {"/data/123"}},
 			Body:    `{"id": 123}`,
 		},
-		Action: "passthrough",
+		AppliedAction: "passthrough",
 	}
 
 	if err := store.Save(entry); err != nil {
@@ -109,7 +109,7 @@ func TestStore_Persistence(t *testing.T) {
 			URL:    "http://example.com/",
 			Host:   "example.com",
 		},
-		Action: "passthrough",
+		AppliedAction: "passthrough",
 	}
 
 	if err := store1.Save(entry); err != nil {
@@ -141,7 +141,7 @@ func TestStore_Get(t *testing.T) {
 			URL:    "http://test.com/",
 			Host:   "test.com",
 		},
-		Action: "mock",
+		AppliedAction: "mock",
 	}
 
 	if err := store.Save(entry); err != nil {
@@ -187,7 +187,7 @@ func TestStore_Clear(t *testing.T) {
 				URL:    "http://example.com/",
 				Host:   "example.com",
 			},
-			Action: "passthrough",
+			AppliedAction: "passthrough",
 		}
 		if err := store.Save(entry); err != nil {
 			t.Fatalf("Save() error = %v", err)
@@ -231,7 +231,7 @@ func TestStore_ListSortedByTime(t *testing.T) {
 				URL:    "http://example.com/",
 				Host:   "example.com",
 			},
-			Action: "passthrough",
+			AppliedAction: "passthrough",
 		}
 		entry.ID = ""
 		if err := store.Save(entry); err != nil {
@@ -265,7 +265,7 @@ func TestStore_FilePerEntry(t *testing.T) {
 			URL:    "http://example.com/",
 			Host:   "example.com",
 		},
-		Action: "passthrough",
+		AppliedAction: "passthrough",
 	}
 
 	if err := store.Save(entry); err != nil {
@@ -299,7 +299,7 @@ func TestStore_ListSummary(t *testing.T) {
 			Headers: map[string][]string{"X-Custom": {"yes"}},
 			Body:    "response body",
 		},
-		Action: "passthrough",
+		AppliedAction: "passthrough",
 	}
 
 	if err := store.Save(entry); err != nil {
@@ -346,7 +346,7 @@ func TestStore_ListSummaryNoResponse(t *testing.T) {
 			URL:    "http://example.com/",
 			Host:   "example.com",
 		},
-		Action: "passthrough",
+		AppliedAction: "passthrough",
 	}
 
 	if err := store.Save(entry); err != nil {
@@ -386,7 +386,7 @@ func TestStore_ListSince(t *testing.T) {
 				URL:    "http://example.com/",
 				Host:   "example.com",
 			},
-			Action: "passthrough",
+			AppliedAction: "passthrough",
 		}
 		if err := store.Save(entry); err != nil {
 			t.Fatalf("Save() error = %v", err)
@@ -419,7 +419,7 @@ func TestStore_ListSinceNone(t *testing.T) {
 			URL:    "http://example.com/",
 			Host:   "example.com",
 		},
-		Action: "passthrough",
+		AppliedAction: "passthrough",
 	}
 
 	if err := store.Save(entry); err != nil {
@@ -447,7 +447,7 @@ func TestStore_SaveEditedBody(t *testing.T) {
 			Host:   "example.com",
 			Body:   `{"key":"original"}`,
 		},
-		Action: "passthrough",
+		AppliedAction: "passthrough",
 	}
 	if err := store.Save(entry); err != nil {
 		t.Fatalf("Save() error = %v", err)
@@ -486,7 +486,7 @@ func TestStore_RevertBody(t *testing.T) {
 			Body:       `{"key":"original"}`,
 			EditedBody: `{"key":"edited"}`,
 		},
-		Action: "passthrough",
+		AppliedAction: "passthrough",
 	}
 	if err := store.Save(entry); err != nil {
 		t.Fatalf("Save() error = %v", err)
@@ -529,7 +529,7 @@ func TestStore_Replay(t *testing.T) {
 			Status: 200,
 			Body:   `{"result":"ok"}`,
 		},
-		Action: "passthrough",
+		AppliedAction: "passthrough",
 	}
 	if err := store.Save(original); err != nil {
 		t.Fatalf("Save() error = %v", err)
@@ -599,7 +599,7 @@ func TestStore_SaveEditedHeaders(t *testing.T) {
 			Host:    "example.com",
 			Headers: map[string][]string{"Authorization": {"Bearer old-token"}},
 		},
-		Action: "passthrough",
+		AppliedAction: "passthrough",
 	}
 	if err := store.Save(entry); err != nil {
 		t.Fatalf("Save() error = %v", err)
@@ -648,7 +648,7 @@ func TestStore_RevertHeaders(t *testing.T) {
 			Headers:       map[string][]string{"Authorization": {"Bearer old-token"}},
 			EditedHeaders: map[string][]string{"Authorization": {"Bearer new-token"}},
 		},
-		Action: "passthrough",
+		AppliedAction: "passthrough",
 	}
 	if err := store.Save(entry); err != nil {
 		t.Fatalf("Save() error = %v", err)
@@ -687,8 +687,8 @@ func TestStore_ReplayWithEditedHeaders(t *testing.T) {
 			Headers:       map[string][]string{"Authorization": {"Bearer old-token"}},
 			EditedHeaders: map[string][]string{"Authorization": {"Bearer new-token"}},
 		},
-		Response: &ResponseRecord{Status: 200, Body: `{"ok":true}`},
-		Action:   "passthrough",
+		Response:      &ResponseRecord{Status: 200, Body: `{"ok":true}`},
+		AppliedAction: "passthrough",
 	}
 	if err := store.Save(original); err != nil {
 		t.Fatalf("Save() error = %v", err)
@@ -701,5 +701,179 @@ func TestStore_ReplayWithEditedHeaders(t *testing.T) {
 
 	if replayed.Request.Headers["Authorization"][0] != "Bearer new-token" {
 		t.Errorf("Replay should use EditedHeaders: Headers[Authorization] = %v, want [Bearer new-token]", replayed.Request.Headers["Authorization"])
+	}
+}
+
+func TestStore_AppliedActionAndRuleName(t *testing.T) {
+	dir := t.TempDir()
+	store, err := New(dir)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	entry := &Entry{
+		Request: RequestRecord{
+			Method: "GET",
+			URL:    "http://example.com/api",
+			Host:   "example.com",
+		},
+		AppliedAction: "mock",
+		RuleName:      "mock-api",
+	}
+	if err := store.Save(entry); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	// Verify ListEntry has the fields
+	summary := store.ListSummary()
+	if len(summary) != 1 {
+		t.Fatalf("ListSummary() = %d, want 1", len(summary))
+	}
+	if summary[0].AppliedAction != "mock" {
+		t.Errorf("ListEntry.AppliedAction = %q, want %q", summary[0].AppliedAction, "mock")
+	}
+	if summary[0].RuleName != "mock-api" {
+		t.Errorf("ListEntry.RuleName = %q, want %q", summary[0].RuleName, "mock-api")
+	}
+
+	// Verify full entry has the fields
+	retrieved, err := store.Get(entry.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if retrieved.AppliedAction != "mock" {
+		t.Errorf("Entry.AppliedAction = %q, want %q", retrieved.AppliedAction, "mock")
+	}
+	if retrieved.RuleName != "mock-api" {
+		t.Errorf("Entry.RuleName = %q, want %q", retrieved.RuleName, "mock-api")
+	}
+}
+
+func TestStore_ServerRequestAndServerResponse(t *testing.T) {
+	dir := t.TempDir()
+	store, err := New(dir)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	entry := &Entry{
+		Request: RequestRecord{
+			Method:  "POST",
+			URL:     "http://api.example.com/data",
+			Host:    "api.example.com",
+			Headers: map[string][]string{"Authorization": {"Bearer original"}},
+			Body:    `{"original":true}`,
+		},
+		ServerRequest: &RequestRecord{
+			Method:  "POST",
+			URL:     "http://api.example.com/data",
+			Host:    "api.example.com",
+			Headers: map[string][]string{"Authorization": {"Bearer modified"}},
+			Body:    `{"modified":true}`,
+		},
+		ServerResponse: &ResponseRecord{
+			Status:  200,
+			Body:    `{"server":"response"}`,
+			Headers: map[string][]string{"X-Real": {"true"}},
+		},
+		Response: &ResponseRecord{
+			Status: 503,
+			Body:   `{"mocked":true}`,
+		},
+		AppliedAction: "response_mock",
+		RuleName:      "resp-mock",
+	}
+	if err := store.Save(entry); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	retrieved, err := store.Get(entry.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+
+	// Verify original request preserved
+	if retrieved.Request.Headers["Authorization"][0] != "Bearer original" {
+		t.Errorf("Request.Headers = %v, want [Bearer original]", retrieved.Request.Headers["Authorization"])
+	}
+
+	// Verify ServerRequest
+	if retrieved.ServerRequest == nil {
+		t.Fatal("ServerRequest is nil, want non-nil")
+	}
+	if retrieved.ServerRequest.Headers["Authorization"][0] != "Bearer modified" {
+		t.Errorf("ServerRequest.Headers = %v, want [Bearer modified]", retrieved.ServerRequest.Headers["Authorization"])
+	}
+	if retrieved.ServerRequest.Body != `{"modified":true}` {
+		t.Errorf("ServerRequest.Body = %q, want %q", retrieved.ServerRequest.Body, `{"modified":true}`)
+	}
+
+	// Verify ServerResponse
+	if retrieved.ServerResponse == nil {
+		t.Fatal("ServerResponse is nil, want non-nil")
+	}
+	if retrieved.ServerResponse.Status != 200 {
+		t.Errorf("ServerResponse.Status = %d, want 200", retrieved.ServerResponse.Status)
+	}
+	if retrieved.ServerResponse.Body != `{"server":"response"}` {
+		t.Errorf("ServerResponse.Body = %q, want %q", retrieved.ServerResponse.Body, `{"server":"response"}`)
+	}
+
+	// Verify Response (what browser sees)
+	if retrieved.Response == nil {
+		t.Fatal("Response is nil, want non-nil")
+	}
+	if retrieved.Response.Status != 503 {
+		t.Errorf("Response.Status = %d, want 503", retrieved.Response.Status)
+	}
+}
+
+func TestStore_AppliedActionPersistence(t *testing.T) {
+	dir := t.TempDir()
+	store, err := New(dir)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	actions := []struct {
+		action string
+		rule   string
+	}{
+		{"passthrough", ""},
+		{"mock", "mock-api"},
+		{"drop", "block-telemetry"},
+		{"modify", "inject-headers"},
+		{"response_mock", "resp-mock"},
+	}
+
+	for _, a := range actions {
+		entry := &Entry{
+			Request: RequestRecord{
+				Method: "GET",
+				URL:    "http://example.com/api",
+				Host:   "example.com",
+			},
+			AppliedAction: a.action,
+			RuleName:      a.rule,
+		}
+		if err := store.Save(entry); err != nil {
+			t.Fatalf("Save(%s) error = %v", a.action, err)
+		}
+	}
+
+	entries := store.ListSummary()
+	if len(entries) != len(actions) {
+		t.Fatalf("ListSummary() = %d, want %d", len(entries), len(actions))
+	}
+
+	// Verify persistence across re-open
+	store2, err := New(dir)
+	if err != nil {
+		t.Fatalf("New() for re-open error = %v", err)
+	}
+
+	reloaded := store2.ListSummary()
+	if len(reloaded) != len(actions) {
+		t.Fatalf("ListSummary() after re-open = %d, want %d", len(reloaded), len(actions))
 	}
 }

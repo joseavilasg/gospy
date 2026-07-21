@@ -13,13 +13,15 @@ import (
 )
 
 type Entry struct {
-	ID           string          `json:"id"`
-	Timestamp    time.Time       `json:"timestamp"`
-	Request      RequestRecord   `json:"request"`
-	Response     *ResponseRecord `json:"response,omitempty"`
-	Action       string          `json:"action"`
-	Modified     bool            `json:"modified"`
-	ReplayedFrom string          `json:"replayedFrom,omitempty"`
+	ID             string          `json:"id"`
+	Timestamp      time.Time       `json:"timestamp"`
+	Request        RequestRecord   `json:"request"`
+	Response       *ResponseRecord `json:"response,omitempty"`
+	ServerRequest  *RequestRecord  `json:"serverRequest,omitempty"`
+	ServerResponse *ResponseRecord `json:"serverResponse,omitempty"`
+	AppliedAction  string          `json:"appliedAction,omitempty"`
+	RuleName       string          `json:"ruleName,omitempty"`
+	ReplayedFrom   string          `json:"replayedFrom,omitempty"`
 }
 
 type RequestRecord struct {
@@ -51,13 +53,15 @@ type Store struct {
 }
 
 type ListEntry struct {
-	ID           string    `json:"id"`
-	Timestamp    time.Time `json:"timestamp"`
-	Method       string    `json:"method"`
-	URL          string    `json:"url"`
-	Host         string    `json:"host"`
-	Status       *int      `json:"status,omitempty"`
-	ReplayedFrom string    `json:"replayedFrom,omitempty"`
+	ID            string    `json:"id"`
+	Timestamp     time.Time `json:"timestamp"`
+	Method        string    `json:"method"`
+	URL           string    `json:"url"`
+	Host          string    `json:"host"`
+	Status        *int      `json:"status,omitempty"`
+	ReplayedFrom  string    `json:"replayedFrom,omitempty"`
+	AppliedAction string    `json:"appliedAction,omitempty"`
+	RuleName      string    `json:"ruleName,omitempty"`
 }
 
 func New(dir string) (*Store, error) {
@@ -108,10 +112,12 @@ func (s *Store) buildIndex() error {
 	}
 
 	type entryHeader struct {
-		ID           string `json:"id"`
-		Timestamp    string `json:"timestamp"`
-		ReplayedFrom string `json:"replayedFrom,omitempty"`
-		Request      struct {
+		ID            string `json:"id"`
+		Timestamp     string `json:"timestamp"`
+		ReplayedFrom  string `json:"replayedFrom,omitempty"`
+		AppliedAction string `json:"appliedAction,omitempty"`
+		RuleName      string `json:"ruleName,omitempty"`
+		Request       struct {
 			Method string `json:"method"`
 			URL    string `json:"url"`
 			Host   string `json:"host"`
@@ -135,11 +141,13 @@ func (s *Store) buildIndex() error {
 		file.Close()
 
 		le := &ListEntry{
-			ID:           h.ID,
-			Method:       h.Request.Method,
-			URL:          h.Request.URL,
-			Host:         h.Request.Host,
-			ReplayedFrom: h.ReplayedFrom,
+			ID:            h.ID,
+			Method:        h.Request.Method,
+			URL:           h.Request.URL,
+			Host:          h.Request.Host,
+			ReplayedFrom:  h.ReplayedFrom,
+			AppliedAction: h.AppliedAction,
+			RuleName:      h.RuleName,
 		}
 		if t, err := time.Parse(time.RFC3339Nano, h.Timestamp); err == nil {
 			le.Timestamp = t
@@ -185,12 +193,14 @@ func (s *Store) Save(entry *Entry) error {
 	}
 
 	le := &ListEntry{
-		ID:           entry.ID,
-		Timestamp:    entry.Timestamp,
-		Method:       entry.Request.Method,
-		URL:          entry.Request.URL,
-		Host:         entry.Request.Host,
-		ReplayedFrom: entry.ReplayedFrom,
+		ID:            entry.ID,
+		Timestamp:     entry.Timestamp,
+		Method:        entry.Request.Method,
+		URL:           entry.Request.URL,
+		Host:          entry.Request.Host,
+		ReplayedFrom:  entry.ReplayedFrom,
+		AppliedAction: entry.AppliedAction,
+		RuleName:      entry.RuleName,
 	}
 	if entry.Response != nil {
 		le.Status = &entry.Response.Status
@@ -375,8 +385,8 @@ func (s *Store) Replay(id string, modifiedBody string) (*Entry, error) {
 			Headers: headers,
 			Body:    modifiedBody,
 		},
-		Action:       "passthrough",
-		ReplayedFrom: original.ID,
+		AppliedAction: "passthrough",
+		ReplayedFrom:  original.ID,
 	}
 
 	if err := s.Save(newEntry); err != nil {
