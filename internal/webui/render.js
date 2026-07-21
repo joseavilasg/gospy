@@ -1,4 +1,4 @@
-import { requests, selectedId, filterText, ignoredHosts, focusedHosts, focusEnabled, setSelectedId } from './state.js';
+import { requests, selectedId, filterText, ignoredHosts, focusedHosts, focusEnabled, setSelectedId, rules } from './state.js';
 
 const ITEM_HEIGHT = 35;
 const BUFFER = 5;
@@ -66,7 +66,16 @@ function buildItemHtml(r) {
         ? '<span class="replay-badge" title="Replayed request">↻</span>'
         : '';
 
-    return `<div class="request-item${selected}" title="${escapeHtml(url)}" data-id="${r.id}"><span class="method method-${method}">${method}</span><span class="url">${escapeHtml(url)}</span>${status != null ? `<span class="status ${statusClass}">${status}</span>` : ''}${replayBadge}<span class="time">${time}</span></div>`;
+    let actionBadge = '';
+    if (r.appliedAction === 'mock' || r.appliedAction === 'response_mock') {
+        actionBadge = '<span class="action-badge action-badge-mock" title="Mocked by rule">◉</span>';
+    } else if (r.appliedAction === 'drop') {
+        actionBadge = '<span class="action-badge action-badge-drop" title="Dropped by rule">✕</span>';
+    } else if (r.appliedAction === 'modify') {
+        actionBadge = '<span class="action-badge action-badge-modify" title="Modified by rule">✎</span>';
+    }
+
+    return `<div class="request-item${selected}" title="${escapeHtml(url)}" data-id="${r.id}"><span class="method method-${method}">${method}</span><span class="url">${escapeHtml(url)}</span>${status != null ? `<span class="status ${statusClass}">${status}</span>` : ''}${actionBadge}${replayBadge}<span class="time">${time}</span></div>`;
 }
 
 export function renderList() {
@@ -151,6 +160,9 @@ export function renderDetail(req) {
     const reqOriginalHeaders = req.request.headers || {};
     const reqEditedHeaders = req.request.editedHeaders;
     const reqHasEditedHeaders = reqEditedHeaders && Object.keys(reqEditedHeaders).length > 0;
+    const isModified = req.appliedAction === 'modify';
+    const serverReqHeaders = req.serverRequest ? (req.serverRequest.headers || {}) : {};
+    const hasServerReqHeaders = isModified && Object.keys(serverReqHeaders).length > 0;
 
     function buildHeaderRows(headers) {
         return Object.entries(headers).length > 0
@@ -164,7 +176,8 @@ export function renderDetail(req) {
 
     const reqOriginalHtml = buildHeaderRows(reqOriginalHeaders);
     const reqEditedHtml = reqHasEditedHeaders ? buildHeaderRows(reqEditedHeaders) : '';
-    const reqHeadersHtml = reqHasEditedHeaders ? reqEditedHtml : reqOriginalHtml;
+    const reqModifiedHtml = hasServerReqHeaders ? buildHeaderRows(serverReqHeaders) : '';
+    const reqHeadersHtml = reqHasEditedHeaders ? reqEditedHtml : (isModified && hasServerReqHeaders ? reqModifiedHtml : reqOriginalHtml);
 
     const respHeaders = req.response && req.response.headers ? Object.entries(req.response.headers).map(([k,v]) =>
         `<div class="header-row"><span class="header-key">${escapeHtml(k)}:</span><span class="header-value">${escapeHtml(Array.isArray(v) ? v.join(', ') : v)}</span></div>`
@@ -191,53 +204,86 @@ export function renderDetail(req) {
         focusBtn = `<button class="btn-focus-detail" data-action="focus" data-host="${escapeHtml(host)}"><svg width="12" height="12" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="8" cy="8" r="3" fill="currentColor"/></svg> Add to focus</button>`;
     }
 
-    const SVG_COPY = '<svg width="12" height="12" viewBox="0 0 16 16"><rect x="5" y="5" width="9" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-7A1.5 1.5 0 013.5 1h7A1.5 1.5 0 0112 2.5V5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
     const SVG_COPY_SMALL = '<svg width="10" height="10" viewBox="0 0 16 16"><rect x="5" y="5" width="9" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-7A1.5 1.5 0 013.5 1h7A1.5 1.5 0 0112 2.5V5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
-    function buildBodyViewer(target, body, rawBody, compression, hasEdited, editedBody, contentType) {
+    function buildBodyViewer(target, body, rawBody, compression, hasEdited, editedBody, contentType, isModified, modifiedBody, modifiedContentType, isMocked, mockedBody, mockedContentType, canEdit) {
         const badges = [];
         if (compression) badges.push(`<span class="body-badge body-badge-compression">${escapeHtml(compression)}</span>`);
         if (hasEdited) badges.push(`<span class="body-badge body-badge-edited">edited</span>`);
+        if (isModified) badges.push(`<span class="body-badge body-badge-modified">modified</span>`);
+        if (isMocked) badges.push(`<span class="body-badge body-badge-mocked">mocked</span>`);
         const badgesHtml = badges.join('');
 
         const viewModeHtml = `<button class="body-tool body-view active" data-action="set-view" data-target="${target}" data-view="pretty">Pretty</button><button class="body-tool body-view" data-action="set-view" data-target="${target}" data-view="raw">Raw</button>`;
 
-        const defaultContent = compression ? 'decoded' : 'original';
-        const contentBtns = [`<button class="body-tool body-content${defaultContent === 'original' ? ' active' : ''}" data-action="set-content" data-target="${target}" data-content="original">Original</button>`];
-        if (compression) contentBtns.push(`<button class="body-tool body-content${defaultContent === 'decoded' ? ' active' : ''}" data-action="set-content" data-target="${target}" data-content="decoded">Decoded</button>`);
+        const hasOtherContent = hasEdited || (isModified && modifiedBody) || (isMocked && mockedBody);
+        const defaultContent = (isMocked && mockedBody) ? 'mocked' : 'original';
+        const contentBtns = [];
+        if (hasOtherContent) contentBtns.push(`<button class="body-tool body-content${defaultContent === 'original' ? ' active' : ''}" data-action="set-content" data-target="${target}" data-content="original">Original</button>`);
         if (hasEdited) contentBtns.push(`<button class="body-tool body-content" data-action="set-content" data-target="${target}" data-content="edited">Edited</button>`);
+        if (isModified && modifiedBody) contentBtns.push(`<button class="body-tool body-content" data-action="set-content" data-target="${target}" data-content="modified">Modified</button>`);
+        if (isMocked && mockedBody) contentBtns.push(`<button class="body-tool body-content${defaultContent === 'mocked' ? ' active' : ''}" data-action="set-content" data-target="${target}" data-content="mocked">Mocked</button>`);
 
-        const actions = [`<button class="body-action" data-action="copy-body" data-target="${target}" title="Copy">${SVG_COPY}</button>`, `<button class="body-action" data-action="edit-body" data-target="${target}" title="Edit">${SVG_EDIT}</button>`];
-        if (hasEdited) actions.push(`<button class="body-action body-action-revert" data-action="revert-body" data-target="${target}" title="Revert">${SVG_REVERT}</button>`);
+        const menuItems = [`<div class="menu-item" data-action="copy-body" data-target="${target}">⧉ Copy</div>`];
+        if (canEdit) menuItems.push(`<div class="menu-item" data-action="edit-body" data-target="${target}">✎ Edit</div>`);
+        if (hasEdited) menuItems.push(`<div class="menu-item" data-action="revert-body" data-target="${target}">↩ Revert</div>`);
 
+        const hasToolbar = badges.length > 0 || viewModeHtml.length > 0 || contentBtns.length > 0;
         const displayBody = body;
 
-        const hasContentMode = compression || hasEdited;
-
-        return `<div class="section-title" style="margin-top:12px">Body</div>
-        <div class="body-viewer" data-viewer="${target}" data-content-type="${escapeHtml(contentType)}">
-            <div class="body-tools">
-                <div class="body-badges">${badgesHtml}</div>
-                <div class="body-center">
-                    <div class="body-tools-group">${viewModeHtml}</div>
-                    ${hasContentMode ? `<div class="body-tools-group">${contentBtns.join('')}</div>` : ''}
+        return `<div class="section-panel" data-body-target="${target}" data-content-type="${escapeHtml(contentType)}">
+            <div class="section-header">
+                <span class="section-title">Body</span>
+                <div class="kebab" data-action="toggle-menu">
+                    ⋮
+                    <div class="kebab-menu">${menuItems.join('')}</div>
                 </div>
-                <div class="body-actions">${actions.join('')}</div>
             </div>
-            <div class="body-divider"></div>
-            <pre class="body-content" data-body-target="${target}" data-decoded="${escapeHtml(body)}" data-raw="${escapeHtml(rawBody)}" data-edited="${escapeHtml(hasEdited ? editedBody : '')}" data-compression="${compression}" data-view-mode="pretty" data-content-mode="${defaultContent}">${escapeHtml(displayBody)}</pre>
+            <div class="content-block">
+                <div class="content-toolbar${hasToolbar ? '' : ' empty'}">
+                    <div class="toolbar-left">
+                        ${viewModeHtml ? `<div class="body-tools-group">${viewModeHtml}</div>` : ''}
+                        ${contentBtns.length > 0 ? `<div class="divider-v"></div><div class="body-tools-group">${contentBtns.join('')}</div>` : ''}
+                    </div>
+                    <div class="toolbar-right">${badgesHtml}</div>
+                </div>
+                <pre class="body-content" data-body-target="${target}" data-decoded="${escapeHtml((isMocked && mockedBody) ? mockedBody : body)}" data-raw="${escapeHtml(rawBody)}" data-edited="${escapeHtml(hasEdited ? editedBody : '')}" data-modified="${escapeHtml(isModified ? modifiedBody : '')}" data-mocked="${escapeHtml(isMocked ? body : '')}" data-compression="${compression}" data-view-mode="pretty" data-content-mode="${defaultContent}">${escapeHtml(displayBody)}</pre>
+            </div>
         </div>`;
     }
+
+    const actionBanner = (() => {
+        if (!req.appliedAction || req.appliedAction === 'passthrough') return '';
+        const ruleLabel = req.ruleName ? ` by "${escapeHtml(req.ruleName)}"` : '';
+        switch (req.appliedAction) {
+            case 'mock': return `<div class="action-banner action-banner-mock">◉ Mocked${ruleLabel}</div>`;
+            case 'drop': return `<div class="action-banner action-banner-drop">✕ Dropped${ruleLabel}</div>`;
+            case 'modify': return `<div class="action-banner action-banner-modify">✎ Modified${ruleLabel}</div>`;
+            case 'response_mock': return `<div class="action-banner action-banner-response-mock">↻ Response Mocked${ruleLabel}</div>`;
+            default: return '';
+        }
+    })();
+
+    const isMocked = req.appliedAction === 'mock' || req.appliedAction === 'response_mock';
+    const isDropped = req.appliedAction === 'drop';
+
+    const serverReqBody = req.serverRequest ? (req.serverRequest.body || '') : '';
+    const serverRespBody = req.serverResponse ? (req.serverResponse.body || '') : '';
+    const serverRespHeaders = req.serverResponse ? (req.serverResponse.headers || {}) : {};
+    const serverReqContentType = req.serverRequest?.headers?.['content-type']?.[0] || req.serverRequest?.headers?.['Content-Type']?.[0] || '';
+    const serverRespContentType = req.serverResponse?.headers?.['content-type']?.[0] || req.serverResponse?.headers?.['Content-Type']?.[0] || '';
+
+    const canEdit = !isModified && !isMocked && !isDropped;
 
     let reqBodyHtml = '';
     if (reqBody) {
         const reqHasEdited = req.request.editedBody && req.request.editedBody !== '';
-        reqBodyHtml = buildBodyViewer('request', reqBody, reqRawBody, reqCompression, reqHasEdited, req.request.editedBody, reqContentType);
+        reqBodyHtml = buildBodyViewer('request', reqBody, reqRawBody, reqCompression, reqHasEdited, req.request.editedBody, reqContentType, isModified, serverReqBody, serverReqContentType, false, '', '', canEdit);
     }
 
     let respBodyHtml = '';
     if (respBody) {
         const respHasEdited = req.response && req.response.editedBody && req.response.editedBody !== '';
-        respBodyHtml = buildBodyViewer('response', respBody, respRawBody, respCompression, respHasEdited, req.response.editedBody, respContentType);
+        respBodyHtml = buildBodyViewer('response', respBody, respRawBody, respCompression, respHasEdited && canEdit, req.response.editedBody, respContentType, false, '', '', isMocked, serverRespBody, serverRespContentType, canEdit);
     }
 
     let replayedFromHtml = '';
@@ -267,10 +313,12 @@ export function renderDetail(req) {
     }
 
     panel.innerHTML = `
+        ${actionBanner}
         <div class="detail-toolbar">
             ${ignoreBtn}
             ${focusBtn}
             <button class="btn-replay" data-action="send-replay">↻ Replay</button>
+            <button class="btn-create-rule" data-action="create-rule-from-request">+ Rule</button>
         </div>
         ${replayedFromHtml}
         <div class="tabs-row">
@@ -285,42 +333,121 @@ export function renderDetail(req) {
         </div>
 
         <div id="tab-request" class="tab-content">
-            <div class="section-title">Request</div>
-            <pre>${escapeHtml(req.request.method)} ${escapeHtml(req.request.url || req.request.host)}</pre>
+            ${isModified && req.serverRequest ? `
+            <div class="section-panel">
+                <div class="section-header">
+                    <span class="section-title">Request</span>
+                </div>
+                <div class="content-block">
+                    <div class="content-toolbar">
+                        <div class="toolbar-left">
+                            <div class="body-tools-group">
+                                <button class="body-tool body-content" data-action="set-url-content" data-content="original">Original</button>
+                                <button class="body-tool body-content active" data-action="set-url-content" data-content="modified">Modified</button>
+                            </div>
+                        </div>
+                    </div>
+                    <pre data-url-original="${escapeHtml(req.request.url || req.request.host)}" data-url-modified="${escapeHtml(req.serverRequest ? (req.serverRequest.url || req.serverRequest.host) : '')}">${escapeHtml(req.request.method)} ${isModified && req.serverRequest ? escapeHtml(req.serverRequest.url || req.serverRequest.host) : escapeHtml(req.request.url || req.request.host)}</pre>
+                </div>
+            </div>` : `
+            <div class="section-panel">
+                <div class="section-header">
+                    <span class="section-title">Request</span>
+                </div>
+                <div class="content-block">
+                    <pre data-url-original="${escapeHtml(req.request.url || req.request.host)}" data-url-modified="">${escapeHtml(req.request.method)} ${escapeHtml(req.request.url || req.request.host)}</pre>
+                </div>
+            </div>`}
 
-            <div class="section-title" style="margin-top:12px">
-                Headers
-                ${!reqHasEditedHeaders ? `<button class="header-edit-btn" data-action="edit-headers" title="Edit headers">${SVG_EDIT}</button>` : ''}
-            </div>
-            ${reqHasEditedHeaders ? `
-            <div class="header-toolbar">
-                <div class="body-badges"><span class="body-badge body-badge-edited">edited</span></div>
-                <div class="body-center">
-                    <div class="body-tools-group">
-                        <button class="body-tool body-content" data-action="set-header-content" data-content="original">Original</button>
-                        <button class="body-tool body-content active" data-action="set-header-content" data-content="edited">Edited</button>
+            <div class="section-panel">
+                <div class="section-header">
+                    <span class="section-title">Headers</span>
+                    <div class="kebab" data-action="toggle-menu">
+                        ⋮
+                        <div class="kebab-menu">
+                            <div class="menu-item" data-action="copy-headers" data-target="request">⧉ Copy</div>
+                            ${canEdit ? `<div class="menu-item" data-action="edit-headers">✎ Edit</div>` : ''}
+                            ${reqHasEditedHeaders ? `<div class="menu-item" data-action="revert-headers">↩ Revert</div>` : ''}
+                        </div>
                     </div>
                 </div>
-                <div class="body-actions">
-                    <button class="body-action" data-action="edit-headers" title="Edit">${SVG_EDIT}</button>
-                    <button class="body-action body-action-revert" data-action="revert-headers" title="Revert">${SVG_REVERT}</button>
+                <div class="content-block">
+                    ${reqHasEditedHeaders || hasServerReqHeaders ? `
+                    <div class="content-toolbar">
+                        <div class="toolbar-left">
+                            ${reqHasEditedHeaders ? `
+                            <div class="body-tools-group">
+                                <button class="body-tool body-content" data-action="set-header-content" data-content="original">Original</button>
+                                <button class="body-tool body-content active" data-action="set-header-content" data-content="edited">Edited</button>
+                            </div>` : `
+                            <div class="body-tools-group">
+                                <button class="body-tool body-content" data-action="set-header-content" data-content="original">Original</button>
+                                <button class="body-tool body-content active" data-action="set-header-content" data-content="modified">Modified</button>
+                            </div>`}
+                        </div>
+                        <div class="toolbar-right">
+                            ${reqHasEditedHeaders ? '<span class="body-badge body-badge-edited">edited</span>' : ''}
+                        </div>
+                    </div>` : ''}
+                    <div class="headers-container" data-target="request"
+                         data-original-html="${escapeHtml(reqOriginalHtml)}"
+                         data-edited-html="${escapeHtml(reqEditedHtml)}"
+                         data-modified-html="${escapeHtml(reqModifiedHtml)}"
+                         data-header-mode="${reqHasEditedHeaders ? 'edited' : (isModified && hasServerReqHeaders ? 'modified' : 'original')}">${reqHeadersHtml}</div>
                 </div>
             </div>
-            <div class="header-divider"></div>` : ''}
-            <div class="headers-container${reqHasEditedHeaders ? '' : ' headers-container-standalone'}" data-target="request"
-                 data-original-html="${escapeHtml(reqOriginalHtml)}"
-                 data-edited-html="${escapeHtml(reqEditedHtml)}"
-                 data-header-mode="${reqHasEditedHeaders ? 'edited' : 'original'}">${reqHeadersHtml}</div>
 
             ${reqBodyHtml}
         </div>
 
         <div id="tab-response" class="tab-content" style="display:none">
-            <div class="section-title">Response</div>
-            <pre>Status: ${req.response ? req.response.status : 'Pending'}</pre>
+            <div class="section-panel">
+                <div class="section-header">
+                    <span class="section-title">Response</span>
+                </div>
+                <div class="content-block">
+                    <pre>Status: ${req.response ? req.response.status : (isDropped ? 'Dropped' : 'Pending')}</pre>
+                </div>
+            </div>
 
-            <div class="section-title" style="margin-top:12px">Headers</div>
-            <pre>${respHeaders}</pre>
+            ${isDropped ? `<div class="action-banner action-banner-drop">✕ Request was dropped — no response received</div>` : ''}
+
+            <div class="section-panel">
+                <div class="section-header">
+                    <span class="section-title">Headers</span>
+                    <div class="kebab" data-action="toggle-menu">
+                        ⋮
+                        <div class="kebab-menu">
+                            <div class="menu-item" data-action="copy-headers" data-target="response">⧉ Copy</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="content-block">
+                    ${isMocked && Object.keys(serverRespHeaders).length > 0
+                        ? (() => {
+                            const serverRespRows = buildHeaderRows(serverRespHeaders);
+                            const mockRespRows = req.response && req.response.headers
+                                ? Object.entries(req.response.headers).map(([k,v]) => {
+                                    const val = Array.isArray(v) ? v.join(', ') : v;
+                                    return `<div class="header-row"><span class="header-key">${escapeHtml(k)}:</span><span class="header-value">${escapeHtml(val)}</span></div>`;
+                                }).join('') || '<div style="color:#666">No headers</div>'
+                                : '<div style="color:#666">No headers</div>';
+                            return `<div class="content-toolbar">
+                                <div class="toolbar-left">
+                                    <div class="body-tools-group">
+                                        <button class="body-tool body-content" data-action="set-header-content" data-target="response" data-content="original">Original</button>
+                                        <button class="body-tool body-content active" data-action="set-header-content" data-target="response" data-content="mocked">Mocked</button>
+                                    </div>
+                                </div>
+                                <div class="toolbar-right">
+                                    <span class="body-badge body-badge-mocked">mocked</span>
+                                </div>
+                            </div>
+                            <div class="headers-container" data-target="response" data-original-html="${escapeHtml(serverRespRows)}" data-mocked-html="${escapeHtml(mockRespRows)}" data-header-mode="mocked">${mockRespRows}</div>`;
+                        })()
+                        : `<div class="headers-container" data-target="response">${respHeaders}</div>`}
+                </div>
+            </div>
 
             ${respBodyHtml}
         </div>
@@ -373,4 +500,189 @@ export function toggleIgnoredPanel() {
 export function toggleFocusedPanel() {
     document.getElementById('ignoredPanel').classList.remove('open');
     document.getElementById('focusedPanel').classList.toggle('open');
+}
+
+export function renderRulesList() {
+    const list = document.getElementById('rulesList');
+    if (!list) return;
+    if (rules.length === 0) {
+        list.innerHTML = '<div style="padding:20px;color:#666;text-align:center">No rules defined</div>';
+        return;
+    }
+
+    const actionIcons = {
+        passthrough: '<span class="rule-action-icon rule-passthrough">→</span>',
+        modify: '<span class="rule-action-icon rule-modify">✎</span>',
+        mock: '<span class="rule-action-icon rule-mock">◉</span>',
+        drop: '<span class="rule-action-icon rule-drop">✕</span>',
+        response_mock: '<span class="rule-action-icon rule-response-mock">↻</span>',
+    };
+
+    list.innerHTML = rules.map(r => {
+        const icon = actionIcons[r.action] || '';
+        const actionLabel = r.action.replace('_', ' ');
+        const enabledClass = r.enabled ? '' : ' rule-disabled';
+        const matchParts = [];
+        if (r.match.method) matchParts.push(r.match.method);
+        if (r.match.host) matchParts.push(r.match.host);
+        if (r.match.url_pattern) matchParts.push(r.match.url_pattern);
+        const matchStr = matchParts.join(' ') || '*';
+
+        let detail = '';
+        if (r.action === 'mock') {
+            detail = r.mock_response ? `Mock ${r.mock_response.status || 200}` : 'Mock';
+        } else if (r.action === 'response_mock') {
+            detail = r.mock_response ? `Mock ${r.mock_response.status || 200}` : 'Mock';
+        } else if (r.action === 'drop') {
+            detail = 'Block (timeout)';
+        } else if (r.action === 'modify') {
+            detail = 'Modify request';
+        }
+
+        return `<div class="rule-item${enabledClass}" data-rule-id="${r.id}">
+            <div class="rule-item-main">
+                ${icon}
+                <span class="rule-match">${escapeHtml(matchStr)}</span>
+                <span class="rule-detail">${escapeHtml(detail)}</span>
+            </div>
+            <div class="rule-item-actions">
+                <button class="rule-toggle${r.enabled ? ' on' : ''}" data-action="toggle-rule" data-rule-id="${r.id}" title="${r.enabled ? 'Disable' : 'Enable'}">
+                    <span class="rule-toggle-track"><span class="rule-toggle-thumb"></span></span>
+                </button>
+                <button class="rule-edit-btn" data-action="edit-rule" data-rule-id="${r.id}" title="Edit">${SVG_EDIT}</button>
+                <button class="rule-delete-btn" data-action="delete-rule" data-rule-id="${r.id}" title="Delete">&times;</button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+export function toggleRulesPanel() {
+    document.getElementById('ignoredPanel').classList.remove('open');
+    document.getElementById('focusedPanel').classList.remove('open');
+    document.getElementById('rulesPanel').classList.toggle('open');
+}
+
+export function openRuleModal(rule) {
+    const modal = document.getElementById('ruleModal');
+    modal.dispatchEvent(new CustomEvent('modal-opening'));
+    const title = document.getElementById('ruleModalTitle');
+    modal.dataset.ruleId = rule?.id || '';
+    title.textContent = rule?.id ? 'Edit Rule' : 'New Rule';
+    document.getElementById('matchWarning').style.display = 'none';
+
+    document.getElementById('ruleName').value = rule ? rule.name : '';
+    document.getElementById('ruleHost').value = rule ? (rule.match.host || '') : '';
+    document.getElementById('ruleUrl').value = rule ? (rule.match.url_pattern || '') : '';
+    document.getElementById('ruleMethod').value = rule ? (rule.match.method || '') : '';
+
+    const reqAction = (rule && rule.action === 'response_mock') ? 'passthrough' : (rule ? rule.action : 'passthrough');
+    const reqRadio = document.querySelector(`input[name="ruleRequestAction"][value="${reqAction}"]`);
+    reqRadio.checked = true;
+    toggleRequestActionSections(reqAction);
+
+    if (rule && rule.modified_request) {
+        document.getElementById('modifyHost').value = rule.modified_request.host || '';
+        document.getElementById('modifyUrl').value = rule.modified_request.url || '';
+        renderInlineHeaders('modifyHeaders', rule.modified_request.headers || {});
+    } else {
+        document.getElementById('modifyHost').value = '';
+        document.getElementById('modifyUrl').value = '';
+        renderInlineHeaders('modifyHeaders', {});
+    }
+
+    if ((rule && rule.action === 'mock') || (rule && rule.action === 'response_mock')) {
+        const mock = rule.mock_response || {};
+        document.getElementById('mockRequestStatus').value = mock.status || 200;
+        renderInlineHeaders('mockRequestHeaders', mock.headers || {});
+    } else {
+        document.getElementById('mockRequestStatus').value = 200;
+        renderInlineHeaders('mockRequestHeaders', {});
+    }
+
+    const respAction = (rule && rule.action === 'response_mock') ? 'response_mock' : 'real';
+    const respRadio = document.querySelector(`input[name="ruleResponseAction"][value="${respAction}"]`);
+    respRadio.checked = true;
+    toggleResponseActionSections(respAction);
+
+    if (rule && rule.mock_response) {
+        document.getElementById('mockResponseStatus').value = rule.mock_response.status || 200;
+        renderInlineHeaders('mockResponseHeaders', rule.mock_response.headers || {});
+    } else {
+        document.getElementById('mockResponseStatus').value = 200;
+        renderInlineHeaders('mockResponseHeaders', {});
+    }
+
+    modal.classList.add('open');
+
+    const modifyBodyContainer = document.getElementById('modifyBodyEditor');
+    if (modifyBodyContainer) modifyBodyContainer.dataset.initialBody = rule?.modified_request?.body || '';
+
+    const mockReqBodyContainer = document.getElementById('mockRequestBodyEditor');
+    if (mockReqBodyContainer) mockReqBodyContainer.dataset.initialBody = rule?.mock_response?.body || '';
+
+    const mockRespBodyContainer = document.getElementById('mockResponseBodyEditor');
+    if (mockRespBodyContainer) mockRespBodyContainer.dataset.initialBody = rule?.mock_response?.body || '';
+
+    reqRadio.dispatchEvent(new Event('change'));
+    respRadio.dispatchEvent(new Event('change'));
+}
+
+export function closeRuleModal() {
+    document.getElementById('ruleModal').classList.remove('open');
+}
+
+function toggleRequestActionSections(action) {
+    document.getElementById('modifyRequestSection').style.display = action === 'modify' ? '' : 'none';
+    document.getElementById('mockRequestSection').style.display = action === 'mock' ? '' : 'none';
+    document.getElementById('responseSection').style.display = (action === 'passthrough' || action === 'modify') ? '' : 'none';
+}
+
+function toggleResponseActionSections(action) {
+    document.getElementById('mockResponseSection').style.display = action === 'response_mock' ? '' : 'none';
+}
+
+function renderInlineHeaders(containerId, headers) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    const entries = Object.entries(headers);
+    if (entries.length === 0) {
+        container.innerHTML = '<div class="inline-header-row"><input class="inline-header-key" placeholder="Key"><span class="header-colon">:</span><input class="inline-header-value" placeholder="Value"><button class="header-remove" title="Remove">&times;</button></div>';
+        return;
+    }
+    const rows = [];
+    for (const [k, v] of entries) {
+        const vals = Array.isArray(v) ? v : [v];
+        for (const val of vals) {
+            rows.push(`<div class="inline-header-row"><input class="inline-header-key" value="${escapeHtml(k)}"><span class="header-colon">:</span><input class="inline-header-value" value="${escapeHtml(val)}"><button class="header-remove" title="Remove">&times;</button></div>`);
+        }
+    }
+    container.innerHTML = rows.join('');
+}
+
+export function openRuleModalFromRequest(entry) {
+    const urlPath = (entry.request.url || '').replace(/^https?:\/\/[^/]+/, '');
+    const rule = {
+        name: '',
+        match: {
+            method: entry.request.method || '',
+            host: entry.request.host || '',
+            url_pattern: urlPath,
+        },
+        action: 'mock',
+        mock_response: {
+            status: entry.response ? (entry.response.status || 200) : 200,
+            headers: entry.response ? (entry.response.headers || {}) : {},
+            body: entry.response ? (entry.response.body || '{}') : '{}',
+        },
+        modified_request: {
+            host: entry.request.host || '',
+            url: urlPath,
+            headers: entry.request.headers || {},
+            body: entry.request.body || '',
+        },
+    };
+    openRuleModal(rule);
+    document.querySelector('input[name="ruleRequestAction"][value="mock"]').checked = true;
+    toggleRequestActionSections('mock');
+    toggleResponseActionSections('real');
 }

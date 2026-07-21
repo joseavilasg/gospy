@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"crypto/rand"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 
 	"gospy/internal/history"
 	"gospy/internal/proxy"
+	"gospy/internal/rules"
 )
 
 //go:embed index.html
@@ -63,14 +65,18 @@ type Server struct {
 	history     *history.Store
 	ignoreStore IgnoreChecker
 	focusStore  FocusChecker
+	rulesStore  *rules.Store
+	engine      *rules.Engine
 	addr        string
 }
 
-func NewServer(addr string, h *history.Store, ignore IgnoreChecker, focus FocusChecker) *Server {
+func NewServer(addr string, h *history.Store, ignore IgnoreChecker, focus FocusChecker, rulesStore *rules.Store, engine *rules.Engine) *Server {
 	return &Server{
 		history:     h,
 		ignoreStore: ignore,
 		focusStore:  focus,
+		rulesStore:  rulesStore,
+		engine:      engine,
 		addr:        addr,
 	}
 }
@@ -94,6 +100,10 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/api/ignored/", s.handleIgnoredHost)
 	mux.HandleFunc("/api/focused", s.handleFocused)
 	mux.HandleFunc("/api/focused/", s.handleFocusedHost)
+	mux.HandleFunc("/api/rules/check-match", s.handleCheckMatch)
+	mux.HandleFunc("/api/rules", s.handleRules)
+	mux.HandleFunc("/api/rules/", s.handleRule)
+	mux.HandleFunc("/api/request-rule", s.handleRequestRule)
 
 	LogWebUI(s.addr)
 
@@ -455,4 +465,153 @@ func (s *Server) handleFocusedHost(w http.ResponseWriter, r *http.Request) {
 
 func LogWebUI(addr string) {
 	fmt.Printf("\033[36m%s\033[0m %s\n", "WEBUI", "http://"+addr)
+}
+
+func (s *Server) handleCheckMatch(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Method     string `json:"method"`
+		Host       string `json:"host"`
+		URLPattern string `json:"url_pattern"`
+		ExcludeID  string `json:"exclude_id,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
+		return
+	}
+
+	matches := s.engine.FindMatchingRules(req.Method, req.Host, req.URLPattern, req.ExcludeID)
+	if matches == nil {
+		matches = []*rules.Rule{}
+	}
+	json.NewEncoder(w).Encode(matches)
+}
+
+func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	switch r.Method {
+	case http.MethodGet:
+		rulesList := s.rulesStore.GetRules()
+		json.NewEncoder(w).Encode(rulesList)
+	case http.MethodPost:
+		var rule rules.Rule
+		if err := json.NewDecoder(r.Body).Decode(&rule); err != nil {
+			proxy.LogError(fmt.Sprintf("decode rule body: %v", err))
+			http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
+			return
+		}
+		rule.ID = generateID()
+		rule.Enabled = true
+		rule.CreatedAt = time.Now()
+		if err := s.rulesStore.AddRule(&rule); err != nil {
+			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
+			return
+		}
+		deactivated := s.rulesStore.DeactivateConflicts(rule.Match.Method, rule.Match.Host, rule.Match.URLPattern, rule.ID)
+		s.engine.Load(s.rulesStore.GetRules())
+		if deactivated == nil {
+			deactivated = []string{}
+		}
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]interface{}{"rule": rule, "deactivated": deactivated})
+	default:
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleRule(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/rules/")
+	if id == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	switch r.Method {
+	case http.MethodPut:
+		var rule rules.Rule
+		if err := json.NewDecoder(r.Body).Decode(&rule); err != nil {
+			proxy.LogError(fmt.Sprintf("decode rule body: %v", err))
+			http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
+			return
+		}
+		rule.ID = id
+		if err := s.rulesStore.UpdateRule(&rule); err != nil {
+			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
+			return
+		}
+		s.engine.Load(s.rulesStore.GetRules())
+		json.NewEncoder(w).Encode(&rule)
+	case http.MethodDelete:
+		if err := s.rulesStore.RemoveRule(id); err != nil {
+			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
+			return
+		}
+		s.engine.Load(s.rulesStore.GetRules())
+		json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	case http.MethodPatch:
+		rulesList := s.rulesStore.GetRules()
+		for _, rule := range rulesList {
+			if rule.ID == id {
+				rule.Enabled = !rule.Enabled
+				if err := s.rulesStore.UpdateRule(rule); err != nil {
+					http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
+					return
+				}
+				var deactivated []string
+				if rule.Enabled {
+					deactivated = s.rulesStore.DeactivateConflicts(rule.Match.Method, rule.Match.Host, rule.Match.URLPattern, rule.ID)
+				}
+				s.engine.Load(s.rulesStore.GetRules())
+				if deactivated == nil {
+					deactivated = []string{}
+				}
+				json.NewEncoder(w).Encode(map[string]interface{}{"rule": rule, "deactivated": deactivated})
+				return
+			}
+		}
+		http.Error(w, `{"error":"rule not found"}`, http.StatusNotFound)
+	default:
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleRequestRule(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, `{"error":"id parameter required"}`, http.StatusBadRequest)
+		return
+	}
+
+	entry, err := s.history.Get(id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	json.NewEncoder(w).Encode(entry)
+}
+
+func generateID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return fmt.Sprintf("%x", b)
 }

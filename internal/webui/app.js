@@ -1,6 +1,6 @@
-import { setFilterText, setFocusEnabled, setLastTimestamp, selectedId } from './state.js';
-import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost } from './api.js';
-import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT } from './render.js';
+import { setFilterText, setFocusEnabled, setLastTimestamp, selectedId, rules, setRules } from './state.js';
+import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch } from './api.js';
+import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, openRuleModal, closeRuleModal, openRuleModalFromRequest } from './render.js';
 
 document.getElementById('filterInput').addEventListener('input', (e) => {
     setFilterText(e.target.value.trim());
@@ -11,6 +11,7 @@ document.getElementById('filterInput').addEventListener('input', (e) => {
 
 document.getElementById('ignoredBtn').addEventListener('click', toggleIgnoredPanel);
 document.getElementById('focusBtn').addEventListener('click', toggleFocusedPanel);
+document.getElementById('rulesBtn').addEventListener('click', toggleRulesPanel);
 
 document.getElementById('refreshBtn').addEventListener('click', () => {
     setLastTimestamp('');
@@ -86,6 +87,46 @@ document.getElementById('focusedPanel').addEventListener('click', (e) => {
     }
 });
 
+document.getElementById('rulesPanel').addEventListener('click', (e) => {
+    if (e.target.closest('.ignored-panel-close')) {
+        toggleRulesPanel();
+        return;
+    }
+    if (e.target.closest('#addRuleBtn')) {
+        openRuleModal(null);
+        return;
+    }
+    const toggleBtn = e.target.closest('[data-action="toggle-rule"]');
+    if (toggleBtn) {
+        const ruleId = toggleBtn.dataset.ruleId;
+        const rule = rules.find(r => r.id === ruleId);
+        if (rule && !rule.enabled) {
+            const matches = rules.filter(r => r.id !== ruleId && r.enabled &&
+                r.match.method === rule.match.method &&
+                r.match.host === rule.match.host &&
+                r.match.url_pattern === rule.match.url_pattern);
+            if (matches.length > 0) {
+                if (!confirm(`Activating this rule will deactivate "${matches[0].name}" which has the same match. Continue?`)) return;
+            }
+        }
+        toggleRule(ruleId);
+        return;
+    }
+    const editBtn = e.target.closest('[data-action="edit-rule"]');
+    if (editBtn) {
+        const rule = rules.find(r => r.id === editBtn.dataset.ruleId);
+        if (rule) openRuleModal(rule);
+        return;
+    }
+    const deleteBtn = e.target.closest('[data-action="delete-rule"]');
+    if (deleteBtn) {
+        if (confirm('Delete this rule?')) {
+            deleteRule(deleteBtn.dataset.ruleId);
+        }
+        return;
+    }
+});
+
 document.getElementById('requestList').addEventListener('click', (e) => {
     const item = e.target.closest('.request-item');
     if (item && item.dataset.id) {
@@ -97,6 +138,9 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
     const btn = e.target.closest('[data-action]');
     if (!btn) return;
     switch (btn.dataset.action) {
+        case 'toggle-menu':
+            toggleKebabMenu(btn.closest('.kebab'));
+            break;
         case 'ignore':
             confirmIgnoreHost(btn.dataset.host);
             break;
@@ -121,6 +165,9 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
         case 'copy-body':
             copyBody(btn.dataset.target);
             break;
+        case 'copy-headers':
+            copyHeaders(btn.dataset.target);
+            break;
         case 'edit-body':
             editBody(btn.dataset.target);
             break;
@@ -132,6 +179,9 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
             break;
         case 'send-replay':
             sendReplay();
+            break;
+        case 'create-rule-from-request':
+            createRuleFromRequest();
             break;
         case 'revert-body':
             revertBody(btn.dataset.target);
@@ -170,13 +220,34 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
         case 'remove-header':
             removeHeaderRow(btn);
             break;
+        case 'set-url-content': {
+            const mode = btn.dataset.content;
+            const pre = btn.closest('.tab-content')?.querySelector('pre[data-url-original]');
+            if (!pre) break;
+            const method = pre.textContent.split(' ')[0];
+            if (mode === 'original') {
+                pre.textContent = method + ' ' + pre.dataset.urlOriginal;
+            } else {
+                pre.textContent = method + ' ' + pre.dataset.urlModified;
+            }
+            btn.closest('.body-tools-group')?.querySelectorAll('.body-tool').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            break;
+        }
         case 'set-header-content': {
             const mode = btn.dataset.content;
-            const container = btn.closest('.tab-content')?.querySelector('.headers-container');
+            const target = btn.dataset.target || 'request';
+            const container = btn.closest('.tab-content')?.querySelector(`.headers-container[data-target="${target}"]`);
             if (!container) break;
-            container.innerHTML = mode === 'original'
-                ? container.dataset.originalHtml
-                : (container.dataset.editedHtml || container.dataset.originalHtml);
+            if (mode === 'original') {
+                container.innerHTML = container.dataset.originalHtml;
+            } else if (mode === 'mocked' && container.dataset.mockedHtml) {
+                container.innerHTML = container.dataset.mockedHtml;
+            } else if (mode === 'modified' && container.dataset.modifiedHtml) {
+                container.innerHTML = container.dataset.modifiedHtml;
+            } else {
+                container.innerHTML = container.dataset.editedHtml || container.dataset.originalHtml;
+            }
             container.dataset.headerMode = mode;
             btn.closest('.body-tools-group')?.querySelectorAll('.body-tool').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
@@ -189,6 +260,9 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
                 .catch(e => console.error('Revert headers failed:', e));
             break;
     }
+    if (btn.dataset.action !== 'toggle-menu') {
+        closeAllKebabMenus();
+    }
 });
 
 document.getElementById('detailPanel').addEventListener('detail-rendered', () => {
@@ -200,9 +274,9 @@ function setView(target, view) {
     const pre = document.querySelector(`pre[data-body-target="${target}"]`);
     if (!pre) return;
     pre.dataset.viewMode = view;
-    const viewer = pre.closest('.body-viewer');
-    if (viewer) {
-        viewer.querySelectorAll('[data-action="set-view"]').forEach(b => {
+    const sectionPanel = pre.closest('.section-panel');
+    if (sectionPanel) {
+        sectionPanel.querySelectorAll('[data-action="set-view"]').forEach(b => {
             b.classList.toggle('active', b.dataset.view === view);
         });
     }
@@ -213,9 +287,9 @@ function setContent(target, content) {
     const pre = document.querySelector(`pre[data-body-target="${target}"]`);
     if (!pre) return;
     pre.dataset.contentMode = content;
-    const viewer = pre.closest('.body-viewer');
-    if (viewer) {
-        viewer.querySelectorAll('[data-action="set-content"]').forEach(b => {
+    const sectionPanel = pre.closest('.section-panel');
+    if (sectionPanel) {
+        sectionPanel.querySelectorAll('[data-action="set-content"]').forEach(b => {
             b.classList.toggle('active', b.dataset.content === content);
         });
     }
@@ -225,8 +299,8 @@ function setContent(target, content) {
 function renderCurrentContent(target) {
     const pre = document.querySelector(`pre[data-body-target="${target}"]`);
     if (!pre) return;
-    const viewer = pre.closest('.body-viewer');
-    if (!viewer) return;
+    const sectionPanel = pre.closest('.section-panel');
+    if (!sectionPanel) return;
 
     const contentMode = pre.dataset.contentMode || 'original';
     const viewMode = pre.dataset.viewMode || 'raw';
@@ -234,11 +308,13 @@ function renderCurrentContent(target) {
     let content;
     switch (contentMode) {
         case 'edited': content = pre.dataset.edited || ''; break;
-        case 'decoded': content = pre.dataset.decoded || ''; break;
-        default: content = pre.dataset.raw || pre.dataset.decoded || ''; break;
+        case 'modified': content = pre.dataset.modified || ''; break;
+        case 'mocked': content = pre.dataset.mocked || ''; break;
+        default: content = pre.dataset.decoded || pre.dataset.raw || ''; break;
     }
 
-    const existingTree = viewer.querySelector('.json-viewer-container');
+    const contentBlock = sectionPanel.querySelector('.content-block');
+    const existingTree = contentBlock?.querySelector('.json-viewer-container');
     if (existingTree) existingTree.remove();
 
     if (viewMode === 'pretty') {
@@ -246,7 +322,7 @@ function renderCurrentContent(target) {
             const obj = JSON.parse(content);
             const container = document.createElement('div');
             container.className = 'json-viewer-container';
-            viewer.appendChild(container);
+            if (contentBlock) contentBlock.appendChild(container);
             const jsonViewer = new JSONViewer();
             container.appendChild(jsonViewer.getContainer());
             jsonViewer.showJSON(obj, -1, 1);
@@ -266,20 +342,51 @@ function copyBody(target) {
     if (!pre) return;
 
     const content = pre.dataset.edited || pre.dataset.decoded || pre.textContent || '';
-    navigator.clipboard.writeText(content).then(() => {
-        const viewer = pre.closest('.body-viewer');
-        if (viewer) {
-            const btn = viewer.querySelector('[data-action="copy-body"]');
-            if (btn) {
-                btn.classList.add('copied');
-                setTimeout(() => btn.classList.remove('copied'), 1500);
-            }
-        }
+    navigator.clipboard.writeText(content);
+}
+
+function copyHeaders(target) {
+    const container = document.querySelector(`.headers-container[data-target="${target}"]`);
+    if (!container) return;
+
+    const rows = container.querySelectorAll('.header-row');
+    if (rows.length === 0) return;
+
+    const lines = [];
+    rows.forEach(row => {
+        const key = row.dataset.key || row.querySelector('.header-key')?.textContent?.replace(/:$/, '') || '';
+        const values = row.dataset.values ? JSON.parse(row.dataset.values) : [row.querySelector('.header-value')?.textContent || ''];
+        values.forEach(v => lines.push(key + ': ' + v));
     });
+
+    navigator.clipboard.writeText(lines.join('\n'));
 }
 
 let activeMonacoEditor = null;
 let savedToolbarHtml = null;
+let modalMonacoEditors = { modifyBody: null, mockReqBody: null, mockRespBody: null };
+
+function disposeModalMonacoEditors() {
+    for (const key of Object.keys(modalMonacoEditors)) {
+        if (modalMonacoEditors[key]) {
+            modalMonacoEditors[key].dispose();
+            modalMonacoEditors[key] = null;
+        }
+    }
+}
+
+function initModalMonaco(containerId, value, editorKey) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    if (modalMonacoEditors[editorKey]) {
+        modalMonacoEditors[editorKey].dispose();
+        modalMonacoEditors[editorKey] = null;
+    }
+    const lang = mapContentType('application/json');
+    createMonacoEditor(container, value || '', lang).then(editor => {
+        modalMonacoEditors[editorKey] = editor;
+    });
+}
 
 function mapContentType(ct) {
     if (!ct) return 'json';
@@ -298,20 +405,20 @@ function mapContentType(ct) {
 function editBody(target) {
     const pre = document.querySelector(`pre[data-body-target="${target}"]`);
     if (!pre) return;
-    const viewer = pre.closest('.body-viewer');
-    if (!viewer) return;
+    const sectionPanel = pre.closest('.section-panel');
+    if (!sectionPanel) return;
 
-    const existingTree = viewer.querySelector('.json-viewer-container');
+    const existingTree = sectionPanel.querySelector('.json-viewer-container');
     if (existingTree) {
         existingTree.remove();
         pre.style.display = '';
     }
 
-    const contentType = viewer.dataset.contentType || '';
+    const contentType = sectionPanel.dataset.contentType || '';
     const autoLang = mapContentType(contentType);
     const savedLang = localStorage.getItem('gospy-editor-lang');
     const lang = autoLang || savedLang || 'json';
-    const tools = viewer.querySelector('.body-tools');
+    const tools = sectionPanel.querySelector('.content-toolbar');
     savedToolbarHtml = tools.innerHTML;
     tools.innerHTML = `
         <div class="body-tools-group">
@@ -357,8 +464,8 @@ function editBody(target) {
 function saveBody(target) {
     const pre = document.querySelector(`pre[data-body-target="${target}"]`);
     if (!pre) return;
-    const viewer = pre.closest('.body-viewer');
-    if (!viewer) return;
+    const sectionPanel = pre.closest('.section-panel');
+    if (!sectionPanel) return;
 
     if (activeMonacoEditor) {
         const value = activeMonacoEditor.getValue();
@@ -377,35 +484,43 @@ function saveBody(target) {
         }).then(r => r.json()).then(() => {
             pre.dataset.edited = formatted;
             pre.textContent = formatted;
-            pre.dataset.decoded = formatted;
 
             activeMonacoEditor.dispose();
             activeMonacoEditor = null;
-            const container = viewer.querySelector('.monaco-editor-container');
+            const container = sectionPanel.querySelector('.monaco-editor-container');
             if (container) container.remove();
             pre.style.display = '';
 
             if (savedToolbarHtml) {
-                const toolsDiv = viewer.querySelector('.body-tools');
+                const toolsDiv = sectionPanel.querySelector('.content-toolbar');
                 let html = savedToolbarHtml;
                 if (!toolsDiv.querySelector('.body-badge-edited')) {
-                    html = `<div class="body-badges"><span class="body-badge body-badge-edited">edited</span></div>` +
-                        `<div class="body-center"><div class="body-tools-group">` +
-                        `<button class="body-tool body-view active" data-action="set-view" data-target="${target}" data-view="pretty">Pretty</button>` +
-                        `<button class="body-tool body-view" data-action="set-view" data-target="${target}" data-view="raw">Raw</button>` +
-                        `</div><div class="body-tools-group">` +
-                        `<button class="body-tool body-content" data-action="set-content" data-target="${target}" data-content="original">Original</button>` +
-                        `<button class="body-tool body-content active" data-action="set-content" data-target="${target}" data-content="edited">Edited</button>` +
-                        `</div></div>` +
-                        `<div class="body-actions">` +
-                        `<button class="body-action" data-action="copy-body" data-target="${target}" title="Copy"><svg width="12" height="12" viewBox="0 0 16 16"><rect x="5" y="5" width="9" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-7A1.5 1.5 0 013.5 1h7A1.5 1.5 0 0112 2.5V5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button>` +
-                        `<button class="body-action" data-action="edit-body" data-target="${target}" title="Edit">${SVG_EDIT}</button>` +
-                        `<button class="body-action body-action-revert" data-action="revert-body" data-target="${target}" title="Revert">${SVG_REVERT}</button>` +
-                        `</div>`;
+                    const compression = pre.dataset.compression || '';
+                    html = `<div class="toolbar-left">
+                        <div class="body-tools-group">
+                            <button class="body-tool body-view active" data-action="set-view" data-target="${target}" data-view="pretty">Pretty</button>
+                            <button class="body-tool body-view" data-action="set-view" data-target="${target}" data-view="raw">Raw</button>
+                        </div>
+                        <div class="divider-v"></div>
+                        <div class="body-tools-group">
+                            <button class="body-tool body-content" data-action="set-content" data-target="${target}" data-content="original">Original</button>
+                            <button class="body-tool body-content active" data-action="set-content" data-target="${target}" data-content="edited">Edited</button>
+                        </div>
+                    </div>
+                    <div class="toolbar-right">
+                        ${compression ? `<span class="body-badge body-badge-compression">${escapeHtml(compression)}</span>` : ''}
+                        <span class="body-badge body-badge-edited">edited</span>
+                    </div>`;
                 }
                 toolsDiv.innerHTML = html;
                 savedToolbarHtml = null;
             }
+            pre.dataset.contentMode = 'edited';
+            const kebabMenu = sectionPanel.querySelector('.kebab-menu');
+            if (kebabMenu && !kebabMenu.querySelector('[data-action="revert-body"]')) {
+                kebabMenu.insertAdjacentHTML('beforeend', '<div class="menu-item" data-action="revert-body" data-target="' + target + '">↩ Revert</div>');
+            }
+            renderCurrentContent(target);
         }).catch(e => console.error('Failed to save body:', e));
     }
 }
@@ -413,19 +528,19 @@ function saveBody(target) {
 function cancelBody(target) {
     const pre = document.querySelector(`pre[data-body-target="${target}"]`);
     if (!pre) return;
-    const viewer = pre.closest('.body-viewer');
-    if (!viewer) return;
+    const sectionPanel = pre.closest('.section-panel');
+    if (!sectionPanel) return;
 
     if (activeMonacoEditor) {
         activeMonacoEditor.dispose();
         activeMonacoEditor = null;
     }
 
-    const container = viewer.querySelector('.monaco-editor-container');
+    const container = sectionPanel.querySelector('.monaco-editor-container');
     if (container) container.remove();
 
     pre.style.display = '';
-    const tools = viewer.querySelector('.body-tools');
+    const tools = sectionPanel.querySelector('.content-toolbar');
     if (savedToolbarHtml) {
         tools.innerHTML = savedToolbarHtml;
         savedToolbarHtml = null;
@@ -495,9 +610,18 @@ if (localStorage.getItem('gospy-list-hidden') === 'true') {
 loadRequests();
 loadIgnored();
 loadFocused();
+loadRules();
 setInterval(() => {
-    if (document.getElementById('autoRefresh').checked) loadRequests();
+    if (document.getElementById('autoRefresh').checked) { loadRequests(); }
 }, 2000);
+
+function createRuleFromRequest() {
+    if (!selectedId) return;
+    fetch(`/api/request-rule?id=${selectedId}`)
+        .then(r => r.json())
+        .then(entry => openRuleModalFromRequest(entry))
+        .catch(e => console.error('Failed to load request for rule creation:', e));
+}
 
 function editHeaders(container) {
     if (!container || container.dataset.editing === 'true') return;
@@ -560,35 +684,30 @@ function saveHeaders(id) {
         delete container.dataset.editing;
         delete container.dataset.original;
 
-        const tabContent = container.closest('.tab-content');
-        if (!tabContent) return;
+        const sectionPanel = container.closest('.section-panel');
+        if (!sectionPanel) return;
 
-        const titles = tabContent.querySelectorAll('.section-title');
-        let headerTitle = null;
-        for (const t of titles) {
-            if (t.textContent.trim().startsWith('Headers')) { headerTitle = t; break; }
+        let toolbar = sectionPanel.querySelector('.content-toolbar');
+        if (!toolbar) {
+            toolbar = document.createElement('div');
+            toolbar.className = 'content-toolbar';
+            const contentBlock = sectionPanel.querySelector('.content-block');
+            contentBlock.insertBefore(toolbar, contentBlock.firstChild);
         }
-
-        if (headerTitle) {
-            headerTitle.innerHTML = `Headers <span class="body-badge body-badge-edited">edited</span>`;
-            if (!headerTitle.nextElementSibling?.classList.contains('header-toolbar')) {
-                headerTitle.insertAdjacentHTML('afterend', `
-                    <div class="header-toolbar">
-                        <div class="body-badges"><span class="body-badge body-badge-edited">edited</span></div>
-                        <div class="body-center">
-                            <div class="body-tools-group">
-                                <button class="body-tool body-content" data-action="set-header-content" data-content="original">Original</button>
-                                <button class="body-tool body-content active" data-action="set-header-content" data-content="edited">Edited</button>
-                            </div>
-                        </div>
-                        <div class="body-actions">
-                            <button class="body-action" data-action="edit-headers" title="Edit">${SVG_EDIT}</button>
-                            <button class="body-action body-action-revert" data-action="revert-headers" title="Revert">${SVG_REVERT}</button>
-                        </div>
-                    </div>
-                    <div class="header-divider"></div>`);
+        toolbar.innerHTML = `
+            <div class="toolbar-left">
+                <div class="body-tools-group">
+                    <button class="body-tool body-content" data-action="set-header-content" data-content="original">Original</button>
+                    <button class="body-tool body-content active" data-action="set-header-content" data-content="edited">Edited</button>
+                </div>
+            </div>
+            <div class="toolbar-right">
+                <span class="body-badge body-badge-edited">edited</span>
+            </div>`;
+            const kebabMenu = sectionPanel.querySelector('.kebab-menu');
+            if (kebabMenu && !kebabMenu.querySelector('[data-action="revert-headers"]')) {
+                kebabMenu.insertAdjacentHTML('beforeend', '<div class="menu-item" data-action="revert-headers">↩ Revert</div>');
             }
-        }
     }).catch(e => console.error('Save headers failed:', e));
 }
 
@@ -612,6 +731,232 @@ function addHeaderRow(container) {
 }
 
 function removeHeaderRow(btn) {
-    const row = btn.closest('.header-row');
+    const row = btn.closest('.inline-header-row') || btn.closest('.header-row');
     if (row) row.remove();
 }
+
+function addInlineHeaderRow(containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    const row = document.createElement('div');
+    row.className = 'inline-header-row';
+    row.innerHTML = '<input class="inline-header-key" placeholder="Key"><span class="header-colon">:</span><input class="inline-header-value" placeholder="Value"><button class="header-remove" title="Remove">&times;</button>';
+    container.appendChild(row);
+    row.querySelector('.inline-header-key').focus();
+}
+
+function readInlineHeaders(containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) return {};
+    const headers = {};
+    container.querySelectorAll('.inline-header-row').forEach(row => {
+        const key = row.querySelector('.inline-header-key')?.value.trim();
+        const val = row.querySelector('.inline-header-value')?.value;
+        if (key) {
+            if (headers[key]) {
+                headers[key].push(val);
+            } else {
+                headers[key] = [val];
+            }
+        }
+    });
+    return headers;
+}
+
+document.getElementById('ruleModalClose').addEventListener('click', () => { disposeModalMonacoEditors(); closeRuleModal(); });
+document.getElementById('ruleModalCancelBtn').addEventListener('click', () => { disposeModalMonacoEditors(); closeRuleModal(); });
+
+document.getElementById('ruleModal').addEventListener('modal-opening', disposeModalMonacoEditors);
+document.getElementById('ruleModal').addEventListener('click', (e) => {
+    if (e.target.classList.contains('modal-overlay')) { disposeModalMonacoEditors(); closeRuleModal(); }
+});
+
+document.querySelectorAll('input[name="ruleRequestAction"]').forEach(radio => {
+    radio.addEventListener('change', (e) => {
+        const action = e.target.value;
+        document.getElementById('modifyRequestSection').style.display = action === 'modify' ? '' : 'none';
+        document.getElementById('mockRequestSection').style.display = action === 'mock' ? '' : 'none';
+        const showResponse = action === 'passthrough' || action === 'modify';
+        document.getElementById('responseSection').style.display = showResponse ? '' : 'none';
+        if (!showResponse) {
+            const realRadio = document.querySelector('input[name="ruleResponseAction"][value="real"]');
+            if (realRadio) realRadio.checked = true;
+        }
+
+        if (action === 'modify') {
+            const container = document.getElementById('modifyBodyEditor');
+            initModalMonaco('modifyBodyEditor', container?.dataset.initialBody || '', 'modifyBody');
+        }
+        if (action === 'mock') {
+            const container = document.getElementById('mockRequestBodyEditor');
+            initModalMonaco('mockRequestBodyEditor', container?.dataset.initialBody || '', 'mockReqBody');
+        }
+    });
+});
+
+document.querySelectorAll('input[name="ruleResponseAction"]').forEach(radio => {
+    radio.addEventListener('change', (e) => {
+        document.getElementById('mockResponseSection').style.display = e.target.value === 'response_mock' ? '' : 'none';
+        if (e.target.value === 'response_mock') {
+            const container = document.getElementById('mockResponseBodyEditor');
+            initModalMonaco('mockResponseBodyEditor', container?.dataset.initialBody || '', 'mockRespBody');
+        }
+    });
+});
+
+document.getElementById('addModifyHeader').addEventListener('click', () => addInlineHeaderRow('modifyHeaders'));
+document.getElementById('addMockReqHeader').addEventListener('click', () => addInlineHeaderRow('mockRequestHeaders'));
+document.getElementById('addMockRespHeader').addEventListener('click', () => addInlineHeaderRow('mockResponseHeaders'));
+
+document.getElementById('modifyHeaders').addEventListener('click', (e) => {
+    if (e.target.closest('.header-remove')) removeHeaderRow(e.target);
+});
+document.getElementById('mockRequestHeaders').addEventListener('click', (e) => {
+    if (e.target.closest('.header-remove')) removeHeaderRow(e.target);
+});
+document.getElementById('mockResponseHeaders').addEventListener('click', (e) => {
+    if (e.target.closest('.header-remove')) removeHeaderRow(e.target);
+});
+
+['modifyHeaders', 'mockRequestHeaders', 'mockResponseHeaders'].forEach(id => {
+    document.getElementById(id).addEventListener('paste', (e) => {
+        const target = e.target;
+        if (!target.classList.contains('inline-header-key') && !target.classList.contains('inline-header-value')) return;
+        const text = (e.clipboardData || window.clipboardData).getData('text');
+        if (!text) return;
+        const lines = text.split(/\r?\n/).filter(l => l.includes(':'));
+        if (lines.length === 0) return;
+        e.preventDefault();
+        const container = document.getElementById(id);
+        container.innerHTML = '';
+        let lastValueInput = null;
+        lines.forEach(line => {
+            const idx = line.indexOf(':');
+            const key = line.substring(0, idx).trim();
+            const value = line.substring(idx + 1).trim();
+            const row = document.createElement('div');
+            row.className = 'inline-header-row';
+            row.innerHTML = `<input class="inline-header-key" value="${escapeHtml(key)}"><span class="header-colon">:</span><input class="inline-header-value" value="${escapeHtml(value)}"><button class="header-remove" title="Remove">&times;</button>`;
+            container.appendChild(row);
+            lastValueInput = row.querySelector('.inline-header-value');
+        });
+        if (lastValueInput) lastValueInput.focus();
+    });
+});
+
+document.getElementById('ruleModalSaveBtn').addEventListener('click', async () => {
+    const modal = document.getElementById('ruleModal');
+    const id = modal.dataset.ruleId;
+    const name = document.getElementById('ruleName').value.trim();
+    if (!name) { alert('Rule name is required'); return; }
+
+    const method = document.getElementById('ruleMethod').value;
+    const host = document.getElementById('ruleHost').value.trim();
+    const urlPattern = document.getElementById('ruleUrl').value.trim();
+    const reqAction = document.querySelector('input[name="ruleRequestAction"]:checked').value;
+    const respAction = document.querySelector('input[name="ruleResponseAction"]:checked').value;
+
+    const rule = {
+        name,
+        match: { method, host, url_pattern: urlPattern },
+        action: reqAction,
+        enabled: true,
+    };
+
+    if (reqAction === 'modify') {
+        rule.modified_request = {
+            host: document.getElementById('modifyHost').value.trim(),
+            url: document.getElementById('modifyUrl').value.trim(),
+            headers: readInlineHeaders('modifyHeaders'),
+            body: modalMonacoEditors.modifyBody?.getValue() || '',
+        };
+    }
+
+    if (reqAction === 'mock') {
+        rule.mock_response = {
+            status: parseInt(document.getElementById('mockRequestStatus').value) || 200,
+            headers: readInlineHeaders('mockRequestHeaders'),
+            body: modalMonacoEditors.mockReqBody?.getValue() || '',
+        };
+    }
+
+    const canResponseMock = reqAction === 'passthrough' || reqAction === 'modify';
+    if (canResponseMock && respAction === 'response_mock') {
+        rule.action = 'response_mock';
+        rule.mock_response = {
+            status: parseInt(document.getElementById('mockResponseStatus').value) || 200,
+            headers: readInlineHeaders('mockResponseHeaders'),
+            body: modalMonacoEditors.mockRespBody?.getValue() || '',
+        };
+    }
+
+    if (id) {
+        rule.id = id;
+        await updateRule(id, rule);
+    } else {
+        const result = await createRule(rule);
+        if (result && result.deactivated && result.deactivated.length > 0) {
+            setTimeout(() => alert(`Deactivated conflicting rules: ${result.deactivated.join(', ')}`), 100);
+        }
+    }
+    disposeModalMonacoEditors();
+    closeRuleModal();
+});
+
+let matchCheckTimeout = null;
+function checkMatchDebounced() {
+    clearTimeout(matchCheckTimeout);
+    matchCheckTimeout = setTimeout(async () => {
+        const modal = document.getElementById('ruleModal');
+        if (!modal.classList.contains('open')) return;
+        const method = document.getElementById('ruleMethod').value;
+        const host = document.getElementById('ruleHost').value.trim();
+        const urlPattern = document.getElementById('ruleUrl').value.trim();
+        if (!method && !host && !urlPattern) {
+            document.getElementById('matchWarning').style.display = 'none';
+            return;
+        }
+        const excludeId = modal.dataset.ruleId || '';
+        const matches = await checkMatch(method, host, urlPattern, excludeId);
+        const warning = document.getElementById('matchWarning');
+        if (matches.length > 0) {
+            warning.style.display = '';
+            warning.innerHTML = `A rule with this match already exists: <strong>${escapeHtml(matches[0].name)}</strong>. <a data-action="edit-matching-rule" data-rule-id="${matches[0].id}" style="color:#f0883e;cursor:pointer;text-decoration:underline">Edit it instead</a>`;
+        } else {
+            warning.style.display = 'none';
+        }
+    }, 300);
+}
+
+document.getElementById('ruleMethod').addEventListener('change', checkMatchDebounced);
+document.getElementById('ruleHost').addEventListener('input', checkMatchDebounced);
+document.getElementById('ruleUrl').addEventListener('input', checkMatchDebounced);
+
+document.getElementById('ruleModal').addEventListener('click', (e) => {
+    const link = e.target.closest('[data-action="edit-matching-rule"]');
+    if (link) {
+        const rule = rules.find(r => r.id === link.dataset.ruleId);
+        if (rule) {
+            disposeModalMonacoEditors();
+            closeRuleModal();
+            setTimeout(() => openRuleModal(rule), 100);
+        }
+    }
+});
+
+function toggleKebabMenu(kebab) {
+    const menu = kebab.querySelector('.kebab-menu');
+    if (!menu) return;
+    const isOpen = menu.classList.contains('open');
+    closeAllKebabMenus();
+    if (!isOpen) menu.classList.add('open');
+}
+
+function closeAllKebabMenus() {
+    document.querySelectorAll('.kebab-menu.open').forEach(m => m.classList.remove('open'));
+}
+
+document.addEventListener('click', (e) => {
+    if (e.target.closest('.kebab, .kebab-menu')) return;
+    closeAllKebabMenus();
+});

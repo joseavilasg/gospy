@@ -16,3 +16,6 @@ export function setFocusEnabled(val) {
     localStorage.setItem('gospy-focus-enabled', val);
 }
 export function setLastTimestamp(val) { lastTimestamp = val; }
+
+export let rules = [];
+export function setRules(val) { rules = val; }

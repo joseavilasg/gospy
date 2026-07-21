@@ -24,6 +24,8 @@
         </div>
         <div class="header-sep"></div>
         <button class="btn" id="ignoredBtn">Ignored <span class="badge" id="ignoredCount">0</span></button>
+        <div class="header-sep"></div>
+        <button class="btn" id="rulesBtn">Rules <span class="badge" id="rulesCount">0</span></button>
     </header>
     <div class="container" id="container">
         <div class="request-list" id="requestList">
@@ -55,6 +57,138 @@
             <div class="focus-add">
                 <input type="text" id="focusInput" placeholder="Add host or wildcard...">
                 <button id="focusAddBtn">+</button>
+            </div>
+        </div>
+        <div class="rules-panel" id="rulesPanel">
+            <div class="ignored-panel-header">
+                <h3>Rules</h3>
+                <button class="ignored-panel-close">&times;</button>
+            </div>
+            <div class="rules-list" id="rulesList"></div>
+            <div class="rules-add">
+                <button id="addRuleBtn">+ Create Rule</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="ruleModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="ruleModalTitle">New Rule</h3>
+                <button class="modal-close" id="ruleModalClose">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Name</label>
+                    <input type="text" id="ruleName" placeholder="Rule name...">
+                </div>
+
+                <div class="form-section">Match</div>
+                <div class="form-row">
+                    <div class="form-group form-group-small">
+                        <label>Method</label>
+                        <select id="ruleMethod">
+                            <option value="">Any</option>
+                            <option value="GET">GET</option>
+                            <option value="POST">POST</option>
+                            <option value="PUT">PUT</option>
+                            <option value="DELETE">DELETE</option>
+                            <option value="PATCH">PATCH</option>
+                            <option value="OPTIONS">OPTIONS</option>
+                            <option value="HEAD">HEAD</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Host</label>
+                        <input type="text" id="ruleHost" placeholder="telemetry.example.com">
+                    </div>
+                    <div class="form-group">
+                        <label>URL (regex)</label>
+                        <input type="text" id="ruleUrl" placeholder="/api/v2/.*">
+                    </div>
+                </div>
+                <div id="matchWarning" class="match-warning" style="display:none"></div>
+
+                <div class="form-section">Request</div>
+                <div class="form-group">
+                    <label>When a request matches above:</label>
+                    <div class="radio-group">
+                        <label class="radio-label"><input type="radio" name="ruleRequestAction" value="passthrough" checked> Passthrough — forward as-is</label>
+                        <label class="radio-label"><input type="radio" name="ruleRequestAction" value="modify"> Modify — change headers/body before server</label>
+                        <label class="radio-label"><input type="radio" name="ruleRequestAction" value="mock"> Mock — block, return fake response</label>
+                        <label class="radio-label"><input type="radio" name="ruleRequestAction" value="drop"> Drop — block silently (timeout)</label>
+                    </div>
+                </div>
+
+                <div id="modifyRequestSection" style="display:none">
+                    <div class="form-row">
+                        <div class="form-group" style="flex:1">
+                            <label>Host</label>
+                            <input type="text" id="modifyHost" placeholder="keep original">
+                        </div>
+                        <div class="form-group" style="flex:1">
+                            <label>URL Path</label>
+                            <input type="text" id="modifyUrl" placeholder="/api/v2/data?q=1">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Modified Request Headers</label>
+                        <div id="modifyHeaders" class="inline-headers-editor"></div>
+                        <button class="btn-small" id="addModifyHeader">+ Add Header</button>
+                    </div>
+                    <div class="form-group">
+                        <label>Modified Request Body</label>
+                        <div class="monaco-modal-container" id="modifyBodyEditor"></div>
+                    </div>
+                </div>
+
+                <div id="mockRequestSection" style="display:none">
+                    <div class="form-section">Mock Response</div>
+                    <div class="form-group">
+                        <label>Status Code</label>
+                        <input type="number" id="mockRequestStatus" value="200" min="100" max="599">
+                    </div>
+                    <div class="form-group">
+                        <label>Response Headers</label>
+                        <div id="mockRequestHeaders" class="inline-headers-editor"></div>
+                        <button class="btn-small" id="addMockReqHeader">+ Add Header</button>
+                    </div>
+                    <div class="form-group">
+                        <label>Response Body</label>
+                        <div class="monaco-modal-container" id="mockRequestBodyEditor"></div>
+                    </div>
+                </div>
+
+                <div id="responseSection">
+                    <div class="form-section">Response</div>
+                    <div class="form-group">
+                        <label>After request reaches server:</label>
+                        <div class="radio-group">
+                            <label class="radio-label"><input type="radio" name="ruleResponseAction" value="real" checked> Real — forward server response as-is</label>
+                            <label class="radio-label"><input type="radio" name="ruleResponseAction" value="response_mock"> Mock — replace with custom response</label>
+                        </div>
+                    </div>
+
+                    <div id="mockResponseSection" style="display:none">
+                        <div class="form-group">
+                            <label>Status Code</label>
+                            <input type="number" id="mockResponseStatus" value="200" min="100" max="599">
+                        </div>
+                        <div class="form-group">
+                            <label>Response Headers</label>
+                            <div id="mockResponseHeaders" class="inline-headers-editor"></div>
+                            <button class="btn-small" id="addMockRespHeader">+ Add Header</button>
+                        </div>
+                        <div class="form-group">
+                            <label>Response Body</label>
+                            <div class="monaco-modal-container" id="mockResponseBodyEditor"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="modal-btn modal-btn-cancel" id="ruleModalCancelBtn">Cancel</button>
+                <button class="modal-btn modal-btn-save" id="ruleModalSaveBtn">Save Rule</button>
             </div>
         </div>
     </div>

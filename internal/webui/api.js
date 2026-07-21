@@ -1,5 +1,5 @@
-import { requests, setRequests, ignoredHosts, setIgnoredHosts, focusedHosts, setFocusedHosts, setFocusEnabled, lastTimestamp, setLastTimestamp } from './state.js';
-import { renderList, renderIgnoredList, renderFocusedList, invalidateFilterCache } from './render.js';
+import { requests, setRequests, ignoredHosts, setIgnoredHosts, focusedHosts, setFocusedHosts, setFocusEnabled, lastTimestamp, setLastTimestamp, rules, setRules } from './state.js';
+import { renderList, renderIgnoredList, renderFocusedList, renderRulesList, invalidateFilterCache } from './render.js';
 
 export async function loadRequests() {
     try {
@@ -134,4 +134,90 @@ export async function confirmUnfocusHost(host) {
 function escapeAttr(str) {
     if (!str) return '';
     return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
+
+export async function loadRules() {
+    try {
+        const resp = await fetch('/api/rules');
+        setRules(await resp.json());
+        document.getElementById('rulesCount').textContent = rules.length;
+        renderRulesList();
+    } catch (e) {
+        console.error('Failed to load rules:', e);
+    }
+}
+
+export async function createRule(rule) {
+    try {
+        const resp = await fetch('/api/rules', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(rule)
+        });
+        if (!resp.ok) throw new Error('Server returned ' + resp.status);
+        const result = await resp.json();
+        await loadRules();
+        return result;
+    } catch (e) {
+        console.error('Failed to create rule:', e);
+        return null;
+    }
+}
+
+export async function updateRule(id, rule) {
+    try {
+        const resp = await fetch('/api/rules/' + encodeURIComponent(id), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(rule)
+        });
+        if (!resp.ok) throw new Error('Server returned ' + resp.status);
+        const updated = await resp.json();
+        const idx = rules.findIndex(r => r.id === id);
+        if (idx >= 0) rules[idx] = updated;
+        renderRulesList();
+        return updated;
+    } catch (e) {
+        console.error('Failed to update rule:', e);
+        return null;
+    }
+}
+
+export async function deleteRule(id) {
+    try {
+        await fetch('/api/rules/' + encodeURIComponent(id), { method: 'DELETE' });
+        setRules(rules.filter(r => r.id !== id));
+        document.getElementById('rulesCount').textContent = rules.length;
+        renderRulesList();
+    } catch (e) {
+        console.error('Failed to delete rule:', e);
+    }
+}
+
+export async function toggleRule(id) {
+    try {
+        const resp = await fetch('/api/rules/' + encodeURIComponent(id), { method: 'PATCH' });
+        if (!resp.ok) throw new Error('Server returned ' + resp.status);
+        const result = await resp.json();
+        await loadRules();
+        return result;
+    } catch (e) {
+        console.error('Failed to toggle rule:', e);
+        return null;
+    }
+}
+
+export async function checkMatch(method, host, urlPattern, excludeId) {
+    try {
+        const resp = await fetch('/api/rules/check-match', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ method, host, url_pattern: urlPattern, exclude_id: excludeId || '' })
+        });
+        if (!resp.ok) throw new Error('Server returned ' + resp.status);
+        return await resp.json();
+    } catch (e) {
+        console.error('Failed to check match:', e);
+        return [];
+    }
 }
