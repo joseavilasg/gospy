@@ -11,7 +11,7 @@ func TestEngine_Match_Method(t *testing.T) {
 			ID:      "1",
 			Name:    "GET only",
 			Match:   MatchRule{Method: "GET"},
-			Action:  ActionPause,
+			Action:  ActionMock,
 			Enabled: true,
 		},
 	})
@@ -109,7 +109,7 @@ func TestEngine_Match_Headers(t *testing.T) {
 			ID:      "1",
 			Name:    "JSON API",
 			Match:   MatchRule{Headers: map[string]string{"Content-Type": "application/json"}},
-			Action:  ActionLog,
+			Action:  ActionPassthrough,
 			Enabled: true,
 		},
 	})
@@ -137,7 +137,7 @@ func TestEngine_DisabledRule(t *testing.T) {
 			ID:      "1",
 			Name:    "Disabled",
 			Match:   MatchRule{Method: "GET"},
-			Action:  ActionPause,
+			Action:  ActionMock,
 			Enabled: false,
 		},
 	})
@@ -220,7 +220,7 @@ func TestEngine_CaseInsensitiveMethod(t *testing.T) {
 			ID:      "1",
 			Name:    "get rule",
 			Match:   MatchRule{Method: "GET"},
-			Action:  ActionLog,
+			Action:  ActionPassthrough,
 			Enabled: true,
 		},
 	})
@@ -238,7 +238,7 @@ func TestEngine_MultipleRules_FirstMatchWins(t *testing.T) {
 			ID:      "1",
 			Name:    "First",
 			Match:   MatchRule{Method: "GET"},
-			Action:  ActionLog,
+			Action:  ActionPassthrough,
 			Enabled: true,
 		},
 		{

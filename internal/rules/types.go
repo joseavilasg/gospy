@@ -5,10 +5,11 @@ import "time"
 type Action string
 
 const (
-	ActionPassthrough Action = "passthrough"
-	ActionLog         Action = "log"
-	ActionPause       Action = "pause"
-	ActionMock        Action = "mock"
+	ActionPassthrough  Action = "passthrough"
+	ActionModify       Action = "modify"
+	ActionMock         Action = "mock"
+	ActionDrop         Action = "drop"
+	ActionResponseMock Action = "response_mock"
 )
 
 type MatchRule struct {
@@ -19,17 +20,25 @@ type MatchRule struct {
 }
 
 type MockResponse struct {
-	Status  int               `json:"status"`
-	Headers map[string]string `json:"headers,omitempty"`
-	Body    string            `json:"body"`
+	Status  int                 `json:"status"`
+	Headers map[string][]string `json:"headers,omitempty"`
+	Body    string              `json:"body"`
+}
+
+type ModifiedRequest struct {
+	Host    string              `json:"host,omitempty"`
+	URL     string              `json:"url,omitempty"`
+	Headers map[string][]string `json:"headers,omitempty"`
+	Body    string              `json:"body,omitempty"`
 }
 
 type Rule struct {
-	ID        string        `json:"id"`
-	Name      string        `json:"name"`
-	Match     MatchRule     `json:"match"`
-	Action    Action        `json:"action"`
-	MockResp  *MockResponse `json:"mock_response,omitempty"`
-	Enabled   bool          `json:"enabled"`
-	CreatedAt time.Time     `json:"created_at"`
+	ID          string           `json:"id"`
+	Name        string           `json:"name"`
+	Match       MatchRule        `json:"match"`
+	Action      Action           `json:"action"`
+	MockResp    *MockResponse    `json:"mock_response,omitempty"`
+	ModifiedReq *ModifiedRequest `json:"modified_request,omitempty"`
+	Enabled     bool             `json:"enabled"`
+	CreatedAt   time.Time        `json:"created_at"`
 }

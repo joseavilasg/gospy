@@ -82,3 +82,16 @@ func (e *Engine) GetRules() []*Rule {
 	copy(result, e.rules)
 	return result
 }
+
+func (e *Engine) FindMatchingRules(method, host, urlPattern string, excludeID string) []*Rule {
+	var matches []*Rule
+	for _, rule := range e.rules {
+		if rule.ID == excludeID {
+			continue
+		}
+		if rule.Match.Method == method && rule.Match.Host == host && rule.Match.URLPattern == urlPattern {
+			matches = append(matches, rule)
+		}
+	}
+	return matches
+}

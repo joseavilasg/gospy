@@ -70,26 +70,56 @@ func (s *Store) AddRule(rule *Rule) error {
 
 func (s *Store) RemoveRule(id string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
+	found := false
 	for i, rule := range s.rules {
 		if rule.ID == id {
 			s.rules = append(s.rules[:i], s.rules[i+1:]...)
-			return s.Save()
+			found = true
+			break
 		}
 	}
-	return fmt.Errorf("rule %s not found", id)
+	s.mu.Unlock()
+
+	if !found {
+		return fmt.Errorf("rule %s not found", id)
+	}
+	return s.Save()
 }
 
 func (s *Store) UpdateRule(rule *Rule) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
+	found := false
 	for i, r := range s.rules {
 		if r.ID == rule.ID {
 			s.rules[i] = rule
-			return s.Save()
+			found = true
+			break
 		}
 	}
-	return fmt.Errorf("rule %s not found", rule.ID)
+	s.mu.Unlock()
+
+	if !found {
+		return fmt.Errorf("rule %s not found", rule.ID)
+	}
+	return s.Save()
+}
+
+func (s *Store) DeactivateConflicts(method, host, urlPattern string, excludeID string) []string {
+	s.mu.Lock()
+	var deactivated []string
+	for _, rule := range s.rules {
+		if rule.ID == excludeID {
+			continue
+		}
+		if rule.Enabled && rule.Match.Method == method && rule.Match.Host == host && rule.Match.URLPattern == urlPattern {
+			rule.Enabled = false
+			deactivated = append(deactivated, rule.Name)
+		}
+	}
+	s.mu.Unlock()
+
+	if len(deactivated) > 0 {
+		_ = s.Save()
+	}
+	return deactivated
 }
