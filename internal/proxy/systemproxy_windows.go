@@ -72,7 +72,7 @@ func SetSystemProxy(addr string) error {
 		return fmt.Errorf("set ProxyEnable: %w", err)
 	}
 
-	if err := key.SetStringValue("ProxyOverride", "<local>;127.*"); err != nil {
+	if err := key.SetStringValue("ProxyOverride", ""); err != nil {
 		return fmt.Errorf("set ProxyOverride: %w", err)
 	}
 
