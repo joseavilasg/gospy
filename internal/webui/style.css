@@ -154,6 +154,9 @@ header .stats {
     color: #b9c6de;
 }
 .tab-content {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
     background: #101a30;
     border-radius: 0 4px 4px 4px;
     padding: 15px;
@@ -161,7 +164,6 @@ header .stats {
     overflow-wrap: anywhere;
 }
 .section-panel {
-    margin-bottom: 12px;
     position: relative;
 }
 .section-header {
@@ -169,6 +171,7 @@ header .stats {
     align-items: center;
     justify-content: space-between;
     margin-bottom: 8px;
+    min-height: 24px;
 }
 .kebab {
     width: 24px;
