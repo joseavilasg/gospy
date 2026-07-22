@@ -68,9 +68,22 @@ type Server struct {
 	rulesStore  *rules.Store
 	engine      *rules.Engine
 	addr        string
+	resolver    ProcessResolver
+	sigCache    SignatureChecker
 }
 
-func NewServer(addr string, h *history.Store, ignore IgnoreChecker, focus FocusChecker, rulesStore *rules.Store, engine *rules.Engine) *Server {
+type ProcessResolver interface {
+	Resolve(remoteAddr string) *proxy.ProcessInfo
+	GetAllProcesses() map[string]*proxy.ProcessInfo
+}
+
+type SignatureChecker interface {
+	Get(filePath string) *proxy.SignatureResult
+	VerifyAsync(filePath string)
+	OnUpdate(fn func(*proxy.SignatureResult))
+}
+
+func NewServer(addr string, h *history.Store, ignore IgnoreChecker, focus FocusChecker, rulesStore *rules.Store, engine *rules.Engine, resolver ProcessResolver, sigCache SignatureChecker) *Server {
 	return &Server{
 		history:     h,
 		ignoreStore: ignore,
@@ -78,6 +91,8 @@ func NewServer(addr string, h *history.Store, ignore IgnoreChecker, focus FocusC
 		rulesStore:  rulesStore,
 		engine:      engine,
 		addr:        addr,
+		resolver:    resolver,
+		sigCache:    sigCache,
 	}
 }
 
@@ -104,6 +119,8 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/api/rules", s.handleRules)
 	mux.HandleFunc("/api/rules/", s.handleRule)
 	mux.HandleFunc("/api/request-rule", s.handleRequestRule)
+	mux.HandleFunc("/api/process/signature", s.handleProcessSignature)
+	mux.HandleFunc("/api/process/events", s.handleProcessEvents)
 
 	LogWebUI(s.addr)
 
@@ -614,4 +631,67 @@ func generateID() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return fmt.Sprintf("%x", b)
+}
+
+func (s *Server) handleProcessSignature(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	if r.Method == http.MethodGet {
+		filePath := r.URL.Query().Get("path")
+		if filePath == "" {
+			http.Error(w, `{"error":"path required"}`, http.StatusBadRequest)
+			return
+		}
+		if s.sigCache == nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{"status": "unsupported"})
+			return
+		}
+		result := s.sigCache.Get(filePath)
+		if result == nil {
+			s.sigCache.VerifyAsync(filePath)
+			json.NewEncoder(w).Encode(map[string]interface{}{"status": "analyzing", "filePath": filePath})
+			return
+		}
+		json.NewEncoder(w).Encode(result)
+		return
+	}
+
+	http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+}
+
+func (s *Server) handleProcessEvents(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	ctx := r.Context()
+	ch := make(chan *proxy.SignatureResult, 16)
+
+	if s.sigCache != nil {
+		s.sigCache.OnUpdate(func(result *proxy.SignatureResult) {
+			select {
+			case ch <- result:
+			default:
+			}
+		})
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case result := <-ch:
+			data, _ := json.Marshal(result)
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+	}
 }

@@ -1,4 +1,4 @@
-import { requests, selectedId, filterText, ignoredHosts, focusedHosts, focusEnabled, setSelectedId, rules } from './state.js';
+import { requests, selectedId, filterText, ignoredHosts, focusedHosts, focusEnabled, setSelectedId, rules, processFilter } from './state.js';
 
 const ITEM_HEIGHT = 35;
 const BUFFER = 5;
@@ -37,13 +37,18 @@ export function getFilteredRequests() {
     let result = requests.filter(r => !hostMatchesIgnore(r.host));
     result = result.filter(r => hostMatchesFocus(r.host));
 
+    if (processFilter.length > 0) {
+        result = result.filter(r => processFilter.includes(r.clientDisplayName || r.clientProcess || ''));
+    }
+
     if (filterText) {
         const q = filterText.toLowerCase();
         result = result.filter(r => {
             const method = (r.method || '').toLowerCase();
             const url = (r.url || r.host || '').toLowerCase();
             const status = r.status != null ? String(r.status) : '';
-            return method.includes(q) || url.includes(q) || status.includes(q);
+            const process = (r.clientDisplayName || r.clientProcess || '').toLowerCase();
+            return method.includes(q) || url.includes(q) || status.includes(q) || process.includes(q);
         });
     }
 
@@ -75,7 +80,13 @@ function buildItemHtml(r) {
         actionBadge = '<span class="action-badge action-badge-modify" title="Modified by rule">✎</span>';
     }
 
-    return `<div class="request-item${selected}" title="${escapeHtml(url)}" data-id="${r.id}"><span class="method method-${method}">${method}</span><span class="url">${escapeHtml(url)}</span>${status != null ? `<span class="status ${statusClass}">${status}</span>` : ''}${actionBadge}${replayBadge}<span class="time">${time}</span></div>`;
+    let processBadge = '';
+    if (r.clientProcess) {
+        const badgeText = r.clientDisplayName || r.clientProcess;
+        processBadge = `<span class="process-badge" title="${escapeHtml(r.clientProcess)}">${escapeHtml(badgeText)}</span>`;
+    }
+
+    return `<div class="request-item${selected}" title="${escapeHtml(url)}" data-id="${r.id}"><span class="method method-${method}">${method}</span><span class="url">${escapeHtml(url)}</span>${status != null ? `<span class="status ${statusClass}">${status}</span>` : ''}${actionBadge}${replayBadge}${processBadge}<span class="time">${time}</span></div>`;
 }
 
 export function renderList() {
@@ -325,6 +336,7 @@ export function renderDetail(req) {
             <div class="tabs">
                 <button class="tab active" data-action="tab" data-tab="request">Request</button>
                 <button class="tab" data-action="tab" data-tab="response">Response</button>
+                <button class="tab" data-action="tab" data-tab="origin">Origin</button>
             </div>
             <div class="detail-id-group">
                 <span class="detail-id">${escapeHtml(req.id)}</span>
@@ -452,6 +464,36 @@ export function renderDetail(req) {
             ${respBodyHtml}
         </div>
 
+        <div id="tab-origin" class="tab-content" style="display:none">
+            <div class="section-panel">
+                <div class="section-header">
+                    <span class="section-title">Process</span>
+                </div>
+                <div class="content-block">
+                    <div class="origin-info">
+                        <div class="origin-row">
+                            <span class="origin-label">Program:</span>
+                            <span class="origin-value" id="originProgram">${escapeHtml(req.clientProcess || 'Unknown')}</span>
+                        </div>
+                        <div class="origin-row">
+                            <span class="origin-label">PID:</span>
+                            <span class="origin-value" id="originPID">${req.clientPid || 'N/A'}</span>
+                        </div>
+                        <div class="origin-row">
+                            <span class="origin-label">Path:</span>
+                            <span class="origin-value origin-path" id="originPath" title="${escapeHtml(req.clientPath || '')}">${escapeHtml(req.clientPath || 'N/A')}</span>
+                        </div>
+                        <div class="origin-row">
+                            <span class="origin-label">Signed:</span>
+                            <span class="origin-value" id="originSigned">
+                                <span class="origin-status analyzing">Analyzing...</span>
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         ${replaysHtml}
     `;
     panel.dispatchEvent(new CustomEvent('detail-rendered'));
@@ -462,6 +504,38 @@ export function showTab(btn, tab) {
     document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
     btn.classList.add('active');
     document.getElementById('tab-' + tab).style.display = 'block';
+
+    if (tab === 'origin') {
+        loadSignatureInfo();
+    }
+}
+
+function loadSignatureInfo() {
+    const pathEl = document.getElementById('originPath');
+    if (!pathEl) return;
+    const filePath = pathEl.getAttribute('title');
+    if (!filePath) return;
+
+    fetch(`/api/process/signature?path=${encodeURIComponent(filePath)}`)
+        .then(r => r.json())
+        .then(data => {
+            const signedEl = document.getElementById('originSigned');
+            if (!signedEl) return;
+
+            if (data.status === 'analyzing') {
+                signedEl.innerHTML = '<span class="origin-status analyzing">Analyzing...</span>';
+            } else if (data.isSigned) {
+                signedEl.innerHTML = `<span class="origin-status signed">✓ Signed by ${escapeHtml(data.signerName || 'Unknown')}</span>`;
+            } else {
+                signedEl.innerHTML = '<span class="origin-status unsigned">✗ Unsigned</span>';
+            }
+        })
+        .catch(() => {
+            const signedEl = document.getElementById('originSigned');
+            if (signedEl) {
+                signedEl.innerHTML = '<span class="origin-status unknown">Unable to verify</span>';
+            }
+        });
 }
 
 export function renderIgnoredList() {

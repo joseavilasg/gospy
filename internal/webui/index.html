@@ -11,7 +11,12 @@
     <header>
         <h1>GOSPY</h1>
         <span class="stats" id="stats">0 requests</span>
-        <input type="text" class="filter-input" id="filterInput" placeholder="Filter (method, url, status)...">
+        <input type="text" class="filter-input" id="filterInput" placeholder="Filter (method, url, status, process)...">
+        <div class="process-filter" id="processFilter">
+            <input type="text" class="process-filter-input" id="processFilterInput" placeholder="Filter by process...">
+            <button class="process-filter-clear" id="processFilterClear" style="display:none">&times;</button>
+            <div class="process-filter-dropdown" id="processFilterDropdown"></div>
+        </div>
         <div style="flex:1"></div>
         <button class="btn" id="focusBtn">Focus <span class="badge" id="focusedCount">0</span></button>
         <div class="auto-refresh">

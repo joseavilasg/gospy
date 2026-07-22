@@ -29,14 +29,16 @@ type Interceptor struct {
 	ignoreStore *IgnoreStore
 	engine      *rules.Engine
 	skipPorts   map[string]bool
+	resolver    *ClientResolver
+	sigCache    *SignatureCache
 }
 
-func NewInterceptor(h *history.Store, ignore *IgnoreStore, engine *rules.Engine, skipPorts []string) *Interceptor {
+func NewInterceptor(h *history.Store, ignore *IgnoreStore, engine *rules.Engine, skipPorts []string, resolver *ClientResolver, sigCache *SignatureCache) *Interceptor {
 	skip := make(map[string]bool, len(skipPorts))
 	for _, p := range skipPorts {
 		skip[p] = true
 	}
-	return &Interceptor{history: h, ignoreStore: ignore, engine: engine, skipPorts: skip}
+	return &Interceptor{history: h, ignoreStore: ignore, engine: engine, skipPorts: skip, resolver: resolver, sigCache: sigCache}
 }
 
 func (ic *Interceptor) isSelfRequest(host string) bool {
@@ -89,11 +91,29 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 		Compression: compression,
 	}
 
+	var clientProcess, clientDisplayName, clientPath string
+	var clientPID uint32
+	if ic.resolver != nil {
+		if info := ic.resolver.Resolve(req.RemoteAddr); info != nil {
+			clientProcess = info.Name
+			clientDisplayName = info.DisplayName
+			clientPID = info.PID
+			clientPath = info.Path
+			if ic.sigCache != nil && info.Path != "" {
+				ic.sigCache.VerifyAsync(info.Path)
+			}
+		}
+	}
+
 	rule := ic.engine.Match(req.Method, req.Host, url, req.Header)
 
 	if rule == nil || rule.Action == rules.ActionPassthrough {
 		entry := &history.Entry{
-			Request: originalRequest,
+			Request:           originalRequest,
+			ClientProcess:     clientProcess,
+			ClientPID:         clientPID,
+			ClientPath:        clientPath,
+			ClientDisplayName: clientDisplayName,
 		}
 		_ = ic.history.Save(entry)
 		LogRequest(entry.ID, req.Method, url)
@@ -103,9 +123,13 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 	switch rule.Action {
 	case rules.ActionDrop:
 		entry := &history.Entry{
-			Request:       originalRequest,
-			AppliedAction: string(rules.ActionDrop),
-			RuleName:      rule.Name,
+			Request:           originalRequest,
+			AppliedAction:     string(rules.ActionDrop),
+			RuleName:          rule.Name,
+			ClientProcess:     clientProcess,
+			ClientPID:         clientPID,
+			ClientPath:        clientPath,
+			ClientDisplayName: clientDisplayName,
 		}
 		_ = ic.history.Save(entry)
 		LogRequest(entry.ID, req.Method, url)
@@ -127,9 +151,13 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 
 	case rules.ActionMock:
 		entry := &history.Entry{
-			Request:       originalRequest,
-			AppliedAction: string(rules.ActionMock),
-			RuleName:      rule.Name,
+			Request:           originalRequest,
+			AppliedAction:     string(rules.ActionMock),
+			RuleName:          rule.Name,
+			ClientProcess:     clientProcess,
+			ClientPID:         clientPID,
+			ClientPath:        clientPath,
+			ClientDisplayName: clientDisplayName,
 		}
 		_ = ic.history.Save(entry)
 		LogRequest(entry.ID, req.Method, url)
@@ -170,8 +198,12 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 				Headers: req.Header.Clone(),
 				Body:    modifiedBody,
 			},
-			AppliedAction: string(rules.ActionModify),
-			RuleName:      rule.Name,
+			AppliedAction:     string(rules.ActionModify),
+			RuleName:          rule.Name,
+			ClientProcess:     clientProcess,
+			ClientPID:         clientPID,
+			ClientPath:        clientPath,
+			ClientDisplayName: clientDisplayName,
 		}
 		_ = ic.history.Save(entry)
 		LogRequest(entry.ID, req.Method, url)
@@ -180,9 +212,13 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 
 	case rules.ActionResponseMock:
 		entry := &history.Entry{
-			Request:       originalRequest,
-			AppliedAction: string(rules.ActionResponseMock),
-			RuleName:      rule.Name,
+			Request:           originalRequest,
+			AppliedAction:     string(rules.ActionResponseMock),
+			RuleName:          rule.Name,
+			ClientProcess:     clientProcess,
+			ClientPID:         clientPID,
+			ClientPath:        clientPath,
+			ClientDisplayName: clientDisplayName,
 		}
 		_ = ic.history.Save(entry)
 		LogRequest(entry.ID, req.Method, url)

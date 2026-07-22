@@ -27,7 +27,7 @@ func newTestInterceptor(t *testing.T, engineRules []*rules.Rule) (*Interceptor, 
 	_ = ignoreStore.Load()
 	engine := rules.NewEngine()
 	engine.Load(engineRules)
-	return NewInterceptor(store, ignoreStore, engine, nil), store
+	return NewInterceptor(store, ignoreStore, engine, nil, nil, nil), store
 }
 
 func newRequest(method, url string) *http.Request {
@@ -264,7 +264,7 @@ func TestInterceptor_IgnoredHost(t *testing.T) {
 	_ = ignoreStore.Add("telemetry.googleapis.com")
 
 	engine := rules.NewEngine()
-	ic := NewInterceptor(store, ignoreStore, engine, nil)
+	ic := NewInterceptor(store, ignoreStore, engine, nil, nil, nil)
 
 	req := newRequest("POST", "http://telemetry.googleapis.com/collect")
 	ctx := newProxyCtx(req)

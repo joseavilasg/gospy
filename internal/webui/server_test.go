@@ -33,7 +33,7 @@ func newTestServer(t *testing.T) (*Server, *rules.Store, *history.Store) {
 	ignoreStore := newMockIgnoreChecker()
 	focusStore := newMockFocusChecker()
 
-	s := NewServer(":0", hist, ignoreStore, focusStore, rulesStore, engine)
+	s := NewServer(":0", hist, ignoreStore, focusStore, rulesStore, engine, nil, nil)
 	return s, rulesStore, hist
 }
 

@@ -1,4 +1,4 @@
-import { setFilterText, setFocusEnabled, setLastTimestamp, selectedId, rules, setRules } from './state.js';
+import { setFilterText, setFocusEnabled, setLastTimestamp, selectedId, requests, rules, setRules, processFilter, setProcessFilter, setSignatureCache } from './state.js';
 import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch } from './api.js';
 import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, openRuleModal, closeRuleModal, openRuleModalFromRequest } from './render.js';
 
@@ -960,3 +960,126 @@ document.addEventListener('click', (e) => {
     if (e.target.closest('.kebab, .kebab-menu')) return;
     closeAllKebabMenus();
 });
+
+// Process filter
+const processFilterInput = document.getElementById('processFilterInput');
+const processFilterDropdown = document.getElementById('processFilterDropdown');
+const processFilterClear = document.getElementById('processFilterClear');
+
+function updateFilterInputDisplay() {
+    if (processFilter.length > 0) {
+        processFilterInput.value = processFilter.join(', ');
+        processFilterInput.placeholder = '';
+        processFilterClear.style.display = '';
+    } else {
+        processFilterInput.value = '';
+        processFilterInput.placeholder = 'Filter by process...';
+        processFilterClear.style.display = 'none';
+    }
+}
+
+function renderProcessDropdown(query) {
+    const processes = new Set();
+    requests.forEach(r => {
+        if (r.clientProcess) processes.add(r.clientDisplayName || r.clientProcess);
+    });
+
+    const q = (query || '').toLowerCase();
+    const items = [...processes].sort().filter(p => !q || p.toLowerCase().includes(q));
+
+    if (items.length === 0 && processFilter.length === 0) {
+        processFilterDropdown.classList.remove('open');
+        return;
+    }
+
+    processFilterDropdown.innerHTML = items.map(p => {
+        const selected = processFilter.includes(p);
+        return `<div class="process-filter-option${selected ? ' selected' : ''}" data-process="${escapeHtml(p)}"><span class="check">${selected ? '✓' : ''}</span>${escapeHtml(p)}</div>`;
+    }).join('');
+    processFilterDropdown.classList.add('open');
+}
+
+let filterInputFocused = false;
+let blurTimeout = null;
+
+processFilterInput.addEventListener('input', () => {
+    if (filterInputFocused) {
+        renderProcessDropdown(processFilterInput.value);
+    }
+});
+
+processFilterInput.addEventListener('focus', () => {
+    filterInputFocused = true;
+    processFilterInput.value = processFilter.length > 0 ? '' : processFilterInput.value;
+    renderProcessDropdown('');
+});
+
+processFilterInput.addEventListener('blur', () => {
+    filterInputFocused = false;
+    blurTimeout = setTimeout(() => processFilterDropdown.classList.remove('open'), 150);
+    updateFilterInputDisplay();
+});
+
+processFilterClear.addEventListener('click', () => {
+    setProcessFilter([]);
+    updateFilterInputDisplay();
+    invalidateFilterCache();
+    renderList();
+    processFilterDropdown.classList.remove('open');
+});
+
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('.process-filter')) {
+        processFilterDropdown.classList.remove('open');
+    }
+});
+
+processFilterDropdown.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    if (blurTimeout) { clearTimeout(blurTimeout); blurTimeout = null; }
+});
+
+processFilterDropdown.addEventListener('click', (e) => {
+    if (blurTimeout) { clearTimeout(blurTimeout); blurTimeout = null; }
+    const option = e.target.closest('.process-filter-option');
+    if (!option) return;
+    const process = option.dataset.process;
+    if (processFilter.includes(process)) {
+        setProcessFilter(processFilter.filter(p => p !== process));
+    } else {
+        setProcessFilter([...processFilter, process]);
+    }
+    updateFilterInputDisplay();
+    invalidateFilterCache();
+    renderList();
+    requestAnimationFrame(() => renderProcessDropdown(''));
+});
+
+updateFilterInputDisplay();
+
+// SSE for signature updates
+let eventSource = null;
+function connectSSE() {
+    eventSource = new EventSource('/api/process/events');
+    eventSource.onmessage = (e) => {
+        try {
+            const data = JSON.parse(e.data);
+            if (data.filePath) {
+                const signedEl = document.getElementById('originSigned');
+                const pathEl = document.getElementById('originPath');
+                if (signedEl && pathEl && pathEl.getAttribute('title') === data.filePath) {
+                    if (data.isSigned) {
+                        signedEl.innerHTML = `<span class="origin-status signed">✓ Signed by ${escapeHtml(data.signerName || 'Unknown')}</span>`;
+                    } else {
+                        signedEl.innerHTML = '<span class="origin-status unsigned">✗ Unsigned</span>';
+                    }
+                }
+            }
+        } catch (err) {}
+    };
+    eventSource.onerror = () => {
+        eventSource.close();
+        setTimeout(connectSSE, 3000);
+    };
+}
+connectSSE();

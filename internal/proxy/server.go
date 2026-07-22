@@ -16,9 +16,11 @@ type Server struct {
 	interceptor *Interceptor
 	ca          *ca.CA
 	addr        string
+	resolver    *ClientResolver
+	sigCache    *SignatureCache
 }
 
-func NewServer(addr string, uiAddr string, caCert *ca.CA, hist *history.Store, ruleEngine *rules.Engine, ignoreStore *IgnoreStore) *Server {
+func NewServer(addr string, uiAddr string, caCert *ca.CA, hist *history.Store, ruleEngine *rules.Engine, ignoreStore *IgnoreStore, dataDir string) *Server {
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.Verbose = false
 
@@ -37,7 +39,10 @@ func NewServer(addr string, uiAddr string, caCert *ca.CA, hist *history.Store, r
 		}
 	}
 
-	interceptor := NewInterceptor(hist, ignoreStore, ruleEngine, skipPorts)
+	resolver := NewClientResolver(addr)
+	sigCache := NewSignatureCache(dataDir)
+
+	interceptor := NewInterceptor(hist, ignoreStore, ruleEngine, skipPorts, resolver, sigCache)
 
 	proxy.OnRequest().HandleConnect(goproxy.AlwaysMitm)
 
@@ -50,6 +55,8 @@ func NewServer(addr string, uiAddr string, caCert *ca.CA, hist *history.Store, r
 		interceptor: interceptor,
 		ca:          caCert,
 		addr:        addr,
+		resolver:    resolver,
+		sigCache:    sigCache,
 	}
 }
 
@@ -59,4 +66,12 @@ func (s *Server) ListenAndServe() error {
 
 func (s *Server) Proxy() *goproxy.ProxyHttpServer {
 	return s.proxy
+}
+
+func (s *Server) Resolver() *ClientResolver {
+	return s.resolver
+}
+
+func (s *Server) SigCache() *SignatureCache {
+	return s.sigCache
 }
