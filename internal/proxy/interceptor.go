@@ -7,6 +7,7 @@ import (
 	"compress/zlib"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -27,13 +28,30 @@ type Interceptor struct {
 	history     *history.Store
 	ignoreStore *IgnoreStore
 	engine      *rules.Engine
+	skipPorts   map[string]bool
 }
 
-func NewInterceptor(h *history.Store, ignore *IgnoreStore, engine *rules.Engine) *Interceptor {
-	return &Interceptor{history: h, ignoreStore: ignore, engine: engine}
+func NewInterceptor(h *history.Store, ignore *IgnoreStore, engine *rules.Engine, skipPorts []string) *Interceptor {
+	skip := make(map[string]bool, len(skipPorts))
+	for _, p := range skipPorts {
+		skip[p] = true
+	}
+	return &Interceptor{history: h, ignoreStore: ignore, engine: engine, skipPorts: skip}
+}
+
+func (ic *Interceptor) isSelfRequest(host string) bool {
+	_, port, err := net.SplitHostPort(host)
+	if err != nil {
+		return false
+	}
+	return ic.skipPorts[port]
 }
 
 func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+	if ic.isSelfRequest(req.Host) {
+		return req, nil
+	}
+
 	if ic.ignoreStore.IsIgnored(req.Host) {
 		url := req.URL.Scheme + "://" + req.Host + req.URL.Path
 		LogIgnored(req.Method, url)

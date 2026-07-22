@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"net"
 	"net/http"
 
 	"gospy/internal/ca"
@@ -17,7 +18,7 @@ type Server struct {
 	addr        string
 }
 
-func NewServer(addr string, caCert *ca.CA, hist *history.Store, ruleEngine *rules.Engine, ignoreStore *IgnoreStore) *Server {
+func NewServer(addr string, uiAddr string, caCert *ca.CA, hist *history.Store, ruleEngine *rules.Engine, ignoreStore *IgnoreStore) *Server {
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.Verbose = false
 
@@ -29,7 +30,14 @@ func NewServer(addr string, caCert *ca.CA, hist *history.Store, ruleEngine *rule
 
 	proxy.CertStore = ca.NewCertStorage(caCert)
 
-	interceptor := NewInterceptor(hist, ignoreStore, ruleEngine)
+	var skipPorts []string
+	for _, a := range []string{addr, uiAddr} {
+		if _, port, err := net.SplitHostPort(a); err == nil {
+			skipPorts = append(skipPorts, port)
+		}
+	}
+
+	interceptor := NewInterceptor(hist, ignoreStore, ruleEngine, skipPorts)
 
 	proxy.OnRequest().HandleConnect(goproxy.AlwaysMitm)
 

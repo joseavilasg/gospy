@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 
+	"gospy/internal/browser"
 	"gospy/internal/ca"
 	"gospy/internal/history"
 	"gospy/internal/proxy"
@@ -106,7 +107,7 @@ func main() {
 		}
 	}
 
-	srv := proxy.NewServer(*proxyAddr, caCert, hist, ruleEngine, ignoreStore)
+	srv := proxy.NewServer(*proxyAddr, *uiAddr, caCert, hist, ruleEngine, ignoreStore)
 
 	proxy.LogInfo(fmt.Sprintf("Proxy listening on %s", *proxyAddr))
 
@@ -136,6 +137,15 @@ func main() {
 			} else {
 				proxy.LogInfo(fmt.Sprintf("System proxy enabled → %s", listenAddr))
 			}
+		}
+	}
+
+	if !*noSystemProxy {
+		browserType, _, err := browser.DetectDefault()
+		if err == nil && browserType == browser.Firefox {
+			proxy.LogInfo("⚠ Firefox detected as default browser. To proxy localhost traffic:")
+			proxy.LogInfo("  1. Open about:config")
+			proxy.LogInfo("  2. Set network.proxy.allow_hijacking_localhost to true")
 		}
 	}
 
