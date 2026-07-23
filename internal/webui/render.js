@@ -108,6 +108,10 @@ export function renderList() {
     }
 
     lastRange = { start: -1, end: -1 };
+    if (filtered.length === 0) {
+        list.innerHTML = '<div style="padding:20px;color:#666;text-align:center">No matching requests</div>';
+        return;
+    }
     renderVisibleItems(list, filtered);
 }
 
