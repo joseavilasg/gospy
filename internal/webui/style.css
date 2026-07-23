@@ -119,6 +119,12 @@
     --unsigned-bg: rgba(248,81,73,0.12);
 
     /* ═══════════════════════════════════════
+        COLORS - Scrollbar
+       ═══════════════════════════════════════ */
+    --scrollbar-thumb: #2e3d54;
+    --scrollbar-thumb-hover: #405570;
+
+    /* ═══════════════════════════════════════
         DIMENSIONS - Font Scale (×1.5)
        ═══════════════════════════════════════ */
     --fs-xs: 14px;
@@ -1702,4 +1708,12 @@ pre.body-content {
 }
 .origin-status.unknown {
     color: var(--text-muted);
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--bg-body); }
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+@supports not selector(::-webkit-scrollbar-thumb) {
+    * { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) var(--bg-body); }
 }
