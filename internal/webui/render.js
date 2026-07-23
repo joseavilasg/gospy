@@ -95,7 +95,7 @@ export function renderList() {
     lastFiltered = filtered;
     const total = requests.length;
 
-    if (filterText || (focusEnabled && focusedHosts.length > 0)) {
+    if (filterText || processFilter.length > 0 || (focusEnabled && focusedHosts.length > 0)) {
         document.getElementById('stats').textContent = filtered.length + ' / ' + total + ' requests';
     } else {
         document.getElementById('stats').textContent = total + ' requests';

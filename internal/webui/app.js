@@ -961,101 +961,286 @@ document.addEventListener('click', (e) => {
     closeAllKebabMenus();
 });
 
-// Process filter
-const processFilterInput = document.getElementById('processFilterInput');
-const processFilterDropdown = document.getElementById('processFilterDropdown');
-const processFilterClear = document.getElementById('processFilterClear');
+// Filter chips
+const filterChips = document.getElementById('filterChips');
+const filterOverflowPanel = document.getElementById('filterOverflowPanel');
+const filterOverflowChips = document.getElementById('filterOverflowChips');
+const overflowAddFilterBtn = document.getElementById('overflowAddFilterBtn');
 
-function updateFilterInputDisplay() {
-    if (processFilter.length > 0) {
-        processFilterInput.value = processFilter.join(', ');
-        processFilterInput.placeholder = '';
-        processFilterClear.style.display = '';
-    } else {
-        processFilterInput.value = '';
-        processFilterInput.placeholder = 'Filter by process...';
-        processFilterClear.style.display = 'none';
-    }
+function buildChipHTML(type, label, value, countText) {
+    const closeSVG = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3L9 9M9 3L3 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
+    return `<span class="filter-chip grouped" data-type="${type}"><span class="filter-chip-label">${escapeHtml(label)}:</span> <span class="filter-chip-value">${escapeHtml(value)}</span>${countText ? `<span class="filter-chip-count">${escapeHtml(countText)}</span>` : ''}<span class="filter-chip-close" data-type="${type}">${closeSVG}</span></span>`;
 }
 
-function renderProcessDropdown(query) {
-    const processes = new Set();
-    requests.forEach(r => {
-        if (r.clientProcess) processes.add(r.clientDisplayName || r.clientProcess);
-    });
+function getFilterChipsData() {
+    const chips = [];
+    if (processFilter.length > 0) {
+        const names = processFilter.slice(0, 2).join(', ');
+        const extra = processFilter.length > 2 ? ` +${processFilter.length - 2}` : '';
+        chips.push({ type: 'process', html: buildChipHTML('process', 'Process', names + extra) });
+    }
+    return chips;
+}
 
-    const q = (query || '').toLowerCase();
-    const items = [...processes].sort().filter(p => !q || p.toLowerCase().includes(q));
-
-    if (items.length === 0 && processFilter.length === 0) {
-        processFilterDropdown.classList.remove('open');
+function renderFilterChips() {
+    const chips = getFilterChipsData();
+    if (chips.length === 0) {
+        filterChips.innerHTML = '';
+        closeOverflowPanel();
         return;
     }
 
-    processFilterDropdown.innerHTML = items.map(p => {
-        const selected = processFilter.includes(p);
-        return `<div class="process-filter-option${selected ? ' selected' : ''}" data-process="${escapeHtml(p)}"><span class="check">${selected ? '✓' : ''}</span>${escapeHtml(p)}</div>`;
-    }).join('');
-    processFilterDropdown.classList.add('open');
+    filterChips.innerHTML = chips.map(c => c.html).join('');
+
+    requestAnimationFrame(() => {
+        if (filterChips.scrollWidth > filterChips.clientWidth + 2) {
+            let lastFit = 0;
+            const savedHTML = filterChips.innerHTML;
+            const chipEls = filterChips.querySelectorAll('.filter-chip');
+            for (let i = 0; i < chipEls.length; i++) {
+                chipEls[i].style.flexShrink = '0';
+            }
+            let cumWidth = 0;
+            const available = filterChips.clientWidth - 40;
+            for (let i = 0; i < chipEls.length; i++) {
+                const w = chipEls[i].getBoundingClientRect().width + 6;
+                if (cumWidth + w > available) break;
+                cumWidth += w;
+                lastFit = i + 1;
+            }
+            if (lastFit < chipEls.length) {
+                const overflowCount = chipEls.length - lastFit;
+                const visible = chips.slice(0, lastFit).map(c => c.html).join('');
+                filterChips.innerHTML = visible + `<span class="filter-chips-more" id="filterChipsMore">+${overflowCount} more</span>`;
+                document.getElementById('filterChipsMore').addEventListener('click', toggleOverflowPanel);
+            }
+        }
+        renderOverflowChips();
+    });
 }
 
-let filterInputFocused = false;
-let blurTimeout = null;
+function renderOverflowChips() {
+    const chips = getFilterChipsData();
+    filterOverflowChips.innerHTML = chips.map(c => c.html).join('');
+}
 
-processFilterInput.addEventListener('input', () => {
-    if (filterInputFocused) {
-        renderProcessDropdown(processFilterInput.value);
+function toggleOverflowPanel() {
+    if (filterOverflowPanel.style.display === 'none') {
+        openOverflowPanel();
+    } else {
+        closeOverflowPanel();
     }
-});
+}
 
-processFilterInput.addEventListener('focus', () => {
-    filterInputFocused = true;
-    processFilterInput.value = processFilter.length > 0 ? '' : processFilterInput.value;
-    renderProcessDropdown('');
-});
+function openOverflowPanel() {
+    renderOverflowChips();
+    filterOverflowPanel.style.display = 'flex';
+}
 
-processFilterInput.addEventListener('blur', () => {
-    filterInputFocused = false;
-    blurTimeout = setTimeout(() => processFilterDropdown.classList.remove('open'), 150);
-    updateFilterInputDisplay();
-});
+function closeOverflowPanel() {
+    filterOverflowPanel.style.display = 'none';
+}
 
-processFilterClear.addEventListener('click', () => {
-    setProcessFilter([]);
-    updateFilterInputDisplay();
-    invalidateFilterCache();
-    renderList();
-    processFilterDropdown.classList.remove('open');
+overflowAddFilterBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeOverflowPanel();
+    openFilterPopover();
 });
 
 document.addEventListener('click', (e) => {
-    if (!e.target.closest('.process-filter')) {
-        processFilterDropdown.classList.remove('open');
+    if (!e.target.closest('.filter-overflow-panel') && !e.target.closest('.filter-chips-more')) {
+        closeOverflowPanel();
     }
 });
 
-processFilterDropdown.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    if (blurTimeout) { clearTimeout(blurTimeout); blurTimeout = null; }
+filterChips.addEventListener('click', (e) => {
+    const close = e.target.closest('.filter-chip-close');
+    if (close) {
+        if (close.dataset.type === 'process') setProcessFilter([]);
+        renderFilterChips();
+        invalidateFilterCache();
+        renderList();
+        return;
+    }
+    const chip = e.target.closest('.filter-chip');
+    if (chip && chip.dataset.type === 'process') {
+        filterPopover.style.display = 'block';
+        showStep2Process();
+    }
 });
 
-processFilterDropdown.addEventListener('click', (e) => {
-    if (blurTimeout) { clearTimeout(blurTimeout); blurTimeout = null; }
+filterOverflowChips.addEventListener('click', (e) => {
+    const close = e.target.closest('.filter-chip-close');
+    if (close) {
+        if (close.dataset.type === 'process') setProcessFilter([]);
+        closeOverflowPanel();
+        renderFilterChips();
+        invalidateFilterCache();
+        renderList();
+        return;
+    }
+    const chip = e.target.closest('.filter-chip');
+    if (chip) {
+        closeOverflowPanel();
+        if (chip.dataset.type === 'process') { filterPopover.style.display = 'block'; showStep2Process(); }
+    }
+});
+
+// Add filter popover
+const addFilterBtn = document.getElementById('addFilterBtn');
+const filterPopover = document.getElementById('filterPopover');
+const filterStep1 = document.getElementById('filterStep1');
+const filterStep2Process = document.getElementById('filterStep2Process');
+const filterTypeSearch = document.getElementById('filterTypeSearch');
+const modalProcessInput = document.getElementById('modalProcessInput');
+const modalProcessDropdown = document.getElementById('modalProcessDropdown');
+const filterAddBtn = document.getElementById('filterAddBtn');
+const filterMatchCount = document.getElementById('filterMatchCount');
+const filterClearBtn = document.getElementById('filterClearBtn');
+
+function openFilterPopover() {
+    filterPopover.style.display = 'block';
+    filterClearBtn.style.display = 'none';
+    filterStep1.style.display = '';
+    filterStep2Process.style.display = 'none';
+    filterTypeSearch.value = '';
+    filterTypeSearch.focus();
+}
+
+function closeFilterPopover() {
+    filterPopover.style.display = 'none';
+    filterStep1.style.display = '';
+    filterStep2Process.style.display = 'none';
+}
+
+function showStep2Process() {
+    filterStep1.style.display = 'none';
+    filterStep2Process.style.display = '';
+    filterClearBtn.style.display = '';
+    modalProcessInput.value = '';
+    modalSelectedProcesses = [...processFilter];
+    modalProcessInput.focus();
+    renderModalProcessDropdown('');
+}
+
+function goBackToStep1() {
+    filterStep2Process.style.display = 'none';
+    filterStep1.style.display = '';
+    filterTypeSearch.value = '';
+    filterTypeSearch.focus();
+    filterTypeSearch.dispatchEvent(new Event('input'));
+}
+
+addFilterBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (filterPopover.style.display !== 'none') {
+        closeFilterPopover();
+    } else {
+        openFilterPopover();
+    }
+});
+
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('.filter-add-btn') && !e.target.closest('.filter-popover') && !e.target.closest('.filter-chips') && !e.target.closest('.filter-overflow-panel')) {
+        closeFilterPopover();
+    }
+});
+
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeFilterPopover();
+});
+
+filterTypeSearch.addEventListener('input', () => {
+    const q = filterTypeSearch.value.toLowerCase();
+    const items = filterStep1.querySelectorAll('.filter-popover-item');
+    items.forEach(item => {
+        item.style.display = (!q || item.textContent.toLowerCase().includes(q)) ? '' : 'none';
+    });
+});
+
+filterStep1.addEventListener('click', (e) => {
+    const item = e.target.closest('.filter-popover-item');
+    if (!item || item.classList.contains('disabled')) return;
+    if (item.dataset.type === 'process') showStep2Process();
+});
+
+document.getElementById('filterTypeBack')?.addEventListener('click', goBackToStep1);
+
+const modalProcessBack = filterStep2Process.querySelector('.filter-type-back');
+if (modalProcessBack) modalProcessBack.addEventListener('click', goBackToStep1);
+
+function getProcessCounts() {
+    const counts = {};
+    requests.forEach(r => {
+        if (r.clientProcess) {
+            const name = r.clientDisplayName || r.clientProcess;
+            counts[name] = (counts[name] || 0) + 1;
+        }
+    });
+    return counts;
+}
+
+let modalSelectedProcesses = [];
+
+function renderModalProcessDropdown(query) {
+    const counts = getProcessCounts();
+    const processes = Object.keys(counts).sort();
+    const q = (query || '').toLowerCase();
+    const items = processes.filter(p => !q || p.toLowerCase().includes(q));
+
+    modalProcessDropdown.innerHTML = items.map(p => {
+        const selected = modalSelectedProcesses.includes(p);
+        return `<div class="process-filter-option${selected ? ' selected' : ''}" data-process="${escapeHtml(p)}"><span class="check">${selected ? '✓' : ''}</span><span>${escapeHtml(p)}</span><span class="count">${counts[p] || 0}</span></div>`;
+    }).join('');
+
+    updateFilterAddCount();
+    filterClearBtn.style.display = modalSelectedProcesses.length > 0 ? '' : 'none';
+}
+
+function updateFilterAddCount() {
+    const total = requests.length;
+    let matching = total;
+    if (modalSelectedProcesses.length > 0) {
+        matching = requests.filter(r => {
+            const name = r.clientDisplayName || r.clientProcess;
+            return modalSelectedProcesses.includes(name);
+        }).length;
+    }
+    filterMatchCount.textContent = `${matching.toLocaleString()} requests`;
+}
+
+modalProcessInput.addEventListener('input', () => {
+    renderModalProcessDropdown(modalProcessInput.value);
+});
+
+modalProcessDropdown.addEventListener('click', (e) => {
     const option = e.target.closest('.process-filter-option');
     if (!option) return;
     const process = option.dataset.process;
-    if (processFilter.includes(process)) {
-        setProcessFilter(processFilter.filter(p => p !== process));
+    if (modalSelectedProcesses.includes(process)) {
+        modalSelectedProcesses = modalSelectedProcesses.filter(p => p !== process);
     } else {
-        setProcessFilter([...processFilter, process]);
+        modalSelectedProcesses.push(process);
     }
-    updateFilterInputDisplay();
-    invalidateFilterCache();
-    renderList();
-    requestAnimationFrame(() => renderProcessDropdown(''));
+    requestAnimationFrame(() => renderModalProcessDropdown(modalProcessInput.value));
 });
 
-updateFilterInputDisplay();
+filterAddBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setProcessFilter([...modalSelectedProcesses]);
+    renderFilterChips();
+    invalidateFilterCache();
+    renderList();
+    goBackToStep1();
+});
+
+filterClearBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    modalSelectedProcesses = [];
+    renderModalProcessDropdown(modalProcessInput.value);
+});
+
+renderFilterChips();
 
 // SSE for signature updates
 let eventSource = null;

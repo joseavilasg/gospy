@@ -11,12 +11,6 @@
     <header>
         <h1>GOSPY</h1>
         <span class="stats" id="stats">0 requests</span>
-        <input type="text" class="filter-input" id="filterInput" placeholder="Filter (method, url, status, process)...">
-        <div class="process-filter" id="processFilter">
-            <input type="text" class="process-filter-input" id="processFilterInput" placeholder="Filter by process...">
-            <button class="process-filter-clear" id="processFilterClear" style="display:none">&times;</button>
-            <div class="process-filter-dropdown" id="processFilterDropdown"></div>
-        </div>
         <div style="flex:1"></div>
         <button class="btn" id="focusBtn">Focus <span class="badge" id="focusedCount">0</span></button>
         <div class="auto-refresh">
@@ -33,12 +27,48 @@
         <button class="btn" id="rulesBtn">Rules <span class="badge" id="rulesCount">0</span></button>
     </header>
     <div class="container" id="container">
-        <div class="request-list" id="requestList">
-            <div style="padding:20px;color:#666;text-align:center">
-                Waiting for requests...
+        <div class="list-column">
+            <div class="filter-bar" id="filterBar">
+                <div class="filter-bar-row">
+                    <input type="text" class="filter-input" id="filterInput" placeholder="Filter (method, url, status, process)...">
+                    <button class="filter-add-btn" id="addFilterBtn">+ Add filter</button>
+                    <div class="filter-popover" id="filterPopover" style="display:none">
+                        <div class="filter-popover-step" id="filterStep1">
+                            <div class="filter-popover-search">
+                                <input type="text" placeholder="Search filter..." id="filterTypeSearch">
+                            </div>
+                            <div class="filter-popover-list">
+                                <button class="filter-popover-item" data-type="process">Process ›</button>
+                            </div>
+                        </div>
+                        <div class="filter-popover-step" id="filterStep2Process" style="display:none">
+                            <div class="filter-popover-search" style="display:flex;gap:6px;align-items:center">
+                                <button class="filter-type-back" id="filterTypeBack">←</button>
+                                <input type="text" placeholder="Search processes..." id="modalProcessInput" style="flex:1">
+                            </div>
+                            <div class="filter-popover-list" id="modalProcessDropdown"></div>
+                            <div class="filter-popover-footer">
+                                <span class="filter-popover-count" id="filterMatchCount"></span>
+                                <button class="filter-popover-clear" id="filterClearBtn">Clear all</button>
+                                <button class="filter-popover-add" id="filterAddBtn">Apply</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="filter-chips" id="filterChips"></div>
+                <div class="filter-overflow-panel" id="filterOverflowPanel" style="display:none">
+                    <div class="filter-overflow-chips" id="filterOverflowChips"></div>
+                    <div class="filter-overflow-divider"></div>
+                    <button class="filter-add-btn" id="overflowAddFilterBtn">+ Add filter</button>
+                </div>
             </div>
-        </div>
-        <button class="list-toggle" id="toggleListBtn" title="Toggle request list"><svg width="12" height="12" viewBox="0 0 12 12"><polyline points="8,2 4,6 8,10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                <div class="request-list" id="requestList">
+                    <div style="padding:20px;color:#666;text-align:center">
+                        Waiting for requests...
+                    </div>
+                </div>
+            </div>
+            <button class="list-toggle" id="toggleListBtn" title="Toggle request list"><svg width="12" height="12" viewBox="0 0 12 12"><polyline points="8,2 4,6 8,10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         <div class="detail-panel" id="detailPanel">
             <div class="empty">Select a request to view details</div>
         </div>
