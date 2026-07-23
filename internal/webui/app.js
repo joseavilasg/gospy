@@ -968,7 +968,7 @@ const filterOverflowChips = document.getElementById('filterOverflowChips');
 const overflowAddFilterBtn = document.getElementById('overflowAddFilterBtn');
 
 function buildChipHTML(type, label, value, countText) {
-    const closeSVG = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3L9 9M9 3L3 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
+    const closeSVG = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4L12 12M12 4L4 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
     return `<span class="filter-chip grouped" data-type="${type}"><span class="filter-chip-label">${escapeHtml(label)}:</span> <span class="filter-chip-value">${escapeHtml(value)}</span>${countText ? `<span class="filter-chip-count">${escapeHtml(countText)}</span>` : ''}<span class="filter-chip-close" data-type="${type}">${closeSVG}</span></span>`;
 }
 

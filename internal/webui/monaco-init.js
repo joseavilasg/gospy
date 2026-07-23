@@ -32,7 +32,7 @@ function createMonacoEditor(container, value, language) {
             language: language || 'json',
             theme: 'gospy-dark',
             minimap: { enabled: false },
-            fontSize: 11,
+            fontSize: 17,
             fontFamily: 'monospace',
             lineNumbers: 'on',
             scrollBeyondLastLine: false,
