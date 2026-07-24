@@ -545,6 +545,7 @@ function cancelBody(target) {
         tools.innerHTML = savedToolbarHtml;
         savedToolbarHtml = null;
     }
+    renderCurrentContent(target);
 }
 
 function sendReplay() {
