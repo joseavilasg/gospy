@@ -507,7 +507,7 @@ export function showTab(btn, tab) {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
     btn.classList.add('active');
-    document.getElementById('tab-' + tab).style.display = 'block';
+    document.getElementById('tab-' + tab).style.display = 'flex';
 
     if (tab === 'origin') {
         loadSignatureInfo();
