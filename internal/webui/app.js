@@ -865,8 +865,13 @@ document.getElementById('ruleModalSaveBtn').addEventListener('click', async () =
     };
 
     if (reqAction === 'modify') {
+        const modifyHost = document.getElementById('modifyHost').value.trim();
+        if (!modifyHost) {
+            alert('Host is required for Modify action');
+            return;
+        }
         rule.modified_request = {
-            host: document.getElementById('modifyHost').value.trim(),
+            host: modifyHost,
             url: document.getElementById('modifyUrl').value.trim(),
             headers: readInlineHeaders('modifyHeaders'),
             body: modalMonacoEditors.modifyBody?.getValue() || '',

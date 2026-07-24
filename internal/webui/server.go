@@ -526,6 +526,12 @@ func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"invalid body"}`, http.StatusBadRequest)
 			return
 		}
+		if rule.Action == rules.ActionModify {
+			if rule.ModifiedReq == nil || rule.ModifiedReq.Host == "" {
+				http.Error(w, `{"error":"host is required for modify action"}`, http.StatusBadRequest)
+				return
+			}
+		}
 		rule.ID = generateID()
 		rule.Enabled = true
 		rule.CreatedAt = time.Now()
@@ -564,6 +570,12 @@ func (s *Server) handleRule(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		rule.ID = id
+		if rule.Action == rules.ActionModify {
+			if rule.ModifiedReq == nil || rule.ModifiedReq.Host == "" {
+				http.Error(w, `{"error":"host is required for modify action"}`, http.StatusBadRequest)
+				return
+			}
+		}
 		if err := s.rulesStore.UpdateRule(&rule); err != nil {
 			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
 			return
