@@ -24,6 +24,10 @@ type requestUserData struct {
 	entryID      string
 }
 
+type entryUserData struct {
+	entryID string
+}
+
 type Interceptor struct {
 	history     *history.Store
 	ignoreStore *IgnoreStore
@@ -116,6 +120,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			ClientDisplayName: clientDisplayName,
 		}
 		_ = ic.history.Save(entry)
+		ctx.UserData = &entryUserData{entryID: entry.ID}
 		LogRequest(entry.ID, req.Method, url)
 		return req, nil
 	}
@@ -206,6 +211,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			ClientDisplayName: clientDisplayName,
 		}
 		_ = ic.history.Save(entry)
+		ctx.UserData = &entryUserData{entryID: entry.ID}
 		LogRequest(entry.ID, req.Method, url)
 		LogInfo(fmt.Sprintf("MODIFIED by rule %q: %s %s", rule.Name, req.Method, url))
 		return req, nil
@@ -236,6 +242,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 		RuleName:      rule.Name,
 	}
 	_ = ic.history.Save(entry)
+	ctx.UserData = &entryUserData{entryID: entry.ID}
 	LogRequest(entry.ID, req.Method, url)
 	return req, nil
 }
@@ -245,33 +252,31 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 		return resp
 	}
 
+	if resp.StatusCode == http.StatusSwitchingProtocols {
+		return resp
+	}
+
 	reqURL := ctx.Req.URL.Scheme + "://" + ctx.Req.Host + ctx.Req.URL.Path
 	if ctx.Req.URL.RawQuery != "" {
 		reqURL += "?" + ctx.Req.URL.RawQuery
 	}
 
+	rawBody := ""
+	if resp.Body != nil {
+		var buf bytes.Buffer
+		if _, err := io.Copy(&buf, resp.Body); err == nil {
+			rawBody = buf.String()
+		}
+		resp.Body = io.NopCloser(&buf)
+	}
+
 	if ud, ok := ctx.UserData.(*requestUserData); ok {
 		entry, err := ic.history.Get(ud.entryID)
 		if err == nil {
-			body := ""
-			rawBody := ""
-			compression := ""
-			if resp.Body != nil {
-				var buf bytes.Buffer
-				if _, err := io.Copy(&buf, resp.Body); err == nil {
-					result := decompressBody(buf.Bytes(), resp.Header.Get("Content-Encoding"))
-					body = result.Decoded
-					rawBody = result.Raw
-					compression = result.Compression
-				}
-				resp.Body = io.NopCloser(&buf)
-			}
 			entry.ServerResponse = &history.ResponseRecord{
-				Status:      resp.StatusCode,
-				Headers:     resp.Header,
-				Body:        body,
-				RawBody:     rawBody,
-				Compression: compression,
+				Status:  resp.StatusCode,
+				Headers: resp.Header,
+				RawBody: rawBody,
 			}
 			fakeResp := buildMockResponse(ctx.Req, ud.mockResponse)
 			entry.Response = &history.ResponseRecord{
@@ -285,38 +290,18 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 		return buildHttpResponse(ctx.Req, ud.mockResponse)
 	}
 
-	body := ""
-	rawBody := ""
-	compression := ""
-	if resp.Body != nil {
-		var buf bytes.Buffer
-		if _, err := io.Copy(&buf, resp.Body); err == nil {
-			result := decompressBody(buf.Bytes(), resp.Header.Get("Content-Encoding"))
-			body = result.Decoded
-			rawBody = result.Raw
-			compression = result.Compression
-		}
-		resp.Body = io.NopCloser(&buf)
-	}
-
-	contentType := resp.Header.Get("Content-Type")
-
-	entries := ic.history.List()
-	for _, entry := range entries {
-		if entry.Request.Method == ctx.Req.Method &&
-			(entry.Request.URL == reqURL || (entry.ServerRequest != nil && entry.ServerRequest.URL == reqURL)) &&
-			entry.Response == nil {
+	if ud, ok := ctx.UserData.(*entryUserData); ok {
+		entry, err := ic.history.Get(ud.entryID)
+		if err == nil {
 			entry.Response = &history.ResponseRecord{
-				Status:      resp.StatusCode,
-				Headers:     resp.Header,
-				Body:        body,
-				RawBody:     rawBody,
-				Compression: compression,
+				Status:  resp.StatusCode,
+				Headers: resp.Header,
+				RawBody: rawBody,
 			}
 			_ = ic.history.Update(entry)
-			LogResponse(entry.ID, ctx.Req.Method, reqURL, resp.StatusCode, contentType)
-			break
+			LogResponse(entry.ID, ctx.Req.Method, reqURL, resp.StatusCode, resp.Header.Get("Content-Type"))
 		}
+		return resp
 	}
 
 	return resp
