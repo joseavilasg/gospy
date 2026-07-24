@@ -221,6 +221,31 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if entry.Request.RawBody != "" && entry.Request.Body == "" {
+		ce := entry.Request.Headers["Content-Encoding"]
+		enc := ""
+		if len(ce) > 0 {
+			enc = ce[0]
+		}
+		entry.Request.Body = proxy.DecompressBody([]byte(entry.Request.RawBody), enc)
+	}
+	if entry.Response != nil && entry.Response.RawBody != "" && entry.Response.Body == "" {
+		ce := entry.Response.Headers["Content-Encoding"]
+		enc := ""
+		if len(ce) > 0 {
+			enc = ce[0]
+		}
+		entry.Response.Body = proxy.DecompressBody([]byte(entry.Response.RawBody), enc)
+	}
+	if entry.ServerResponse != nil && entry.ServerResponse.RawBody != "" && entry.ServerResponse.Body == "" {
+		ce := entry.ServerResponse.Headers["Content-Encoding"]
+		enc := ""
+		if len(ce) > 0 {
+			enc = ce[0]
+		}
+		entry.ServerResponse.Body = proxy.DecompressBody([]byte(entry.ServerResponse.RawBody), enc)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	json.NewEncoder(w).Encode(entry)
