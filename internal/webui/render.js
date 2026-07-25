@@ -470,6 +470,13 @@ export function renderDetail(req, activeTab = 'request') {
         </div>
 
         <div id="tab-origin" class="tab-content" style="${activeTab === 'origin' ? '' : 'display:none'}">
+            ${req.replayedFrom ? `
+            <div class="section-panel">
+                <div class="content-block" style="padding: var(--sp-10); text-align: center; color: var(--text-muted);">
+                    Replayed by GoSpy - no client process
+                </div>
+            </div>
+            ` : `
             <div class="section-panel">
                 <div class="section-header">
                     <span class="section-title">Process</span>
@@ -497,6 +504,7 @@ export function renderDetail(req, activeTab = 'request') {
                     </div>
                 </div>
             </div>
+            `}
         </div>
 
         ${replaysHtml}
