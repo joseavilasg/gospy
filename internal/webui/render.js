@@ -48,7 +48,8 @@ export function getFilteredRequests() {
             const url = (r.url || r.host || '').toLowerCase();
             const status = r.status != null ? String(r.status) : '';
             const process = (r.clientDisplayName || r.clientProcess || '').toLowerCase();
-            return method.includes(q) || url.includes(q) || status.includes(q) || process.includes(q);
+            const id = (r.id || '').toLowerCase();
+            return method.includes(q) || url.includes(q) || status.includes(q) || process.includes(q) || id.includes(q);
         });
     }
 
