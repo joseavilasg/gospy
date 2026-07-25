@@ -148,7 +148,7 @@ export function onListScroll() {
     renderVisibleItems(list, lastFiltered);
 }
 
-export function selectRequest(id) {
+export function selectRequest(id, activeTab = 'request') {
     const oldEl = document.querySelector('.request-item.selected');
     if (oldEl) oldEl.classList.remove('selected');
 
@@ -162,11 +162,11 @@ export function selectRequest(id) {
 
     fetch(`/api/requests/${id}`)
         .then(resp => resp.json())
-        .then(entry => renderDetail(entry))
+        .then(entry => renderDetail(entry, activeTab))
         .catch(e => console.error('Failed to load request detail:', e));
 }
 
-export function renderDetail(req) {
+export function renderDetail(req, activeTab = 'request') {
     const panel = document.getElementById('detailPanel');
     const host = req.request.host || '';
     const isIgnored = ignoredHosts.includes(host);
@@ -338,9 +338,9 @@ export function renderDetail(req) {
         ${replayedFromHtml}
         <div class="tabs-row">
             <div class="tabs">
-                <button class="tab active" data-action="tab" data-tab="request">Request</button>
-                <button class="tab" data-action="tab" data-tab="response">Response</button>
-                <button class="tab" data-action="tab" data-tab="origin">Origin</button>
+                <button class="tab ${activeTab === 'request' ? 'active' : ''}" data-action="tab" data-tab="request">Request</button>
+                <button class="tab ${activeTab === 'response' ? 'active' : ''}" data-action="tab" data-tab="response">Response</button>
+                <button class="tab ${activeTab === 'origin' ? 'active' : ''}" data-action="tab" data-tab="origin">Origin</button>
             </div>
             <div class="detail-id-group">
                 <span class="detail-id">${escapeHtml(req.id)}</span>
@@ -348,7 +348,7 @@ export function renderDetail(req) {
             </div>
         </div>
 
-        <div id="tab-request" class="tab-content">
+        <div id="tab-request" class="tab-content" style="${activeTab !== 'request' ? 'display:none' : ''}">
             ${isModified && req.serverRequest ? `
             <div class="section-panel">
                 <div class="section-header">
@@ -416,7 +416,7 @@ export function renderDetail(req) {
             ${reqBodyHtml}
         </div>
 
-        <div id="tab-response" class="tab-content" style="display:none">
+        <div id="tab-response" class="tab-content" style="${activeTab === 'response' ? '' : 'display:none'}">
             <div class="section-panel">
                 <div class="section-header">
                     <span class="section-title">Response</span>
@@ -468,7 +468,7 @@ export function renderDetail(req) {
             ${respBodyHtml}
         </div>
 
-        <div id="tab-origin" class="tab-content" style="display:none">
+        <div id="tab-origin" class="tab-content" style="${activeTab === 'origin' ? '' : 'display:none'}">
             <div class="section-panel">
                 <div class="section-header">
                     <span class="section-title">Process</span>

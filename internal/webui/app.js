@@ -580,7 +580,9 @@ function revertBody(target) {
 
 function refreshDetail() {
     if (selectedId) {
-        selectRequest(selectedId);
+        const activeTabEl = document.querySelector('.tab.active');
+        const tab = activeTabEl ? activeTabEl.dataset.tab : 'request';
+        selectRequest(selectedId, tab);
     }
 }
 
