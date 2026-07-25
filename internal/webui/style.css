@@ -1172,27 +1172,41 @@ pre.body-content {
 }
 
 .replayed-from {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-4);
     padding: var(--sp-6) var(--sp-10);
     margin-bottom: var(--sp-8);
     background: var(--bg-focus);
     border-radius: var(--radius-md);
     font-size: var(--fs-md);
     color: var(--text-muted);
-    display: flex;
-    align-items: center;
-    gap: var(--sp-6);
 }
 .replayed-from-icon {
+    flex-shrink: 0;
     color: var(--accent);
     font-weight: bold;
 }
-.replayed-from a {
+.replayed-from-label {
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+.replayed-from-url {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     color: var(--accent);
     cursor: pointer;
     text-decoration: none;
 }
-.replayed-from a:hover {
+.replayed-from-url:hover {
     text-decoration: underline;
+}
+.replayed-from-time {
+    flex-shrink: 0;
+    white-space: nowrap;
 }
 
 .replays-section {

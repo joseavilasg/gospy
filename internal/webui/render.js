@@ -306,9 +306,9 @@ export function renderDetail(req, activeTab = 'request') {
     if (req.replayedFrom) {
         const origEntry = requests.find(r => r.id === req.replayedFrom);
         if (origEntry) {
-            replayedFromHtml = `<div class="replayed-from"><span class="replayed-from-icon">↻</span> Replayed from: <a data-action="goto-replay" data-id="${req.replayedFrom}">${escapeHtml(origEntry.method)} ${escapeHtml(origEntry.url)}</a> · ${new Date(origEntry.timestamp).toLocaleTimeString()}</div>`;
+            replayedFromHtml = `<div class="replayed-from"><span class="replayed-from-icon">↻</span><span class="replayed-from-label">Replayed from:</span><a class="replayed-from-url" data-action="goto-replay" data-id="${req.replayedFrom}" title="${escapeHtml(origEntry.method)} ${escapeHtml(origEntry.url)}">${escapeHtml(origEntry.method)} ${escapeHtml(origEntry.url)}</a><span class="replayed-from-time">· ${new Date(origEntry.timestamp).toLocaleTimeString()}</span></div>`;
         } else {
-            replayedFromHtml = `<div class="replayed-from"><span class="replayed-from-icon">↻</span> Replayed from: <a data-action="goto-replay" data-id="${req.replayedFrom}">${req.replayedFrom.slice(0, 8)}</a></div>`;
+            replayedFromHtml = `<div class="replayed-from"><span class="replayed-from-icon">↻</span><span class="replayed-from-label">Replayed from:</span><a class="replayed-from-url" data-action="goto-replay" data-id="${req.replayedFrom}">${req.replayedFrom.slice(0, 8)}</a></div>`;
         }
     }
 
