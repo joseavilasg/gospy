@@ -570,14 +570,24 @@ export function renderFocusedList() {
     `).join('');
 }
 
-export function toggleIgnoredPanel() {
+function closeAllPanels() {
+    document.getElementById('ignoredPanel').classList.remove('open');
     document.getElementById('focusedPanel').classList.remove('open');
-    document.getElementById('ignoredPanel').classList.toggle('open');
+    document.getElementById('rulesPanel').classList.remove('open');
+}
+
+export function toggleIgnoredPanel() {
+    const panel = document.getElementById('ignoredPanel');
+    const wasOpen = panel.classList.contains('open');
+    closeAllPanels();
+    if (!wasOpen) panel.classList.add('open');
 }
 
 export function toggleFocusedPanel() {
-    document.getElementById('ignoredPanel').classList.remove('open');
-    document.getElementById('focusedPanel').classList.toggle('open');
+    const panel = document.getElementById('focusedPanel');
+    const wasOpen = panel.classList.contains('open');
+    closeAllPanels();
+    if (!wasOpen) panel.classList.add('open');
 }
 
 export function renderRulesList() {
@@ -635,9 +645,10 @@ export function renderRulesList() {
 }
 
 export function toggleRulesPanel() {
-    document.getElementById('ignoredPanel').classList.remove('open');
-    document.getElementById('focusedPanel').classList.remove('open');
-    document.getElementById('rulesPanel').classList.toggle('open');
+    const panel = document.getElementById('rulesPanel');
+    const wasOpen = panel.classList.contains('open');
+    closeAllPanels();
+    if (!wasOpen) panel.classList.add('open');
 }
 
 export function openRuleModal(rule) {

@@ -754,19 +754,21 @@ pre {
     background: var(--bg-active);
     flex-shrink: 0;
 }
-.ignored-panel {
+.side-panel {
     position: absolute;
     top: 0;
     right: 0;
-    width: var(--ignored-panel-w);
     height: 100%;
     background: var(--bg-input);
     border-left: 1px solid var(--bg-active);
-    z-index: 10;
     display: none;
     flex-direction: column;
+    z-index: 10;
 }
-.ignored-panel.open { display: flex; }
+.side-panel.open { display: flex; }
+.ignored-panel {
+    width: var(--ignored-panel-w);
+}
 .ignored-panel-header {
     padding: var(--sp-12);
     border-bottom: 1px solid var(--bg-active);
@@ -1272,21 +1274,12 @@ pre.body-content {
 }
 
 .rules-panel {
-    position: absolute;
-    top: 0;
-    right: 0;
     width: var(--rules-panel-w);
-    height: 100%;
-    background: var(--bg-surface-alt);
-    border-left: 1px solid var(--border-subtle);
-    display: none;
-    flex-direction: column;
+    z-index: 20;
     transform: translateX(100%);
     transition: transform 0.2s ease;
-    z-index: 20;
 }
 .rules-panel.open {
-    display: flex;
     transform: translateX(0);
 }
 .rules-list {
