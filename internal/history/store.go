@@ -59,6 +59,7 @@ type Store struct {
 type ListEntry struct {
 	ID                string    `json:"id"`
 	Timestamp         time.Time `json:"timestamp"`
+	UpdatedAt         time.Time `json:"updatedAt"`
 	Method            string    `json:"method"`
 	URL               string    `json:"url"`
 	Host              string    `json:"host"`
@@ -164,6 +165,7 @@ func (s *Store) buildIndex() error {
 		}
 		if t, err := time.Parse(time.RFC3339Nano, h.Timestamp); err == nil {
 			le.Timestamp = t
+			le.UpdatedAt = t
 		}
 		if h.Response != nil {
 			le.Status = &h.Response.Status
@@ -208,6 +210,7 @@ func (s *Store) Save(entry *Entry) error {
 	le := &ListEntry{
 		ID:                entry.ID,
 		Timestamp:         entry.Timestamp,
+		UpdatedAt:         entry.Timestamp,
 		Method:            entry.Request.Method,
 		URL:               entry.Request.URL,
 		Host:              entry.Request.Host,
@@ -262,7 +265,7 @@ func (s *Store) ListSince(since time.Time) []*ListEntry {
 
 	result := make([]*ListEntry, 0)
 	for _, le := range s.index {
-		if le.Timestamp.After(since) {
+		if le.UpdatedAt.After(since) {
 			result = append(result, le)
 		}
 	}
@@ -318,6 +321,7 @@ func (s *Store) Update(entry *Entry) error {
 			if entry.Response != nil {
 				le.Status = &entry.Response.Status
 			}
+			le.UpdatedAt = time.Now()
 			break
 		}
 	}

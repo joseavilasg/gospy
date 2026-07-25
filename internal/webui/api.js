@@ -1,4 +1,4 @@
-import { requests, setRequests, ignoredHosts, setIgnoredHosts, focusedHosts, setFocusedHosts, setFocusEnabled, lastTimestamp, setLastTimestamp, rules, setRules } from './state.js';
+import { requests, setRequests, upsertRequests, ignoredHosts, setIgnoredHosts, focusedHosts, setFocusedHosts, setFocusEnabled, lastTimestamp, setLastTimestamp, rules, setRules } from './state.js';
 import { renderList, renderIgnoredList, renderFocusedList, renderRulesList, invalidateFilterCache } from './render.js';
 
 export async function loadRequests() {
@@ -8,13 +8,13 @@ export async function loadRequests() {
         const newItems = await resp.json();
 
         if (lastTimestamp && newItems.length > 0) {
-            setRequests([...newItems, ...requests]);
+            upsertRequests(newItems);
         } else if (!lastTimestamp) {
             setRequests(newItems);
         }
 
         if (requests.length > 0) {
-            setLastTimestamp(requests[0].timestamp);
+            setLastTimestamp(requests[0].updatedAt || requests[0].timestamp);
         }
 
         invalidateFilterCache();

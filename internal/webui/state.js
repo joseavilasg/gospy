@@ -1,3 +1,4 @@
+let requestsMap = new Map();
 export let requests = [];
 export let selectedId = null;
 export let filterText = '';
@@ -8,7 +9,22 @@ export let lastTimestamp = '';
 export let processFilter = JSON.parse(localStorage.getItem('gospy-process-filter') || '[]');
 export let signatureCache = {};
 
-export function setRequests(val) { requests = val; }
+export function setRequests(val) {
+    requestsMap.clear();
+    for (const item of val) requestsMap.set(item.id, item);
+    requests = val;
+}
+export function upsertRequests(newItems) {
+    const existingIds = new Set(requestsMap.keys());
+    for (const item of newItems) {
+        if (requestsMap.has(item.id)) requestsMap.set(item.id, item);
+    }
+    const newOnly = newItems.filter(item => !existingIds.has(item.id));
+    if (newOnly.length > 0) {
+        requestsMap = new Map([...newOnly.map(i => [i.id, i]), ...requestsMap]);
+    }
+    requests = Array.from(requestsMap.values());
+}
 export function setSelectedId(val) { selectedId = val; }
 export function setFilterText(val) { filterText = val; }
 export function setIgnoredHosts(val) { ignoredHosts = val; }
