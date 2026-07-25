@@ -1246,7 +1246,7 @@ pre.body-content {
     font-size: var(--fs-base);
 }
 .replay-item:hover {
-    background: var(--bg-surface-alt);
+    background: var(--bg-body);
 }
 .replay-item .method {
     font-weight: bold;
