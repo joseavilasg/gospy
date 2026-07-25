@@ -70,6 +70,7 @@ type ListEntry struct {
 	ClientProcess     string    `json:"clientProcess,omitempty"`
 	ClientPID         uint32    `json:"clientPid,omitempty"`
 	ClientDisplayName string    `json:"clientDisplayName,omitempty"`
+	Referer           string    `json:"referer,omitempty"`
 }
 
 func New(dir string) (*Store, error) {
@@ -129,9 +130,10 @@ func (s *Store) buildIndex() error {
 		ClientPID         uint32 `json:"clientPid,omitempty"`
 		ClientDisplayName string `json:"clientDisplayName,omitempty"`
 		Request           struct {
-			Method string `json:"method"`
-			URL    string `json:"url"`
-			Host   string `json:"host"`
+			Method  string              `json:"method"`
+			URL     string              `json:"url"`
+			Host    string              `json:"host"`
+			Headers map[string][]string `json:"headers"`
 		} `json:"request"`
 		Response *struct {
 			Status int `json:"status"`
@@ -162,6 +164,9 @@ func (s *Store) buildIndex() error {
 			ClientProcess:     h.ClientProcess,
 			ClientPID:         h.ClientPID,
 			ClientDisplayName: h.ClientDisplayName,
+		}
+		if refs, ok := h.Request.Headers["Referer"]; ok && len(refs) > 0 {
+			le.Referer = refs[0]
 		}
 		if t, err := time.Parse(time.RFC3339Nano, h.Timestamp); err == nil {
 			le.Timestamp = t
@@ -219,6 +224,9 @@ func (s *Store) Save(entry *Entry) error {
 		RuleName:          entry.RuleName,
 		ClientProcess:     entry.ClientProcess,
 		ClientDisplayName: entry.ClientDisplayName,
+	}
+	if refs, ok := entry.Request.Headers["Referer"]; ok && len(refs) > 0 {
+		le.Referer = refs[0]
 	}
 	if entry.Response != nil {
 		le.Status = &entry.Response.Status

@@ -33,6 +33,9 @@ var apiJS string
 //go:embed render.js
 var renderJS string
 
+//go:embed filters.js
+var filtersJS string
+
 //go:embed json-viewer.js
 var jsonViewerJS string
 
@@ -105,6 +108,7 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/state.js", s.handleStatic(stateJS, "application/javascript"))
 	mux.HandleFunc("/api.js", s.handleStatic(apiJS, "application/javascript"))
 	mux.HandleFunc("/render.js", s.handleStatic(renderJS, "application/javascript"))
+	mux.HandleFunc("/filters.js", s.handleStatic(filtersJS, "application/javascript"))
 	mux.HandleFunc("/json-viewer.js", s.handleStatic(jsonViewerJS, "application/javascript"))
 	mux.HandleFunc("/json-viewer.css", s.handleStatic(jsonViewerCSS, "text/css"))
 	mux.HandleFunc("/monaco-init.js", s.handleStatic(monacoInitJS, "application/javascript"))

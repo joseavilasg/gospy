@@ -1,4 +1,5 @@
-import { requests, selectedId, filterText, ignoredHosts, focusedHosts, focusEnabled, setSelectedId, rules, processFilter } from './state.js';
+import { requests, selectedId, filterText, ignoredHosts, focusedHosts, focusEnabled, setSelectedId, rules } from './state.js';
+import { applyFilters, isAnyFilterActive } from './filters.js';
 
 const ITEM_HEIGHT = 35;
 const BUFFER = 5;
@@ -32,14 +33,22 @@ function hostMatchesIgnore(host) {
     return ignoredHosts.some(p => hostMatchesPattern(host, p));
 }
 
+export function extractRefererOrigin(referer) {
+    if (!referer) return '';
+    try {
+        const u = new URL(referer);
+        return u.host;
+    } catch {
+        return '';
+    }
+}
+
 export function getFilteredRequests() {
     if (filteredCache) return filteredCache;
     let result = requests.filter(r => !hostMatchesIgnore(r.host));
     result = result.filter(r => hostMatchesFocus(r.host));
 
-    if (processFilter.length > 0) {
-        result = result.filter(r => processFilter.includes(r.clientDisplayName || r.clientProcess || ''));
-    }
+    result = applyFilters(result);
 
     if (filterText) {
         const q = filterText.toLowerCase();
@@ -96,7 +105,7 @@ export function renderList() {
     lastFiltered = filtered;
     const total = requests.length;
 
-    if (filterText || processFilter.length > 0 || (focusEnabled && focusedHosts.length > 0)) {
+    if (filterText || isAnyFilterActive() || (focusEnabled && focusedHosts.length > 0)) {
         document.getElementById('stats').textContent = filtered.length + ' / ' + total + ' requests';
     } else {
         document.getElementById('stats').textContent = total + ' requests';

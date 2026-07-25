@@ -38,15 +38,15 @@
                                 <input type="text" placeholder="Search filter..." id="filterTypeSearch">
                             </div>
                             <div class="filter-popover-list">
-                                <button class="filter-popover-item" data-type="process">Process ›</button>
+                                <!-- populated dynamically from registered filter types -->
                             </div>
                         </div>
-                        <div class="filter-popover-step" id="filterStep2Process" style="display:none">
+                        <div class="filter-popover-step" id="filterStep2" style="display:none">
                             <div class="filter-popover-search" style="display:flex;gap:6px;align-items:center">
                                 <button class="filter-type-back" id="filterTypeBack">←</button>
-                                <input type="text" placeholder="Search processes..." id="modalProcessInput" style="flex:1">
+                                <input type="text" placeholder="" id="modalFilterInput" style="flex:1">
                             </div>
-                            <div class="filter-popover-list" id="modalProcessDropdown"></div>
+                            <div class="filter-popover-list" id="modalFilterDropdown"></div>
                             <div class="filter-popover-footer">
                                 <span class="filter-popover-count" id="filterMatchCount"></span>
                                 <button class="filter-popover-clear" id="filterClearBtn">Clear all</button>

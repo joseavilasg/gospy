@@ -1,6 +1,23 @@
-import { setFilterText, setFocusEnabled, setLastTimestamp, selectedId, requests, rules, setRules, processFilter, setProcessFilter, setSignatureCache } from './state.js';
+import { setFilterText, setFocusEnabled, setLastTimestamp, selectedId, requests, rules, setRules, setSignatureCache } from './state.js';
 import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch } from './api.js';
-import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, openRuleModal, closeRuleModal, openRuleModalFromRequest } from './render.js';
+import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, openRuleModal, closeRuleModal, openRuleModalFromRequest, extractRefererOrigin } from './render.js';
+import { registerFilter, setOnFilterChange, initFilterPopover, openFilterPopover, closeFilterPopover, closeChip, openChip, getFilterChipsData } from './filters.js';
+
+registerFilter({
+    type: 'process',
+    label: 'Process',
+    localStorageKey: 'gospy-process-filter',
+    extractValue: (r) => r.clientDisplayName || r.clientProcess || '',
+    searchPlaceholder: 'Search processes...',
+});
+
+registerFilter({
+    type: 'referer',
+    label: 'Referer',
+    localStorageKey: 'gospy-referer-filter',
+    extractValue: (r) => extractRefererOrigin(r.referer),
+    searchPlaceholder: 'Search referers...',
+});
 
 document.getElementById('filterInput').addEventListener('input', (e) => {
     setFilterText(e.target.value.trim());
@@ -969,26 +986,19 @@ document.addEventListener('click', (e) => {
     closeAllKebabMenus();
 });
 
-// Filter chips
+// Filter system
 const filterChips = document.getElementById('filterChips');
 const filterOverflowPanel = document.getElementById('filterOverflowPanel');
 const filterOverflowChips = document.getElementById('filterOverflowChips');
 const overflowAddFilterBtn = document.getElementById('overflowAddFilterBtn');
 
-function buildChipHTML(type, label, value, countText) {
-    const closeSVG = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4L12 12M12 4L4 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
-    return `<span class="filter-chip grouped" data-type="${type}"><span class="filter-chip-label">${escapeHtml(label)}:</span> <span class="filter-chip-value">${escapeHtml(value)}</span>${countText ? `<span class="filter-chip-count">${escapeHtml(countText)}</span>` : ''}<span class="filter-chip-close" data-type="${type}">${closeSVG}</span></span>`;
+function refreshFilters() {
+    invalidateFilterCache();
+    renderFilterChips();
+    renderList();
 }
 
-function getFilterChipsData() {
-    const chips = [];
-    if (processFilter.length > 0) {
-        const names = processFilter.slice(0, 2).join(', ');
-        const extra = processFilter.length > 2 ? ` +${processFilter.length - 2}` : '';
-        chips.push({ type: 'process', html: buildChipHTML('process', 'Process', names + extra) });
-    }
-    return chips;
-}
+setOnFilterChange(refreshFilters);
 
 function renderFilterChips() {
     const chips = getFilterChipsData();
@@ -1003,7 +1013,6 @@ function renderFilterChips() {
     requestAnimationFrame(() => {
         if (filterChips.scrollWidth > filterChips.clientWidth + 2) {
             let lastFit = 0;
-            const savedHTML = filterChips.innerHTML;
             const chipEls = filterChips.querySelectorAll('.filter-chip');
             for (let i = 0; i < chipEls.length; i++) {
                 chipEls[i].style.flexShrink = '0';
@@ -1064,80 +1073,32 @@ document.addEventListener('click', (e) => {
 filterChips.addEventListener('click', (e) => {
     const close = e.target.closest('.filter-chip-close');
     if (close) {
-        if (close.dataset.type === 'process') setProcessFilter([]);
-        renderFilterChips();
-        invalidateFilterCache();
-        renderList();
+        closeChip(close.dataset.type);
         return;
     }
     const chip = e.target.closest('.filter-chip');
-    if (chip && chip.dataset.type === 'process') {
-        filterPopover.style.display = 'block';
-        showStep2Process();
-    }
+    if (chip) openChip(chip.dataset.type);
 });
 
 filterOverflowChips.addEventListener('click', (e) => {
     const close = e.target.closest('.filter-chip-close');
     if (close) {
-        if (close.dataset.type === 'process') setProcessFilter([]);
+        closeChip(close.dataset.type);
         closeOverflowPanel();
-        renderFilterChips();
-        invalidateFilterCache();
-        renderList();
         return;
     }
     const chip = e.target.closest('.filter-chip');
     if (chip) {
         closeOverflowPanel();
-        if (chip.dataset.type === 'process') { filterPopover.style.display = 'block'; showStep2Process(); }
+        openChip(chip.dataset.type);
     }
 });
 
-// Add filter popover
+// Popover init
 const addFilterBtn = document.getElementById('addFilterBtn');
 const filterPopover = document.getElementById('filterPopover');
-const filterStep1 = document.getElementById('filterStep1');
-const filterStep2Process = document.getElementById('filterStep2Process');
-const filterTypeSearch = document.getElementById('filterTypeSearch');
-const modalProcessInput = document.getElementById('modalProcessInput');
-const modalProcessDropdown = document.getElementById('modalProcessDropdown');
-const filterAddBtn = document.getElementById('filterAddBtn');
-const filterMatchCount = document.getElementById('filterMatchCount');
-const filterClearBtn = document.getElementById('filterClearBtn');
 
-function openFilterPopover() {
-    filterPopover.style.display = 'block';
-    filterClearBtn.style.display = 'none';
-    filterStep1.style.display = '';
-    filterStep2Process.style.display = 'none';
-    filterTypeSearch.value = '';
-    filterTypeSearch.focus();
-}
-
-function closeFilterPopover() {
-    filterPopover.style.display = 'none';
-    filterStep1.style.display = '';
-    filterStep2Process.style.display = 'none';
-}
-
-function showStep2Process() {
-    filterStep1.style.display = 'none';
-    filterStep2Process.style.display = '';
-    filterClearBtn.style.display = '';
-    modalProcessInput.value = '';
-    modalSelectedProcesses = [...processFilter];
-    modalProcessInput.focus();
-    renderModalProcessDropdown('');
-}
-
-function goBackToStep1() {
-    filterStep2Process.style.display = 'none';
-    filterStep1.style.display = '';
-    filterTypeSearch.value = '';
-    filterTypeSearch.focus();
-    filterTypeSearch.dispatchEvent(new Event('input'));
-}
+initFilterPopover();
 
 addFilterBtn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -1156,96 +1117,6 @@ document.addEventListener('click', (e) => {
 
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeFilterPopover();
-});
-
-filterTypeSearch.addEventListener('input', () => {
-    const q = filterTypeSearch.value.toLowerCase();
-    const items = filterStep1.querySelectorAll('.filter-popover-item');
-    items.forEach(item => {
-        item.style.display = (!q || item.textContent.toLowerCase().includes(q)) ? '' : 'none';
-    });
-});
-
-filterStep1.addEventListener('click', (e) => {
-    const item = e.target.closest('.filter-popover-item');
-    if (!item || item.classList.contains('disabled')) return;
-    if (item.dataset.type === 'process') showStep2Process();
-});
-
-document.getElementById('filterTypeBack')?.addEventListener('click', goBackToStep1);
-
-const modalProcessBack = filterStep2Process.querySelector('.filter-type-back');
-if (modalProcessBack) modalProcessBack.addEventListener('click', goBackToStep1);
-
-function getProcessCounts() {
-    const counts = {};
-    requests.forEach(r => {
-        if (r.clientProcess) {
-            const name = r.clientDisplayName || r.clientProcess;
-            counts[name] = (counts[name] || 0) + 1;
-        }
-    });
-    return counts;
-}
-
-let modalSelectedProcesses = [];
-
-function renderModalProcessDropdown(query) {
-    const counts = getProcessCounts();
-    const processes = Object.keys(counts).sort();
-    const q = (query || '').toLowerCase();
-    const items = processes.filter(p => !q || p.toLowerCase().includes(q));
-
-    modalProcessDropdown.innerHTML = items.map(p => {
-        const selected = modalSelectedProcesses.includes(p);
-        return `<div class="process-filter-option${selected ? ' selected' : ''}" data-process="${escapeHtml(p)}"><span class="check">${selected ? '✓' : ''}</span><span>${escapeHtml(p)}</span><span class="count">${counts[p] || 0}</span></div>`;
-    }).join('');
-
-    updateFilterAddCount();
-    filterClearBtn.style.display = modalSelectedProcesses.length > 0 ? '' : 'none';
-}
-
-function updateFilterAddCount() {
-    const total = requests.length;
-    let matching = total;
-    if (modalSelectedProcesses.length > 0) {
-        matching = requests.filter(r => {
-            const name = r.clientDisplayName || r.clientProcess;
-            return modalSelectedProcesses.includes(name);
-        }).length;
-    }
-    filterMatchCount.textContent = `${matching.toLocaleString()} requests`;
-}
-
-modalProcessInput.addEventListener('input', () => {
-    renderModalProcessDropdown(modalProcessInput.value);
-});
-
-modalProcessDropdown.addEventListener('click', (e) => {
-    const option = e.target.closest('.process-filter-option');
-    if (!option) return;
-    const process = option.dataset.process;
-    if (modalSelectedProcesses.includes(process)) {
-        modalSelectedProcesses = modalSelectedProcesses.filter(p => p !== process);
-    } else {
-        modalSelectedProcesses.push(process);
-    }
-    requestAnimationFrame(() => renderModalProcessDropdown(modalProcessInput.value));
-});
-
-filterAddBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    setProcessFilter([...modalSelectedProcesses]);
-    renderFilterChips();
-    invalidateFilterCache();
-    renderList();
-    goBackToStep1();
-});
-
-filterClearBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    modalSelectedProcesses = [];
-    renderModalProcessDropdown(modalProcessInput.value);
 });
 
 renderFilterChips();
