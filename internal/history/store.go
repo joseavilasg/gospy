@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"gospy/internal/logging"
+
 	"github.com/google/uuid"
 )
 
@@ -99,6 +101,7 @@ func (s *Store) loadIndex() error {
 	data, err := os.ReadFile(s.indexPath())
 	if err != nil {
 		if os.IsNotExist(err) {
+			logging.Log.Warn("index.json not found, rebuilding index")
 			return s.buildIndex()
 		}
 		return fmt.Errorf("read index: %w", err)
@@ -106,6 +109,7 @@ func (s *Store) loadIndex() error {
 
 	var index []*ListEntry
 	if err := json.Unmarshal(data, &index); err != nil {
+		logging.Log.Error("index.json is corrupt, rebuilding index")
 		return s.buildIndex()
 	}
 
