@@ -194,7 +194,11 @@ func (s *Store) persistIndex() error {
 	if err != nil {
 		return fmt.Errorf("marshal index: %w", err)
 	}
-	return os.WriteFile(s.indexPath(), data, 0644)
+	tmp := s.indexPath() + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return fmt.Errorf("write index tmp: %w", err)
+	}
+	return os.Rename(tmp, s.indexPath())
 }
 
 func (s *Store) Save(entry *Entry) error {
