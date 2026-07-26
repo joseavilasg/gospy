@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"sort"
 	"sync"
 	"time"
@@ -102,7 +104,12 @@ func (s *Store) loadIndex() error {
 	if err != nil {
 		if os.IsNotExist(err) {
 			logging.Log.Warn("index.json not found, rebuilding index")
-			return s.buildIndex()
+			if err := s.buildIndex(); err != nil {
+				return err
+			}
+			runtime.GC()
+			debug.FreeOSMemory()
+			return nil
 		}
 		return fmt.Errorf("read index: %w", err)
 	}
@@ -110,34 +117,16 @@ func (s *Store) loadIndex() error {
 	var index []*ListEntry
 	if err := json.Unmarshal(data, &index); err != nil {
 		logging.Log.Error("index.json is corrupt, rebuilding index")
-		return s.buildIndex()
+		if err := s.buildIndex(); err != nil {
+			return err
+		}
+		runtime.GC()
+		debug.FreeOSMemory()
+		return nil
 	}
 
 	s.index = index
 	return nil
-}
-
-func skipJSONValue(dec *json.Decoder) error {
-	depth := 0
-	for {
-		tok, err := dec.Token()
-		if err != nil {
-			return err
-		}
-		switch tok {
-		case json.Delim('{'), json.Delim('['):
-			depth++
-		case json.Delim('}'), json.Delim(']'):
-			depth--
-			if depth == 0 {
-				return nil
-			}
-		default:
-			if depth == 0 {
-				return nil
-			}
-		}
-	}
 }
 
 func (s *Store) buildIndex() error {
@@ -147,58 +136,38 @@ func (s *Store) buildIndex() error {
 		return fmt.Errorf("glob history: %w", err)
 	}
 
-	for _, path := range matches {
-		file, err := os.Open(path)
-		if err != nil {
-			continue
-		}
+	workers := max(min(runtime.NumCPU(), 2), 1)
+	const batchSize = 500
 
-		dec := json.NewDecoder(file)
-		if _, err := dec.Token(); err != nil {
-			file.Close()
-			continue
-		}
+	for i := 0; i < len(matches); i += batchSize {
+		end := min(i+batchSize, len(matches))
+		batch := matches[i:end]
 
-		le := &ListEntry{}
-		for dec.More() {
-			key, _ := dec.Token()
-			k, ok := key.(string)
-			if !ok {
-				skipJSONValue(dec)
-				continue
-			}
-			switch k {
-			case "id":
-				dec.Decode(&le.ID)
-			case "timestamp":
-				var ts string
-				dec.Decode(&ts)
-				if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
-					le.Timestamp = t
-					le.UpdatedAt = t
+		ch := make(chan string, len(batch))
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+
+		for range workers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for path := range ch {
+					if le := s.parseEntryFile(path); le != nil {
+						mu.Lock()
+						s.index = append(s.index, le)
+						mu.Unlock()
+					}
 				}
-			case "replayedFrom":
-				dec.Decode(&le.ReplayedFrom)
-			case "appliedAction":
-				dec.Decode(&le.AppliedAction)
-			case "ruleName":
-				dec.Decode(&le.RuleName)
-			case "clientProcess":
-				dec.Decode(&le.ClientProcess)
-			case "clientPid":
-				dec.Decode(&le.ClientPID)
-			case "clientDisplayName":
-				dec.Decode(&le.ClientDisplayName)
-			case "request":
-				s.decodeRequestHeader(dec, le)
-			case "response":
-				s.decodeResponseStatus(dec, le)
-			default:
-				skipJSONValue(dec)
-			}
+			}()
 		}
-		file.Close()
-		s.index = append(s.index, le)
+
+		for _, p := range batch {
+			ch <- p
+		}
+		close(ch)
+		wg.Wait()
+
+		debug.FreeOSMemory()
 	}
 
 	sort.Slice(s.index, func(i, j int) bool {
@@ -208,57 +177,70 @@ func (s *Store) buildIndex() error {
 	return s.persistIndex()
 }
 
-func (s *Store) decodeRequestHeader(dec *json.Decoder, le *ListEntry) {
-	if _, err := dec.Token(); err != nil {
-		return
+func (s *Store) parseEntryFile(path string) *ListEntry {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
 	}
-	for dec.More() {
-		key, _ := dec.Token()
-		k, ok := key.(string)
-		if !ok {
-			skipJSONValue(dec)
-			continue
-		}
-		switch k {
-		case "method":
-			dec.Decode(&le.Method)
-		case "url":
-			dec.Decode(&le.URL)
-		case "host":
-			dec.Decode(&le.Host)
-		case "headers":
-			var headers map[string][]string
-			dec.Decode(&headers)
-			if refs, ok := headers["Referer"]; ok && len(refs) > 0 {
-				le.Referer = refs[0]
-			}
-		default:
-			skipJSONValue(dec)
-		}
-	}
-	dec.Token()
-}
 
-func (s *Store) decodeResponseStatus(dec *json.Decoder, le *ListEntry) {
-	if _, err := dec.Token(); err != nil {
-		return
+	var raw struct {
+		ID                string `json:"id"`
+		Timestamp         string `json:"timestamp"`
+		ReplayedFrom      string `json:"replayedFrom,omitempty"`
+		AppliedAction     string `json:"appliedAction,omitempty"`
+		RuleName          string `json:"ruleName,omitempty"`
+		ClientProcess     string `json:"clientProcess,omitempty"`
+		ClientPID         uint32 `json:"clientPid,omitempty"`
+		ClientDisplayName string `json:"clientDisplayName,omitempty"`
+		Request           struct {
+			Method  string          `json:"method"`
+			URL     string          `json:"url"`
+			Host    string          `json:"host"`
+			Headers json.RawMessage `json:"headers"`
+		} `json:"request"`
+		Response *struct {
+			Status int `json:"status"`
+		} `json:"response,omitempty"`
 	}
-	for dec.More() {
-		key, _ := dec.Token()
-		k, ok := key.(string)
-		if !ok {
-			skipJSONValue(dec)
-			continue
+
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil
+	}
+	data = nil
+
+	le := &ListEntry{
+		ID:                raw.ID,
+		Method:            raw.Request.Method,
+		URL:               raw.Request.URL,
+		Host:              raw.Request.Host,
+		ReplayedFrom:      raw.ReplayedFrom,
+		AppliedAction:     raw.AppliedAction,
+		RuleName:          raw.RuleName,
+		ClientProcess:     raw.ClientProcess,
+		ClientPID:         raw.ClientPID,
+		ClientDisplayName: raw.ClientDisplayName,
+	}
+
+	if len(raw.Request.Headers) > 0 {
+		var refererOnly struct {
+			Referer []string `json:"Referer"`
 		}
-		if k == "status" {
-			var status int
-			dec.Decode(&status)
-			le.Status = &status
-		} else {
-			skipJSONValue(dec)
+		json.Unmarshal(raw.Request.Headers, &refererOnly)
+		if len(refererOnly.Referer) > 0 {
+			le.Referer = refererOnly.Referer[0]
 		}
 	}
-	dec.Token()
+
+	if t, err := time.Parse(time.RFC3339Nano, raw.Timestamp); err == nil {
+		le.Timestamp = t
+		le.UpdatedAt = t
+	}
+
+	if raw.Response != nil {
+		le.Status = &raw.Response.Status
+	}
+
+	return le
 }
 
 func (s *Store) persistIndex() error {
