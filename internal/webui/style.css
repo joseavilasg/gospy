@@ -277,6 +277,8 @@ header .stats {
     border-radius: var(--radius-md);
     background: transparent;
     white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
 }
 .filter-chips-more:hover { border-color: var(--accent); background: var(--accent-bg); }
 .filter-chip {
