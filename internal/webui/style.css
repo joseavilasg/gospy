@@ -1670,6 +1670,7 @@ pre.body-content {
 .process-filter-option:hover { background: var(--bg-hover-accent); }
 .process-filter-option.selected { color: var(--accent); }
 .process-filter-option .check { font-size: var(--fs-sm); width: var(--sp-14); text-align: center; flex-shrink: 0; }
+.process-filter-option > span:not(.check):not(.count) { min-width: 0; word-break: break-all; }
 
 .origin-info {
     padding: var(--sp-14);
