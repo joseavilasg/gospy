@@ -8,6 +8,7 @@ const filterTypes = [];
 const filterState = {};
 let activeType = null;
 let modalSelection = [];
+let matchMode = localStorage.getItem('gospy-match-mode') || 'all';
 
 let onFilterChange = () => {};
 
@@ -32,26 +33,55 @@ export function isAnyFilterActive() {
     return filterTypes.some(f => filterState[f.type].length > 0);
 }
 
+export function getMatchMode() { return matchMode; }
+export function setMatchMode(mode) {
+    matchMode = mode;
+    localStorage.setItem('gospy-match-mode', mode);
+    onFilterChange();
+}
+
+export function clearAllFilters() {
+    for (const config of filterTypes) setFilter(config.type, []);
+    matchMode = 'all';
+    localStorage.removeItem('gospy-match-mode');
+    onFilterChange();
+}
+
 export function applyFilters(result) {
-    for (const config of filterTypes) {
-        const values = filterState[config.type];
-        if (values.length > 0) {
+    const active = filterTypes.filter(f => filterState[f.type].length > 0);
+    if (active.length === 0) return result;
+
+    if (matchMode === 'all') {
+        for (const config of active) {
+            const values = filterState[config.type];
             result = result.filter(r => values.includes(config.extractValue(r)));
         }
+        return result;
     }
-    return result;
+    return result.filter(r => active.some(config =>
+        filterState[config.type].includes(config.extractValue(r))
+    ));
 }
 
 export function getFilterChipsData() {
     const chips = [];
-    for (const config of filterTypes) {
+    const connector = matchMode === 'all' ? 'AND' : 'OR';
+    const activeIndices = [];
+    for (let i = 0; i < filterTypes.length; i++) {
+        if (filterState[filterTypes[i].type].length > 0) activeIndices.push(i);
+    }
+    for (let j = 0; j < activeIndices.length; j++) {
+        const i = activeIndices[j];
+        const config = filterTypes[i];
         const values = filterState[config.type];
-        if (values.length > 0) {
-            const names = values.slice(0, 2).join(', ');
-            const extra = values.length > 2 ? ` +${values.length - 2}` : '';
-            const closeSVG = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4L12 12M12 4L4 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
-            const html = `<span class="filter-chip grouped" data-type="${config.type}"><span class="filter-chip-label">${escapeHtml(config.label)}:</span> <span class="filter-chip-value">${escapeHtml(names + extra)}</span><span class="filter-chip-close" data-type="${config.type}">${closeSVG}</span></span>`;
-            chips.push({ type: config.type, html });
+        const names = values.slice(0, 2).join(', ');
+        const extra = values.length > 2 ? ` +${values.length - 2}` : '';
+        const extraHtml = extra ? `<span class="filter-chip-extra">${escapeHtml(extra)}</span>` : '';
+        const closeSVG = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4L12 12M12 4L4 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
+        const html = `<span class="filter-chip grouped" data-type="${config.type}"><span class="filter-chip-label">${escapeHtml(config.label)}:</span> <span class="filter-chip-value">${escapeHtml(names)}</span>${extraHtml}<span class="filter-chip-close" data-type="${config.type}">${closeSVG}</span></span>`;
+        chips.push({ type: config.type, html });
+        if (j < activeIndices.length - 1) {
+            chips.push({ type: 'connector', html: `<span class="filter-chip-connector">${connector}</span>` });
         }
     }
     return chips;
@@ -59,6 +89,10 @@ export function getFilterChipsData() {
 
 export function closeChip(type) {
     setFilter(type, []);
+    if (!isAnyFilterActive()) {
+        matchMode = 'all';
+        localStorage.removeItem('gospy-match-mode');
+    }
     onFilterChange();
 }
 

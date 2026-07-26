@@ -266,6 +266,45 @@ header .stats {
     min-height: 0;
 }
 .filter-chips:empty { display: none; }
+/* Active filters header + match mode toggle */
+.filter-bar-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--sp-4) var(--sp-8);
+}
+.filter-bar-label {
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.filter-mode-toggle {
+    display: flex;
+    background: var(--bg-focus);
+    border-radius: var(--radius-sm);
+    padding: 2px;
+}
+.filter-mode-btn {
+    padding: var(--sp-2) var(--sp-6);
+    border-radius: calc(var(--radius-sm) - 2px);
+    font-size: var(--fs-xs);
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+.filter-mode-btn.active {
+    background: var(--bg-active);
+    color: var(--text-secondary);
+}
+.filter-chip-connector {
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    padding: 0 var(--sp-2);
+    align-self: center;
+    flex-shrink: 0;
+}
 .filter-chips-more {
     flex-shrink: 0;
     color: var(--accent);
@@ -294,7 +333,21 @@ header .stats {
 }
 .filter-chip:hover { border-color: var(--accent); }
 .filter-chip-label { color: var(--accent); opacity: 0.75; line-height: 1; }
-.filter-chip-value { color: var(--accent); line-height: 1; }
+.filter-chip-value {
+    color: var(--accent);
+    line-height: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.filter-chip-extra {
+    color: var(--accent);
+    line-height: 1;
+    flex-shrink: 0;
+    white-space: nowrap;
+    margin-left: auto;
+}
 .filter-chip-close {
     display: inline-flex;
     align-items: center;
@@ -306,6 +359,9 @@ header .stats {
     width: var(--sp-16);
     height: var(--sp-16);
 }
+.filter-chip:not(:has(.filter-chip-extra)) .filter-chip-close {
+    margin-left: auto;
+}
 .filter-chip-close:hover { opacity: 1; }
 .filter-chip.grouped { cursor: pointer; }
 .filter-chip.grouped:hover { border-color: var(--accent); }
@@ -314,7 +370,7 @@ header .stats {
     top: 100%;
     left: 0;
     right: 0;
-    background: var(--bg-elevated);
+    background: var(--bg-panel);
     border: 1px solid var(--bg-active);
     border-radius: var(--radius-xl);
     padding: var(--sp-8);
@@ -326,8 +382,16 @@ header .stats {
 }
 .filter-overflow-chips {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
     gap: var(--sp-6);
+}
+.filter-overflow-chips .filter-chip {
+    width: 100%;
+}
+.filter-overflow-chips .filter-chip-connector {
+    text-align: center;
+    padding: var(--sp-2) 0;
+    font-weight: 500;
 }
 .filter-overflow-divider {
     height: 1px;

@@ -1,7 +1,7 @@
 import { setFilterText, setFocusEnabled, setLastTimestamp, selectedId, requests, rules, setRules, setSignatureCache } from './state.js';
 import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch } from './api.js';
 import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, openRuleModal, closeRuleModal, openRuleModalFromRequest, extractRefererOrigin } from './render.js';
-import { registerFilter, setOnFilterChange, initFilterPopover, openFilterPopover, closeFilterPopover, closeChip, openChip, getFilterChipsData } from './filters.js';
+import { registerFilter, setOnFilterChange, initFilterPopover, openFilterPopover, closeFilterPopover, closeChip, openChip, getFilterChipsData, getMatchMode, setMatchMode, clearAllFilters } from './filters.js';
 
 registerFilter({
     type: 'process',
@@ -999,9 +999,12 @@ const filterChips = document.getElementById('filterChips');
 const filterOverflowPanel = document.getElementById('filterOverflowPanel');
 const filterOverflowChips = document.getElementById('filterOverflowChips');
 const overflowAddFilterBtn = document.getElementById('overflowAddFilterBtn');
+const filterBarHeader = document.getElementById('filterBarHeader');
+const filterModeToggle = document.getElementById('filterModeToggle');
 
 function refreshFilters() {
     invalidateFilterCache();
+    updateToggleUI();
     renderFilterChips();
     renderList();
 }
@@ -1034,10 +1037,17 @@ function renderFilterChips() {
                 lastFit = i + 1;
             }
             if (lastFit < chipEls.length) {
+                lastFit = Math.max(1, lastFit);
                 const overflowCount = chipEls.length - lastFit;
                 const visible = chips.slice(0, lastFit).map(c => c.html).join('');
                 filterChips.innerHTML = visible + `<span class="filter-chips-more" id="filterChipsMore">+${overflowCount} more</span>`;
                 document.getElementById('filterChipsMore').addEventListener('click', toggleOverflowPanel);
+                const chipSpans = filterChips.querySelectorAll('.filter-chip');
+                const lastChip = chipSpans[chipSpans.length - 1];
+                if (lastChip) {
+                    lastChip.style.flex = '1';
+                    lastChip.style.minWidth = '0';
+                }
             }
         }
         renderOverflowChips();
@@ -1106,6 +1116,22 @@ const addFilterBtn = document.getElementById('addFilterBtn');
 const filterPopover = document.getElementById('filterPopover');
 
 initFilterPopover();
+
+// Match mode toggle
+function updateToggleUI() {
+    const mode = getMatchMode();
+    filterModeToggle.querySelectorAll('.filter-mode-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.mode === mode);
+    });
+}
+
+filterModeToggle.addEventListener('click', (e) => {
+    const btn = e.target.closest('.filter-mode-btn');
+    if (!btn) return;
+    setMatchMode(btn.dataset.mode);
+});
+
+updateToggleUI();
 
 addFilterBtn.addEventListener('click', (e) => {
     e.stopPropagation();

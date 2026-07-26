@@ -57,6 +57,13 @@
                 </div>
                 <div class="filter-chips" id="filterChips"></div>
                 <div class="filter-overflow-panel" id="filterOverflowPanel" style="display:none">
+                    <div class="filter-bar-header" id="filterBarHeader">
+                        <span class="filter-bar-label">Active filters</span>
+                        <div class="filter-mode-toggle" id="filterModeToggle">
+                            <button class="filter-mode-btn active" data-mode="all">Match: All</button>
+                            <button class="filter-mode-btn" data-mode="any">Match: Any</button>
+                        </div>
+                    </div>
                     <div class="filter-overflow-chips" id="filterOverflowChips"></div>
                     <div class="filter-overflow-divider"></div>
                     <button class="filter-add-btn" id="overflowAddFilterBtn">+ Add filter</button>
