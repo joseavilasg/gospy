@@ -117,6 +117,29 @@ func (s *Store) loadIndex() error {
 	return nil
 }
 
+func skipJSONValue(dec *json.Decoder) error {
+	depth := 0
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		switch tok {
+		case json.Delim('{'), json.Delim('['):
+			depth++
+		case json.Delim('}'), json.Delim(']'):
+			depth--
+			if depth == 0 {
+				return nil
+			}
+		default:
+			if depth == 0 {
+				return nil
+			}
+		}
+	}
+}
+
 func (s *Store) buildIndex() error {
 	pattern := filepath.Join(s.dir, "*.json")
 	matches, err := filepath.Glob(pattern)
@@ -124,61 +147,57 @@ func (s *Store) buildIndex() error {
 		return fmt.Errorf("glob history: %w", err)
 	}
 
-	type entryHeader struct {
-		ID                string `json:"id"`
-		Timestamp         string `json:"timestamp"`
-		ReplayedFrom      string `json:"replayedFrom,omitempty"`
-		AppliedAction     string `json:"appliedAction,omitempty"`
-		RuleName          string `json:"ruleName,omitempty"`
-		ClientProcess     string `json:"clientProcess,omitempty"`
-		ClientPID         uint32 `json:"clientPid,omitempty"`
-		ClientDisplayName string `json:"clientDisplayName,omitempty"`
-		Request           struct {
-			Method  string              `json:"method"`
-			URL     string              `json:"url"`
-			Host    string              `json:"host"`
-			Headers map[string][]string `json:"headers"`
-		} `json:"request"`
-		Response *struct {
-			Status int `json:"status"`
-		} `json:"response,omitempty"`
-	}
-
 	for _, path := range matches {
 		file, err := os.Open(path)
 		if err != nil {
 			continue
 		}
-		decoder := json.NewDecoder(file)
-		var h entryHeader
-		if err := decoder.Decode(&h); err != nil {
+
+		dec := json.NewDecoder(file)
+		if _, err := dec.Token(); err != nil {
 			file.Close()
 			continue
 		}
-		file.Close()
 
-		le := &ListEntry{
-			ID:                h.ID,
-			Method:            h.Request.Method,
-			URL:               h.Request.URL,
-			Host:              h.Request.Host,
-			ReplayedFrom:      h.ReplayedFrom,
-			AppliedAction:     h.AppliedAction,
-			RuleName:          h.RuleName,
-			ClientProcess:     h.ClientProcess,
-			ClientPID:         h.ClientPID,
-			ClientDisplayName: h.ClientDisplayName,
+		le := &ListEntry{}
+		for dec.More() {
+			key, _ := dec.Token()
+			k, ok := key.(string)
+			if !ok {
+				skipJSONValue(dec)
+				continue
+			}
+			switch k {
+			case "id":
+				dec.Decode(&le.ID)
+			case "timestamp":
+				var ts string
+				dec.Decode(&ts)
+				if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+					le.Timestamp = t
+					le.UpdatedAt = t
+				}
+			case "replayedFrom":
+				dec.Decode(&le.ReplayedFrom)
+			case "appliedAction":
+				dec.Decode(&le.AppliedAction)
+			case "ruleName":
+				dec.Decode(&le.RuleName)
+			case "clientProcess":
+				dec.Decode(&le.ClientProcess)
+			case "clientPid":
+				dec.Decode(&le.ClientPID)
+			case "clientDisplayName":
+				dec.Decode(&le.ClientDisplayName)
+			case "request":
+				s.decodeRequestHeader(dec, le)
+			case "response":
+				s.decodeResponseStatus(dec, le)
+			default:
+				skipJSONValue(dec)
+			}
 		}
-		if refs, ok := h.Request.Headers["Referer"]; ok && len(refs) > 0 {
-			le.Referer = refs[0]
-		}
-		if t, err := time.Parse(time.RFC3339Nano, h.Timestamp); err == nil {
-			le.Timestamp = t
-			le.UpdatedAt = t
-		}
-		if h.Response != nil {
-			le.Status = &h.Response.Status
-		}
+		file.Close()
 		s.index = append(s.index, le)
 	}
 
@@ -187,6 +206,59 @@ func (s *Store) buildIndex() error {
 	})
 
 	return s.persistIndex()
+}
+
+func (s *Store) decodeRequestHeader(dec *json.Decoder, le *ListEntry) {
+	if _, err := dec.Token(); err != nil {
+		return
+	}
+	for dec.More() {
+		key, _ := dec.Token()
+		k, ok := key.(string)
+		if !ok {
+			skipJSONValue(dec)
+			continue
+		}
+		switch k {
+		case "method":
+			dec.Decode(&le.Method)
+		case "url":
+			dec.Decode(&le.URL)
+		case "host":
+			dec.Decode(&le.Host)
+		case "headers":
+			var headers map[string][]string
+			dec.Decode(&headers)
+			if refs, ok := headers["Referer"]; ok && len(refs) > 0 {
+				le.Referer = refs[0]
+			}
+		default:
+			skipJSONValue(dec)
+		}
+	}
+	dec.Token()
+}
+
+func (s *Store) decodeResponseStatus(dec *json.Decoder, le *ListEntry) {
+	if _, err := dec.Token(); err != nil {
+		return
+	}
+	for dec.More() {
+		key, _ := dec.Token()
+		k, ok := key.(string)
+		if !ok {
+			skipJSONValue(dec)
+			continue
+		}
+		if k == "status" {
+			var status int
+			dec.Decode(&status)
+			le.Status = &status
+		} else {
+			skipJSONValue(dec)
+		}
+	}
+	dec.Token()
 }
 
 func (s *Store) persistIndex() error {
