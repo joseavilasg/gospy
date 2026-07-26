@@ -19,6 +19,14 @@ registerFilter({
     searchPlaceholder: 'Search referers...',
 });
 
+registerFilter({
+    type: 'host',
+    label: 'Host',
+    localStorageKey: 'gospy-host-filter',
+    extractValue: (r) => r.host || '',
+    searchPlaceholder: 'Search hosts...',
+});
+
 document.getElementById('filterInput').addEventListener('input', (e) => {
     setFilterText(e.target.value.trim());
     invalidateFilterCache();
