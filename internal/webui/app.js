@@ -1084,7 +1084,6 @@ filterOverflowChips.addEventListener('click', (e) => {
     const close = e.target.closest('.filter-chip-close');
     if (close) {
         closeChip(close.dataset.type);
-        closeOverflowPanel();
         return;
     }
     const chip = e.target.closest('.filter-chip');
