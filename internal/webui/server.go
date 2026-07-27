@@ -74,6 +74,7 @@ type Server struct {
 	rulesStore  *rules.Store
 	engine      *rules.Engine
 	addr        string
+	proxyAddr   string
 	resolver    ProcessResolver
 	sigCache    SignatureChecker
 }
@@ -89,7 +90,7 @@ type SignatureChecker interface {
 	OnUpdate(fn func(*proxy.SignatureResult))
 }
 
-func NewServer(addr string, h *history.Store, ignore IgnoreChecker, focus FocusChecker, rulesStore *rules.Store, engine *rules.Engine, resolver ProcessResolver, sigCache SignatureChecker) *Server {
+func NewServer(addr string, h *history.Store, ignore IgnoreChecker, focus FocusChecker, rulesStore *rules.Store, engine *rules.Engine, proxyAddr string, resolver ProcessResolver, sigCache SignatureChecker) *Server {
 	return &Server{
 		history:     h,
 		ignoreStore: ignore,
@@ -97,6 +98,7 @@ func NewServer(addr string, h *history.Store, ignore IgnoreChecker, focus FocusC
 		rulesStore:  rulesStore,
 		engine:      engine,
 		addr:        addr,
+		proxyAddr:   proxyAddr,
 		resolver:    resolver,
 		sigCache:    sigCache,
 	}
@@ -308,17 +310,17 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	binDir := filepath.Join(s.history.Dir(), "bin")
-	if entry.Request.BodyFile != "" {
+	if entry.Request.BodyFile != "" && entry.Request.IsBinaryBody {
 		if data, err := os.ReadFile(filepath.Join(binDir, entry.Request.BodyFile)); err == nil {
 			entry.Request.BodyHex = generateHexDump(data, hexDumpMaxLines)
 		}
 	}
-	if entry.Response != nil && entry.Response.BodyFile != "" {
+	if entry.Response != nil && entry.Response.BodyFile != "" && entry.Response.IsBinaryBody {
 		if data, err := os.ReadFile(filepath.Join(binDir, entry.Response.BodyFile)); err == nil {
 			entry.Response.BodyHex = generateHexDump(data, hexDumpMaxLines)
 		}
 	}
-	if entry.ServerResponse != nil && entry.ServerResponse.BodyFile != "" {
+	if entry.ServerResponse != nil && entry.ServerResponse.BodyFile != "" && entry.ServerResponse.IsBinaryBody {
 		if data, err := os.ReadFile(filepath.Join(binDir, entry.ServerResponse.BodyFile)); err == nil {
 			entry.ServerResponse.BodyHex = generateHexDump(data, hexDumpMaxLines)
 		}
@@ -391,18 +393,16 @@ func (s *Server) handleCopyCurl(w http.ResponseWriter, r *http.Request, id strin
 
 	var lines []string
 
-	hasBody := (req.Body != "" || req.BodyFile != "")
+	innerParts := []string{"curl", "--ssl-no-revoke"}
 
-	// Build the inner curl command (target server)
-	innerParts := []string{"curl"}
+	if s.proxyAddr != "" {
+		proxyURL := "http://127.0.0.1" + s.proxyAddr
+		innerParts = append(innerParts, "-x", fmt.Sprintf("'%s'", proxyURL))
+	}
 
 	innerParts = append(innerParts, fmt.Sprintf("'%s'", reqURL))
 
-	// Method flag - only when not implied by data flags and not default GET/HEAD
-	addMethodFlag := method != "GET" && method != "HEAD" && !(method == "POST" && hasBody)
-	if addMethodFlag {
-		innerParts = append(innerParts, "-X", method)
-	}
+	innerParts = append(innerParts, "-X", method)
 
 	// Sort headers alphabetically
 	type headerPair struct {

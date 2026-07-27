@@ -237,7 +237,7 @@ export function renderDetail(req, activeTab = 'request') {
     }
 
     const SVG_COPY_SMALL = '<svg width="10" height="10" viewBox="0 0 16 16"><rect x="5" y="5" width="9" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-7A1.5 1.5 0 013.5 1h7A1.5 1.5 0 0112 2.5V5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
-    function buildBodyViewer(target, body, rawBody, compression, hasEdited, editedBody, contentType, isModified, modifiedBody, modifiedContentType, isMocked, mockedBody, mockedContentType, canEdit, bodyFile, bodySize, entryId) {
+    function buildBodyViewer(target, body, rawBody, compression, hasEdited, editedBody, contentType, isModified, modifiedBody, modifiedContentType, isMocked, mockedBody, mockedContentType, canEdit, bodyFile, bodySize, entryId, isBinaryBody) {
         const badges = [];
         if (compression) badges.push(`<span class="body-badge body-badge-compression">${escapeHtml(compression)}</span>`);
         if (hasEdited) badges.push(`<span class="body-badge body-badge-edited">edited</span>`);
@@ -245,7 +245,7 @@ export function renderDetail(req, activeTab = 'request') {
         if (isMocked) badges.push(`<span class="body-badge body-badge-mocked">mocked</span>`);
         const badgesHtml = badges.join('');
 
-        const isBinary = !!bodyFile;
+        const isBinary = !!isBinaryBody;
         if (isBinary) canEdit = false;
 
         const viewModeHtml = `<button class="body-tool body-view active" data-action="set-view" data-target="${target}" data-view="pretty">Pretty</button><button class="body-tool body-view" data-action="set-view" data-target="${target}" data-view="raw">Raw</button>`;
@@ -325,19 +325,21 @@ export function renderDetail(req, activeTab = 'request') {
 
     const reqBodyFile = req.request.bodyFile || '';
     const reqBodySize = req.request.bodySize || 0;
+    const reqIsBinary = req.request.isBinaryBody || false;
     const respBodyFile = req.response?.bodyFile || '';
     const respBodySize = req.response?.bodySize || 0;
+    const respIsBinary = req.response?.isBinaryBody || false;
 
     let reqBodyHtml = '';
     if (reqBody || reqBodyFile) {
         const reqHasEdited = req.request.editedBody && req.request.editedBody !== '';
-        reqBodyHtml = buildBodyViewer('request', reqBody, reqRawBody, reqCompression, reqHasEdited, req.request.editedBody, reqContentType, isModified, serverReqBody, serverReqContentType, false, '', '', canEdit, reqBodyFile, reqBodySize, req.id);
+        reqBodyHtml = buildBodyViewer('request', reqBody, reqRawBody, reqCompression, reqHasEdited, req.request.editedBody, reqContentType, isModified, serverReqBody, serverReqContentType, false, '', '', canEdit, reqBodyFile, reqBodySize, req.id, reqIsBinary);
     }
 
     let respBodyHtml = '';
     if (respBody || respBodyFile) {
         const respHasEdited = req.response && req.response.editedBody && req.response.editedBody !== '';
-        respBodyHtml = buildBodyViewer('response', respBody, respRawBody, respCompression, respHasEdited && canEdit, req.response.editedBody, respContentType, false, '', '', isMocked, serverRespBody, serverRespContentType, canEdit, respBodyFile, respBodySize, req.id);
+        respBodyHtml = buildBodyViewer('response', respBody, respRawBody, respCompression, respHasEdited && canEdit, req.response.editedBody, respContentType, false, '', '', isMocked, serverRespBody, serverRespContentType, canEdit, respBodyFile, respBodySize, req.id, respIsBinary);
     }
 
     let replayedFromHtml = '';

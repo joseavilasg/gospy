@@ -45,18 +45,20 @@ type RequestRecord struct {
 	BodyFile      string              `json:"bodyFile,omitempty"`
 	BodySize      int64               `json:"bodySize,omitempty"`
 	BodyHex       string              `json:"bodyHex,omitempty"`
+	IsBinaryBody  bool                `json:"isBinaryBody,omitempty"`
 }
 
 type ResponseRecord struct {
-	Status      int                 `json:"status"`
-	Headers     map[string][]string `json:"headers"`
-	Body        string              `json:"body,omitempty"`
-	RawBody     string              `json:"rawBody,omitempty"`
-	Compression string              `json:"compression,omitempty"`
-	EditedBody  string              `json:"editedBody,omitempty"`
-	BodyFile    string              `json:"bodyFile,omitempty"`
-	BodySize    int64               `json:"bodySize,omitempty"`
-	BodyHex     string              `json:"bodyHex,omitempty"`
+	Status       int                 `json:"status"`
+	Headers      map[string][]string `json:"headers"`
+	Body         string              `json:"body,omitempty"`
+	RawBody      string              `json:"rawBody,omitempty"`
+	Compression  string              `json:"compression,omitempty"`
+	EditedBody   string              `json:"editedBody,omitempty"`
+	BodyFile     string              `json:"bodyFile,omitempty"`
+	BodySize     int64               `json:"bodySize,omitempty"`
+	BodyHex      string              `json:"bodyHex,omitempty"`
+	IsBinaryBody bool                `json:"isBinaryBody,omitempty"`
 }
 
 type Store struct {

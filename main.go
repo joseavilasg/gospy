@@ -112,7 +112,7 @@ func main() {
 	proxy.LogInfo(fmt.Sprintf("Proxy listening on %s", *proxyAddr))
 
 	go func() {
-		if err := webui.NewServer(*uiAddr, hist, ignoreStore, focusStore, rulesStore, ruleEngine, srv.Resolver(), srv.SigCache()).ListenAndServe(); err != nil {
+		if err := webui.NewServer(*uiAddr, hist, ignoreStore, focusStore, rulesStore, ruleEngine, *proxyAddr, srv.Resolver(), srv.SigCache()).ListenAndServe(); err != nil {
 			proxy.LogError(fmt.Sprintf("Web UI error: %v", err))
 		}
 	}()
