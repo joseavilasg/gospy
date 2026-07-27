@@ -190,6 +190,12 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
         case 'copy-body':
             copyBody(btn.dataset.target);
             break;
+        case 'copy-hex':
+            copyHex(btn.dataset.target);
+            break;
+        case 'download-bin':
+            downloadBin(btn.dataset.target, btn.dataset.entryId);
+            break;
         case 'copy-headers':
             copyHeaders(btn.dataset.target);
             break;
@@ -296,16 +302,20 @@ document.getElementById('detailPanel').addEventListener('detail-rendered', () =>
 });
 
 function setView(target, view) {
-    const pre = document.querySelector(`pre[data-body-target="${target}"]`);
-    if (!pre) return;
-    pre.dataset.viewMode = view;
-    const sectionPanel = pre.closest('.section-panel');
-    if (sectionPanel) {
-        sectionPanel.querySelectorAll('[data-action="set-view"]').forEach(b => {
-            b.classList.toggle('active', b.dataset.view === view);
-        });
+    const sectionPanel = document.querySelector(`.section-panel[data-body-target="${target}"]`);
+    if (!sectionPanel) return;
+    sectionPanel.querySelectorAll('[data-action="set-view"]').forEach(b => {
+        b.classList.toggle('active', b.dataset.view === view);
+    });
+    const pre = sectionPanel.querySelector('pre[data-body-target]');
+    if (pre && pre.dataset.binary) {
+        const placeholder = sectionPanel.querySelector('.binary-placeholder');
+        if (placeholder) placeholder.style.display = view === 'pretty' ? '' : 'none';
+        pre.style.display = view === 'raw' ? '' : 'none';
+    } else if (pre) {
+        pre.dataset.viewMode = view;
+        renderCurrentContent(target);
     }
-    renderCurrentContent(target);
 }
 
 function setContent(target, content) {
@@ -323,7 +333,7 @@ function setContent(target, content) {
 
 function renderCurrentContent(target) {
     const pre = document.querySelector(`pre[data-body-target="${target}"]`);
-    if (!pre) return;
+    if (!pre || pre.dataset.binary) return;
     const sectionPanel = pre.closest('.section-panel');
     if (!sectionPanel) return;
 
@@ -368,6 +378,22 @@ function copyBody(target) {
 
     const content = pre.dataset.edited || pre.dataset.decoded || pre.textContent || '';
     navigator.clipboard.writeText(content);
+}
+
+function copyHex(target) {
+    const pre = document.querySelector(`pre[data-body-target="${target}"][data-binary]`);
+    if (!pre) return;
+    navigator.clipboard.writeText(pre.textContent || '');
+}
+
+function downloadBin(target, entryId) {
+    if (!entryId || !target) return;
+    const a = document.createElement('a');
+    a.href = `/api/requests/${entryId}/body-bin?target=${target}`;
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
 }
 
 function copyHeaders(target) {

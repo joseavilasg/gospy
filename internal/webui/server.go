@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -190,6 +192,45 @@ func (s *Server) handleListRequests(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(filtered)
 }
 
+const hexDumpMaxLines = 20
+
+func generateHexDump(data []byte, maxLines int) string {
+	if len(data) == 0 {
+		return ""
+	}
+	maxBytes := maxLines * 16
+	if len(data) < maxBytes {
+		maxBytes = len(data)
+	}
+	var sb strings.Builder
+	for i := 0; i < maxBytes; i += 16 {
+		end := i + 16
+		if end > maxBytes {
+			end = maxBytes
+		}
+		chunk := data[i:end]
+		fmt.Fprintf(&sb, "%08x: ", i)
+		hex := make([]string, 0, 16)
+		ascii := make([]byte, 0, 16)
+		for j, b := range chunk {
+			hex = append(hex, fmt.Sprintf("%02x", b))
+			if j == 7 {
+				hex = append(hex, "")
+			}
+			if b >= 32 && b <= 126 {
+				ascii = append(ascii, b)
+			} else {
+				ascii = append(ascii, '.')
+			}
+		}
+		fmt.Fprintf(&sb, "%-49s  %s\n", strings.Join(hex, " "), string(ascii))
+	}
+	if len(data) > maxBytes {
+		fmt.Fprintf(&sb, "... (%d more bytes)\n", len(data)-maxBytes)
+	}
+	return sb.String()
+}
+
 func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/requests/")
 	parts := strings.SplitN(path, "/", 2)
@@ -213,6 +254,8 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 			s.handleRevertHeaders(w, r, id)
 		case sub == "replay" && r.Method == http.MethodPost:
 			s.handleReplay(w, r, id)
+		case sub == "body-bin" && r.Method == http.MethodGet:
+			s.handleGetBodyBin(w, r, id)
 		default:
 			http.NotFound(w, r)
 		}
@@ -250,9 +293,75 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 		entry.ServerResponse.Body = proxy.DecompressBody([]byte(entry.ServerResponse.RawBody), enc)
 	}
 
+	const maxBodyLen = 2 * 1024 * 1024
+	if len(entry.Request.Body) > maxBodyLen {
+		entry.Request.Body = entry.Request.Body[:maxBodyLen] + "\n... [truncated — body too large]"
+	}
+	if entry.Response != nil && len(entry.Response.Body) > maxBodyLen {
+		entry.Response.Body = entry.Response.Body[:maxBodyLen] + "\n... [truncated — body too large]"
+	}
+	if entry.ServerResponse != nil && len(entry.ServerResponse.Body) > maxBodyLen {
+		entry.ServerResponse.Body = entry.ServerResponse.Body[:maxBodyLen] + "\n... [truncated — body too large]"
+	}
+
+	binDir := filepath.Join(s.history.Dir(), "bin")
+	if entry.Request.BodyFile != "" {
+		if data, err := os.ReadFile(filepath.Join(binDir, entry.Request.BodyFile)); err == nil {
+			entry.Request.BodyHex = generateHexDump(data, hexDumpMaxLines)
+		}
+	}
+	if entry.Response != nil && entry.Response.BodyFile != "" {
+		if data, err := os.ReadFile(filepath.Join(binDir, entry.Response.BodyFile)); err == nil {
+			entry.Response.BodyHex = generateHexDump(data, hexDumpMaxLines)
+		}
+	}
+	if entry.ServerResponse != nil && entry.ServerResponse.BodyFile != "" {
+		if data, err := os.ReadFile(filepath.Join(binDir, entry.ServerResponse.BodyFile)); err == nil {
+			entry.ServerResponse.BodyHex = generateHexDump(data, hexDumpMaxLines)
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	json.NewEncoder(w).Encode(entry)
+}
+
+func (s *Server) handleGetBodyBin(w http.ResponseWriter, r *http.Request, id string) {
+	target := r.URL.Query().Get("target")
+	if target != "request" && target != "response" {
+		http.Error(w, "invalid target", http.StatusBadRequest)
+		return
+	}
+
+	entry, err := s.history.Get(id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	var bodyFile string
+	if target == "request" {
+		bodyFile = entry.Request.BodyFile
+	} else if entry.Response != nil {
+		bodyFile = entry.Response.BodyFile
+	}
+
+	if bodyFile == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	binPath := filepath.Join(s.history.Dir(), "bin", bodyFile)
+	data, err := os.ReadFile(binPath)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-%s.bin"`, id, target))
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Write(data)
 }
 
 func (s *Server) handleSaveBody(w http.ResponseWriter, r *http.Request, id string) {

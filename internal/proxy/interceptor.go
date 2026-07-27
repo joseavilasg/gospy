@@ -17,6 +17,7 @@ import (
 
 	"github.com/andybalholm/brotli"
 	"github.com/elazarl/goproxy"
+	"github.com/google/uuid"
 )
 
 type requestUserData struct {
@@ -67,15 +68,27 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 	body := ""
 	rawBody := ""
 	compression := ""
+	bodyFile := ""
+	var bodySize int64
+	var entryID string
 	if req.Body != nil {
 		var buf bytes.Buffer
 		if _, err := io.Copy(&buf, req.Body); err == nil {
 			data := buf.Bytes()
 			ce := req.Header.Get("Content-Encoding")
-			result := decompressBody(data, ce)
-			body = result.Decoded
-			rawBody = result.Raw
-			compression = result.Compression
+			ct := req.Header.Get("Content-Type")
+			if isBinaryBody(data, ce, ct) {
+				entryID = uuid.New().String()
+				if filename, err := ic.history.SaveBinaryBody(entryID, "req", data); err == nil {
+					bodyFile = filename
+					bodySize = int64(len(data))
+				}
+			} else {
+				result := decompressBody(data, ce)
+				body = result.Decoded
+				rawBody = result.Raw
+				compression = result.Compression
+			}
 		}
 		req.Body = io.NopCloser(&buf)
 	}
@@ -93,6 +106,8 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 		Body:        body,
 		RawBody:     rawBody,
 		Compression: compression,
+		BodyFile:    bodyFile,
+		BodySize:    bodySize,
 	}
 
 	var clientProcess, clientDisplayName, clientPath string
@@ -113,6 +128,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 
 	if rule == nil || rule.Action == rules.ActionPassthrough {
 		entry := &history.Entry{
+			ID:                entryID,
 			Request:           originalRequest,
 			ClientProcess:     clientProcess,
 			ClientPID:         clientPID,
@@ -128,6 +144,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 	switch rule.Action {
 	case rules.ActionDrop:
 		entry := &history.Entry{
+			ID:                entryID,
 			Request:           originalRequest,
 			AppliedAction:     string(rules.ActionDrop),
 			RuleName:          rule.Name,
@@ -156,6 +173,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 
 	case rules.ActionMock:
 		entry := &history.Entry{
+			ID:                entryID,
 			Request:           originalRequest,
 			AppliedAction:     string(rules.ActionMock),
 			RuleName:          rule.Name,
@@ -195,6 +213,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 		}
 
 		entry := &history.Entry{
+			ID:      entryID,
 			Request: originalRequest,
 			ServerRequest: &history.RequestRecord{
 				Method:  req.Method,
@@ -218,6 +237,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 
 	case rules.ActionResponseMock:
 		entry := &history.Entry{
+			ID:                entryID,
 			Request:           originalRequest,
 			AppliedAction:     string(rules.ActionResponseMock),
 			RuleName:          rule.Name,
@@ -237,6 +257,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 	}
 
 	entry := &history.Entry{
+		ID:            entryID,
 		Request:       originalRequest,
 		AppliedAction: string(rule.Action),
 		RuleName:      rule.Name,
@@ -261,11 +282,11 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 		reqURL += "?" + ctx.Req.URL.RawQuery
 	}
 
-	rawBody := ""
+	var bodyData []byte
 	if resp.Body != nil {
 		var buf bytes.Buffer
 		if _, err := io.Copy(&buf, resp.Body); err == nil {
-			rawBody = buf.String()
+			bodyData = buf.Bytes()
 		}
 		resp.Body = io.NopCloser(&buf)
 	}
@@ -273,11 +294,23 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 	if ud, ok := ctx.UserData.(*requestUserData); ok {
 		entry, err := ic.history.Get(ud.entryID)
 		if err == nil {
-			entry.ServerResponse = &history.ResponseRecord{
+			sresp := &history.ResponseRecord{
 				Status:  resp.StatusCode,
 				Headers: resp.Header,
-				RawBody: rawBody,
 			}
+			if len(bodyData) > 0 {
+				ce := resp.Header.Get("Content-Encoding")
+				ct := resp.Header.Get("Content-Type")
+				if isBinaryBody(bodyData, ce, ct) {
+					if filename, err := ic.history.SaveBinaryBody(entry.ID, "sresp", bodyData); err == nil {
+						sresp.BodyFile = filename
+						sresp.BodySize = int64(len(bodyData))
+					}
+				} else {
+					sresp.RawBody = string(bodyData)
+				}
+			}
+			entry.ServerResponse = sresp
 			fakeResp := buildMockResponse(ctx.Req, ud.mockResponse)
 			entry.Response = &history.ResponseRecord{
 				Status:  fakeResp.StatusCode,
@@ -293,11 +326,23 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 	if ud, ok := ctx.UserData.(*entryUserData); ok {
 		entry, err := ic.history.Get(ud.entryID)
 		if err == nil {
-			entry.Response = &history.ResponseRecord{
+			respRec := &history.ResponseRecord{
 				Status:  resp.StatusCode,
 				Headers: resp.Header,
-				RawBody: rawBody,
 			}
+			if len(bodyData) > 0 {
+				ce := resp.Header.Get("Content-Encoding")
+				ct := resp.Header.Get("Content-Type")
+				if isBinaryBody(bodyData, ce, ct) {
+					if filename, err := ic.history.SaveBinaryBody(entry.ID, "resp", bodyData); err == nil {
+						respRec.BodyFile = filename
+						respRec.BodySize = int64(len(bodyData))
+					}
+				} else {
+					respRec.RawBody = string(bodyData)
+				}
+			}
+			entry.Response = respRec
 			_ = ic.history.Update(entry)
 			LogResponse(entry.ID, ctx.Req.Method, reqURL, resp.StatusCode, resp.Header.Get("Content-Type"))
 		}
@@ -394,6 +439,7 @@ func ReadBodyString(body io.Reader) string {
 func IsTextResponse(contentType string) bool {
 	textTypes := []string{
 		"application/json",
+		"application/x-www-form-urlencoded",
 		"text/html",
 		"text/plain",
 		"text/css",
@@ -401,10 +447,32 @@ func IsTextResponse(contentType string) bool {
 		"application/javascript",
 		"application/xml",
 		"text/xml",
+		"text/csv",
+		"text/markdown",
 	}
 	ct := strings.ToLower(contentType)
 	for _, t := range textTypes {
 		if strings.Contains(ct, t) {
+			return true
+		}
+	}
+	return false
+}
+
+func isBinaryBody(data []byte, contentEncoding, contentType string) bool {
+	if len(data) == 0 {
+		return false
+	}
+	isCompressed := contentEncoding != ""
+	if isCompressed {
+		return !IsTextResponse(contentType)
+	}
+	if !IsTextResponse(contentType) {
+		return true
+	}
+	checkLen := min(8192, len(data))
+	for i := 0; i < checkLen; i++ {
+		if data[i] == 0 {
 			return true
 		}
 	}

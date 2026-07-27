@@ -1011,9 +1011,26 @@ pre {
 pre.body-content {
     margin-top: 0;
     padding: var(--sp-14);
+    font-family: monospace;
     font-size: var(--fs-base);
     line-height: 1.4;
     background: transparent;
+    white-space: pre;
+}
+.binary-placeholder {
+    padding: var(--sp-20) var(--sp-14);
+    color: var(--text-muted);
+    font-size: var(--fs-sm);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-4);
+}
+/* Binary placeholder icon - Lucide binary (lucide.dev/icons/binary) */
+.binary-icon {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    opacity: 0.6;
 }
 .json-viewer-container {
     padding: var(--sp-14);

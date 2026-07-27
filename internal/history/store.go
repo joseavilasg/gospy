@@ -42,6 +42,9 @@ type RequestRecord struct {
 	RawBody       string              `json:"rawBody,omitempty"`
 	Compression   string              `json:"compression,omitempty"`
 	EditedBody    string              `json:"editedBody,omitempty"`
+	BodyFile      string              `json:"bodyFile,omitempty"`
+	BodySize      int64               `json:"bodySize,omitempty"`
+	BodyHex       string              `json:"bodyHex,omitempty"`
 }
 
 type ResponseRecord struct {
@@ -51,6 +54,9 @@ type ResponseRecord struct {
 	RawBody     string              `json:"rawBody,omitempty"`
 	Compression string              `json:"compression,omitempty"`
 	EditedBody  string              `json:"editedBody,omitempty"`
+	BodyFile    string              `json:"bodyFile,omitempty"`
+	BodySize    int64               `json:"bodySize,omitempty"`
+	BodyHex     string              `json:"bodyHex,omitempty"`
 }
 
 type Store struct {
@@ -59,6 +65,8 @@ type Store struct {
 	index   []*ListEntry
 	pending []*Entry
 }
+
+func (s *Store) Dir() string { return s.dir }
 
 type ListEntry struct {
 	ID                string    `json:"id"`
@@ -502,5 +510,23 @@ func (s *Store) Clear() error {
 
 	s.index = s.index[:0]
 	s.pending = s.pending[:0]
-	return s.persistIndex()
+	if err := s.persistIndex(); err != nil {
+		return err
+	}
+	binDir := filepath.Join(s.dir, "bin")
+	os.RemoveAll(binDir)
+	return nil
+}
+
+func (s *Store) SaveBinaryBody(entryID, suffix string, data []byte) (string, error) {
+	binDir := filepath.Join(s.dir, "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		return "", fmt.Errorf("create bin dir: %w", err)
+	}
+	filename := entryID + "-" + suffix + ".bin"
+	path := filepath.Join(binDir, filename)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return "", fmt.Errorf("write binary body: %w", err)
+	}
+	return filename, nil
 }
