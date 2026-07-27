@@ -392,6 +392,12 @@ export function renderDetail(req, activeTab = 'request') {
             <div class="section-panel">
                 <div class="section-header">
                     <span class="section-title">Request</span>
+                    <div class="kebab" data-action="toggle-menu">
+                        ⋮
+                        <div class="kebab-menu">
+                            <div class="menu-item" data-action="copy-curl">⎘ Copy as cURL</div>
+                        </div>
+                    </div>
                 </div>
                 <div class="content-block">
                     <div class="content-toolbar">
@@ -408,6 +414,12 @@ export function renderDetail(req, activeTab = 'request') {
             <div class="section-panel">
                 <div class="section-header">
                     <span class="section-title">Request</span>
+                    <div class="kebab" data-action="toggle-menu">
+                        ⋮
+                        <div class="kebab-menu">
+                            <div class="menu-item" data-action="copy-curl">⎘ Copy as cURL</div>
+                        </div>
+                    </div>
                 </div>
                 <div class="content-block">
                     <pre data-url-original="${escapeHtml(req.request.url || req.request.host)}" data-url-modified="">${escapeHtml(req.request.method)} ${escapeHtml(req.request.url || req.request.host)}</pre>

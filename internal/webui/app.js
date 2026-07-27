@@ -196,6 +196,9 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
         case 'download-bin':
             downloadBin(btn.dataset.target, btn.dataset.entryId);
             break;
+        case 'copy-curl':
+            copyCurl();
+            break;
         case 'copy-headers':
             copyHeaders(btn.dataset.target);
             break;
@@ -394,6 +397,14 @@ function downloadBin(target, entryId) {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+}
+
+function copyCurl() {
+    if (!selectedId) return;
+    const proxyHost = window.location.origin;
+    fetch(`/api/requests/${selectedId}/curl?proxyHost=${encodeURIComponent(proxyHost)}`)
+        .then(r => r.text())
+        .then(text => navigator.clipboard.writeText(text));
 }
 
 function copyHeaders(target) {

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -256,6 +257,8 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 			s.handleReplay(w, r, id)
 		case sub == "body-bin" && r.Method == http.MethodGet:
 			s.handleGetBodyBin(w, r, id)
+		case sub == "curl" && r.Method == http.MethodGet:
+			s.handleCopyCurl(w, r, id)
 		default:
 			http.NotFound(w, r)
 		}
@@ -295,13 +298,13 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 
 	const maxBodyLen = 2 * 1024 * 1024
 	if len(entry.Request.Body) > maxBodyLen {
-		entry.Request.Body = entry.Request.Body[:maxBodyLen] + "\n... [truncated — body too large]"
+		entry.Request.Body = entry.Request.Body[:maxBodyLen] + "\n... [truncated - body too large]"
 	}
 	if entry.Response != nil && len(entry.Response.Body) > maxBodyLen {
-		entry.Response.Body = entry.Response.Body[:maxBodyLen] + "\n... [truncated — body too large]"
+		entry.Response.Body = entry.Response.Body[:maxBodyLen] + "\n... [truncated - body too large]"
 	}
 	if entry.ServerResponse != nil && len(entry.ServerResponse.Body) > maxBodyLen {
-		entry.ServerResponse.Body = entry.ServerResponse.Body[:maxBodyLen] + "\n... [truncated — body too large]"
+		entry.ServerResponse.Body = entry.ServerResponse.Body[:maxBodyLen] + "\n... [truncated - body too large]"
 	}
 
 	binDir := filepath.Join(s.history.Dir(), "bin")
@@ -362,6 +365,109 @@ func (s *Server) handleGetBodyBin(w http.ResponseWriter, r *http.Request, id str
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-%s.bin"`, id, target))
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Write(data)
+}
+
+func (s *Server) handleCopyCurl(w http.ResponseWriter, r *http.Request, id string) {
+	entry, err := s.history.Get(id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	proxyHost := r.URL.Query().Get("proxyHost")
+
+	req := entry.Request
+	method := req.Method
+	reqURL := req.URL
+	if reqURL == "" {
+		reqURL = "http://" + req.Host
+	}
+
+	skipHeaders := map[string]bool{
+		"host":             true,
+		"proxy-connection": true,
+		"content-length":   true,
+	}
+
+	var lines []string
+
+	hasBody := (req.Body != "" || req.BodyFile != "")
+
+	// Build the inner curl command (target server)
+	innerParts := []string{"curl"}
+
+	innerParts = append(innerParts, fmt.Sprintf("'%s'", reqURL))
+
+	// Method flag - only when not implied by data flags and not default GET/HEAD
+	addMethodFlag := method != "GET" && method != "HEAD" && !(method == "POST" && hasBody)
+	if addMethodFlag {
+		innerParts = append(innerParts, "-X", method)
+	}
+
+	// Sort headers alphabetically
+	type headerPair struct {
+		Key   string
+		Value string
+	}
+	var headers []headerPair
+	for k, vals := range req.Headers {
+		if skipHeaders[strings.ToLower(k)] {
+			continue
+		}
+		val := strings.Join(vals, ", ")
+		headers = append(headers, headerPair{k, val})
+	}
+	sort.Slice(headers, func(i, j int) bool {
+		return strings.ToLower(headers[i].Key) < strings.ToLower(headers[j].Key)
+	})
+
+	for _, h := range headers {
+		if h.Value == "" {
+			innerParts = append(innerParts, "-H", fmt.Sprintf("'%s;'", h.Key))
+		} else {
+			innerParts = append(innerParts, "-H", fmt.Sprintf("'%s: %s'", h.Key, h.Value))
+		}
+	}
+
+	// Body
+	if req.Body != "" {
+		escaped := strings.ReplaceAll(req.Body, "'", "'\\''")
+		innerParts = append(innerParts, "--data-raw", fmt.Sprintf("'%s'", escaped))
+	} else if req.BodyFile != "" {
+		// Binary - pipe from GoSpy
+		innerParts = append(innerParts, "--data-binary", "@-")
+	}
+
+	// Format with line continuations
+	if len(innerParts) <= 3 {
+		// Short command - single line: curl 'URL'
+		lines = append(lines, strings.Join(innerParts, " "))
+	} else {
+		lines = append(lines, innerParts[0]+" "+innerParts[1]+" \\")
+		for i := 2; i < len(innerParts); i += 2 {
+			flag := innerParts[i]
+			value := ""
+			if i+1 < len(innerParts) {
+				value = " " + innerParts[i+1]
+			}
+			if i+2 < len(innerParts) {
+				lines = append(lines, fmt.Sprintf("  %s%s \\", flag, value))
+			} else {
+				lines = append(lines, fmt.Sprintf("  %s%s", flag, value))
+			}
+		}
+	}
+
+	// Wrap with pipe line for binary bodies
+	if req.BodyFile != "" && proxyHost != "" {
+		pipeURL := fmt.Sprintf("%s/api/requests/%s/body-bin?target=request", proxyHost, id)
+		pipeLine := fmt.Sprintf("curl -s '%s' | \\", pipeURL)
+		lines = append([]string{pipeLine}, lines...)
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	fmt.Fprint(w, strings.Join(lines, "\n"))
 }
 
 func (s *Server) handleSaveBody(w http.ResponseWriter, r *http.Request, id string) {
