@@ -332,7 +332,7 @@ header .stats {
     font-size: var(--fs-md);
 }
 .filter-chip:hover { border-color: var(--accent); }
-.filter-chip-label { color: var(--accent); opacity: 0.75; line-height: 1; }
+.filter-chip-label { color: var(--accent); opacity: 0.75; line-height: 1; white-space: nowrap; }
 .filter-chip-value {
     color: var(--accent);
     line-height: 1;

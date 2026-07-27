@@ -78,7 +78,8 @@ export function getFilterChipsData() {
         const extra = values.length > 2 ? ` +${values.length - 2}` : '';
         const extraHtml = extra ? `<span class="filter-chip-extra">${escapeHtml(extra)}</span>` : '';
         const closeSVG = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4L12 12M12 4L4 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
-        const html = `<span class="filter-chip grouped" data-type="${config.type}"><span class="filter-chip-label">${escapeHtml(config.label)}:</span> <span class="filter-chip-value">${escapeHtml(names)}</span>${extraHtml}<span class="filter-chip-close" data-type="${config.type}">${closeSVG}</span></span>`;
+        const chipLabel = config.chipLabel || config.label;
+        const html = `<span class="filter-chip grouped" data-type="${config.type}"><span class="filter-chip-label">${escapeHtml(chipLabel)}:</span> <span class="filter-chip-value">${escapeHtml(names)}</span>${extraHtml}<span class="filter-chip-close" data-type="${config.type}">${closeSVG}</span></span>`;
         chips.push({ type: config.type, html });
         if (j < activeIndices.length - 1) {
             chips.push({ type: 'connector', html: `<span class="filter-chip-connector">${connector}</span>` });

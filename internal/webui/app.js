@@ -27,6 +27,24 @@ registerFilter({
     searchPlaceholder: 'Search hosts...',
 });
 
+registerFilter({
+    type: 'requestContentType',
+    label: 'Request Content-Type',
+    chipLabel: 'Req CT',
+    localStorageKey: 'gospy-request-ct-filter',
+    extractValue: (r) => r.requestContentType || '',
+    searchPlaceholder: 'Search request content types...',
+});
+
+registerFilter({
+    type: 'responseContentType',
+    label: 'Response Content-Type',
+    chipLabel: 'Resp CT',
+    localStorageKey: 'gospy-response-ct-filter',
+    extractValue: (r) => r.responseContentType || '',
+    searchPlaceholder: 'Search response content types...',
+});
+
 document.getElementById('filterInput').addEventListener('input', (e) => {
     setFilterText(e.target.value.trim());
     invalidateFilterCache();

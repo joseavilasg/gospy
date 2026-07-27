@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -71,20 +72,22 @@ type Store struct {
 func (s *Store) Dir() string { return s.dir }
 
 type ListEntry struct {
-	ID                string    `json:"id"`
-	Timestamp         time.Time `json:"timestamp"`
-	UpdatedAt         time.Time `json:"updatedAt"`
-	Method            string    `json:"method"`
-	URL               string    `json:"url"`
-	Host              string    `json:"host"`
-	Status            *int      `json:"status,omitempty"`
-	ReplayedFrom      string    `json:"replayedFrom,omitempty"`
-	AppliedAction     string    `json:"appliedAction,omitempty"`
-	RuleName          string    `json:"ruleName,omitempty"`
-	ClientProcess     string    `json:"clientProcess,omitempty"`
-	ClientPID         uint32    `json:"clientPid,omitempty"`
-	ClientDisplayName string    `json:"clientDisplayName,omitempty"`
-	Referer           string    `json:"referer,omitempty"`
+	ID                  string    `json:"id"`
+	Timestamp           time.Time `json:"timestamp"`
+	UpdatedAt           time.Time `json:"updatedAt"`
+	Method              string    `json:"method"`
+	URL                 string    `json:"url"`
+	Host                string    `json:"host"`
+	Status              *int      `json:"status,omitempty"`
+	ReplayedFrom        string    `json:"replayedFrom,omitempty"`
+	AppliedAction       string    `json:"appliedAction,omitempty"`
+	RuleName            string    `json:"ruleName,omitempty"`
+	ClientProcess       string    `json:"clientProcess,omitempty"`
+	ClientPID           uint32    `json:"clientPid,omitempty"`
+	ClientDisplayName   string    `json:"clientDisplayName,omitempty"`
+	Referer             string    `json:"referer,omitempty"`
+	RequestContentType  string    `json:"requestContentType,omitempty"`
+	ResponseContentType string    `json:"responseContentType,omitempty"`
 }
 
 func New(dir string) (*Store, error) {
@@ -209,7 +212,8 @@ func (s *Store) parseEntryFile(path string) *ListEntry {
 			Headers json.RawMessage `json:"headers"`
 		} `json:"request"`
 		Response *struct {
-			Status int `json:"status"`
+			Status  int             `json:"status"`
+			Headers json.RawMessage `json:"headers"`
 		} `json:"response,omitempty"`
 	}
 
@@ -232,12 +236,16 @@ func (s *Store) parseEntryFile(path string) *ListEntry {
 	}
 
 	if len(raw.Request.Headers) > 0 {
-		var refererOnly struct {
-			Referer []string `json:"Referer"`
+		var headerFields struct {
+			Referer     []string `json:"Referer"`
+			ContentType []string `json:"Content-Type"`
 		}
-		json.Unmarshal(raw.Request.Headers, &refererOnly)
-		if len(refererOnly.Referer) > 0 {
-			le.Referer = refererOnly.Referer[0]
+		json.Unmarshal(raw.Request.Headers, &headerFields)
+		if len(headerFields.Referer) > 0 {
+			le.Referer = headerFields.Referer[0]
+		}
+		if len(headerFields.ContentType) > 0 {
+			le.RequestContentType = parseMediaType(headerFields.ContentType[0])
 		}
 	}
 
@@ -248,6 +256,15 @@ func (s *Store) parseEntryFile(path string) *ListEntry {
 
 	if raw.Response != nil {
 		le.Status = &raw.Response.Status
+		if len(raw.Response.Headers) > 0 {
+			var respHeaderFields struct {
+				ContentType []string `json:"Content-Type"`
+			}
+			json.Unmarshal(raw.Response.Headers, &respHeaderFields)
+			if len(respHeaderFields.ContentType) > 0 {
+				le.ResponseContentType = parseMediaType(respHeaderFields.ContentType[0])
+			}
+		}
 	}
 
 	return le
@@ -299,6 +316,9 @@ func (s *Store) Save(entry *Entry) error {
 	}
 	if refs, ok := entry.Request.Headers["Referer"]; ok && len(refs) > 0 {
 		le.Referer = refs[0]
+	}
+	if cts, ok := entry.Request.Headers["Content-Type"]; ok && len(cts) > 0 {
+		le.RequestContentType = parseMediaType(cts[0])
 	}
 	if entry.Response != nil {
 		le.Status = &entry.Response.Status
@@ -400,6 +420,9 @@ func (s *Store) Update(entry *Entry) error {
 		if le.ID == entry.ID {
 			if entry.Response != nil {
 				le.Status = &entry.Response.Status
+				if cts, ok := entry.Response.Headers["Content-Type"]; ok && len(cts) > 0 {
+					le.ResponseContentType = parseMediaType(cts[0])
+				}
 			}
 			le.UpdatedAt = time.Now()
 			break
@@ -531,4 +554,11 @@ func (s *Store) SaveBinaryBody(entryID, suffix string, data []byte) (string, err
 		return "", fmt.Errorf("write binary body: %w", err)
 	}
 	return filename, nil
+}
+
+func parseMediaType(ct string) string {
+	if i := strings.IndexByte(ct, ';'); i != -1 {
+		ct = ct[:i]
+	}
+	return strings.TrimSpace(strings.ToLower(ct))
 }
