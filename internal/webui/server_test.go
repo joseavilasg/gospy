@@ -10,6 +10,8 @@ import (
 
 	"gospy/internal/history"
 	"gospy/internal/rules"
+
+	"google.golang.org/protobuf/encoding/protowire"
 )
 
 type ruleResponse struct {
@@ -445,5 +447,199 @@ func TestHandleRules_GET_PersistsAcrossReload(t *testing.T) {
 	json.NewDecoder(listW.Body).Decode(&result)
 	if len(result) != 2 {
 		t.Fatalf("GET /api/rules = %d, want 2", len(result))
+	}
+}
+
+func TestParseProtobufWire(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    []byte
+		wantLen int
+		check   func(t *testing.T, fields []history.ProtobufField)
+	}{
+		{
+			name:    "empty",
+			data:    []byte{},
+			wantLen: 0,
+		},
+		{
+			name: "varint field",
+			data: func() []byte {
+				var buf []byte
+				buf = protowire.AppendTag(buf, 1, protowire.VarintType)
+				buf = protowire.AppendVarint(buf, 42)
+				return buf
+			}(),
+			wantLen: 1,
+			check: func(t *testing.T, fields []history.ProtobufField) {
+				if fields[0].FieldNumber != 1 {
+					t.Errorf("field number = %d, want 1", fields[0].FieldNumber)
+				}
+				if fields[0].WireType != "varint" {
+					t.Errorf("wire type = %q, want varint", fields[0].WireType)
+				}
+				if fields[0].Value.(uint32) != 42 {
+					t.Errorf("value = %v, want 42", fields[0].Value)
+				}
+				if fields[0].ByteOffset != 0 {
+					t.Errorf("byte offset = %d, want 0", fields[0].ByteOffset)
+				}
+				if fields[0].ByteEnd != 2 {
+					t.Errorf("byte end = %d, want 2", fields[0].ByteEnd)
+				}
+				if fields[0].ZigzagValue != int64(21) {
+					t.Errorf("zigzag value = %v, want 21", fields[0].ZigzagValue)
+				}
+			},
+		},
+		{
+			name: "zigzag signed varint",
+			data: func() []byte {
+				var buf []byte
+				buf = protowire.AppendTag(buf, 1, protowire.VarintType)
+				buf = protowire.AppendVarint(buf, 1)
+				return buf
+			}(),
+			wantLen: 1,
+			check: func(t *testing.T, fields []history.ProtobufField) {
+				if fields[0].WireType != "varint" {
+					t.Errorf("wire type = %q, want varint", fields[0].WireType)
+				}
+				if fields[0].Value.(uint32) != 1 {
+					t.Errorf("value = %v, want 1", fields[0].Value)
+				}
+				if fields[0].ZigzagValue != int64(-1) {
+					t.Errorf("zigzag value = %v, want -1", fields[0].ZigzagValue)
+				}
+			},
+		},
+		{
+			name: "bytes field with hex fallback",
+			data: func() []byte {
+				var buf []byte
+				buf = protowire.AppendTag(buf, 2, protowire.BytesType)
+				buf = protowire.AppendBytes(buf, []byte{0xfe, 0xff, 0xfe, 0xff, 0xfe})
+				return buf
+			}(),
+			wantLen: 1,
+			check: func(t *testing.T, fields []history.ProtobufField) {
+				if fields[0].FieldNumber != 2 {
+					t.Errorf("field number = %d, want 2", fields[0].FieldNumber)
+				}
+				if fields[0].WireType != "bytes" {
+					t.Errorf("wire type = %q, want bytes", fields[0].WireType)
+				}
+				if fields[0].ByteSize != 5 {
+					t.Errorf("byte size = %d, want 5", fields[0].ByteSize)
+				}
+				if fields[0].ByteOffset != 0 {
+					t.Errorf("byte offset = %d, want 0", fields[0].ByteOffset)
+				}
+				if fields[0].ByteEnd != 7 {
+					t.Errorf("byte end = %d, want 7", fields[0].ByteEnd)
+				}
+				if len(fields[0].SubFields) > 0 {
+					t.Errorf("expected no sub-fields for non-proto bytes, got %d", len(fields[0].SubFields))
+				}
+				if s, ok := fields[0].Value.(string); !ok || s != "fefffefffe" {
+					t.Errorf("value = %v, want 'fefffefffe'", fields[0].Value)
+				}
+			},
+		},
+		{
+			name: "nested message",
+			data: func() []byte {
+				var inner []byte
+				inner = protowire.AppendTag(inner, 1, protowire.VarintType)
+				inner = protowire.AppendVarint(inner, 99)
+				var outer []byte
+				outer = protowire.AppendTag(outer, 3, protowire.BytesType)
+				outer = protowire.AppendBytes(outer, inner)
+				return outer
+			}(),
+			wantLen: 1,
+			check: func(t *testing.T, fields []history.ProtobufField) {
+				if fields[0].WireType != "message" {
+					t.Errorf("wire type = %q, want message", fields[0].WireType)
+				}
+				if fields[0].ByteSize != 2 {
+					t.Errorf("byte size = %d, want 2", fields[0].ByteSize)
+				}
+				if fields[0].ByteOffset != 0 {
+					t.Errorf("byte offset = %d, want 0", fields[0].ByteOffset)
+				}
+				if fields[0].ByteEnd != 4 {
+					t.Errorf("byte end = %d, want 4", fields[0].ByteEnd)
+				}
+				if len(fields[0].SubFields) != 1 {
+					t.Fatalf("sub fields = %d, want 1", len(fields[0].SubFields))
+				}
+				if fields[0].SubFields[0].FieldNumber != 1 {
+					t.Errorf("sub field number = %d, want 1", fields[0].SubFields[0].FieldNumber)
+				}
+				if fields[0].SubFields[0].Value.(uint32) != 99 {
+					t.Errorf("sub field value = %v, want 99", fields[0].SubFields[0].Value)
+				}
+				if fields[0].SubFields[0].ByteOffset != 0 {
+					t.Errorf("sub field byte offset = %d, want 0", fields[0].SubFields[0].ByteOffset)
+				}
+				if fields[0].SubFields[0].ByteEnd != 2 {
+					t.Errorf("sub field byte end = %d, want 2", fields[0].SubFields[0].ByteEnd)
+				}
+			},
+		},
+		{
+			name: "multiple fields",
+			data: func() []byte {
+				var buf []byte
+				buf = protowire.AppendTag(buf, 1, protowire.VarintType)
+				buf = protowire.AppendVarint(buf, 100)
+				buf = protowire.AppendTag(buf, 2, protowire.BytesType)
+				buf = protowire.AppendString(buf, "test")
+				buf = protowire.AppendTag(buf, 5, protowire.Fixed32Type)
+				buf = protowire.AppendFixed32(buf, 12345)
+				return buf
+			}(),
+			wantLen: 3,
+			check: func(t *testing.T, fields []history.ProtobufField) {
+				if fields[0].FieldNumber != 1 || fields[1].FieldNumber != 2 || fields[2].FieldNumber != 5 {
+					t.Errorf("field numbers = %d,%d,%d, want 1,2,5",
+						fields[0].FieldNumber, fields[1].FieldNumber, fields[2].FieldNumber)
+				}
+				if fields[1].WireType != "string" {
+					t.Errorf("field 2 wire type = %q, want string", fields[1].WireType)
+				}
+				if fields[1].Value != "test" {
+					t.Errorf("field 2 value = %v, want 'test'", fields[1].Value)
+				}
+				if fields[1].ByteSize != 4 {
+					t.Errorf("field 2 byte size = %d, want 4", fields[1].ByteSize)
+				}
+				if fields[2].WireType != "fixed32" {
+					t.Errorf("field 5 wire type = %q, want fixed32", fields[2].WireType)
+				}
+				if fields[0].ByteOffset != 0 || fields[0].ByteEnd != 2 {
+					t.Errorf("field 1 range = %d-%d, want 0-2", fields[0].ByteOffset, fields[0].ByteEnd)
+				}
+				if fields[1].ByteOffset != 2 || fields[1].ByteEnd != 8 {
+					t.Errorf("field 2 range = %d-%d, want 2-8", fields[1].ByteOffset, fields[1].ByteEnd)
+				}
+				if fields[2].ByteOffset != 8 || fields[2].ByteEnd != 13 {
+					t.Errorf("field 5 range = %d-%d, want 8-13", fields[2].ByteOffset, fields[2].ByteEnd)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fields := parseProtobufWire(tt.data)
+			if len(fields) != tt.wantLen {
+				t.Fatalf("len(fields) = %d, want %d", len(fields), tt.wantLen)
+			}
+			if tt.check != nil {
+				tt.check(t, fields)
+			}
+		})
 	}
 }

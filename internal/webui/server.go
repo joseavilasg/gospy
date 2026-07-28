@@ -14,10 +14,13 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"gospy/internal/history"
 	"gospy/internal/proxy"
 	"gospy/internal/rules"
+
+	"google.golang.org/protobuf/encoding/protowire"
 )
 
 //go:embed index.html
@@ -240,6 +243,131 @@ func generateHexDump(data []byte, maxLines int) string {
 	return sb.String()
 }
 
+func isProtobufContentType(ct string) bool {
+	lct := strings.ToLower(ct)
+	return strings.Contains(lct, "protobuf") || strings.Contains(lct, "x-protobuf")
+}
+
+const protobufMaxDepth = 12
+
+func parseProtobufWire(data []byte) []history.ProtobufField {
+	return parseProtobufWireAtDepth(data, 0)
+}
+
+func parseProtobufWireAtDepth(data []byte, depth int) []history.ProtobufField {
+	if depth >= protobufMaxDepth {
+		return nil
+	}
+	var fields []history.ProtobufField
+	offset := 0
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			break
+		}
+		data = data[n:]
+
+		fieldStart := offset
+		offset += n
+
+		f := history.ProtobufField{
+			FieldNumber: int(num),
+			ByteOffset:  fieldStart,
+		}
+
+		switch typ {
+		case protowire.VarintType:
+			v, n2 := protowire.ConsumeVarint(data)
+			if n2 < 0 {
+				return fields
+			}
+			f.WireType = "varint"
+			f.ZigzagValue = int64((v >> 1) ^ -(v & 1))
+			if v <= uint64(^uint32(0)) {
+				f.Value = uint32(v)
+			} else {
+				f.Value = v
+			}
+			f.ByteEnd = offset + n2
+			offset += n2
+			data = data[n2:]
+
+		case protowire.Fixed32Type:
+			v, n2 := protowire.ConsumeFixed32(data)
+			if n2 < 0 {
+				return fields
+			}
+			f.WireType = "fixed32"
+			f.Value = v
+			f.ByteEnd = offset + n2
+			offset += n2
+			data = data[n2:]
+
+		case protowire.Fixed64Type:
+			v, n2 := protowire.ConsumeFixed64(data)
+			if n2 < 0 {
+				return fields
+			}
+			f.WireType = "fixed64"
+			f.Value = v
+			f.ByteEnd = offset + n2
+			offset += n2
+			data = data[n2:]
+
+		case protowire.BytesType:
+			v, n2 := protowire.ConsumeBytes(data)
+			if n2 < 0 {
+				return fields
+			}
+			f.ByteSize = len(v)
+			f.ByteEnd = offset + n2
+			offset += n2
+			data = data[n2:]
+
+			subFields := parseProtobufWireAtDepth(v, depth+1)
+			if len(subFields) > 0 {
+				f.WireType = "message"
+				f.SubFields = subFields
+			} else if s, ok := isPrintableUTF8(v); ok {
+				f.WireType = "string"
+				f.Value = s
+			} else {
+				f.WireType = "bytes"
+				f.Value = fmt.Sprintf("%x", v)
+			}
+
+		default:
+			n2 := protowire.ConsumeFieldValue(num, typ, data)
+			if n2 < 0 {
+				return fields
+			}
+			f.WireType = fmt.Sprintf("type(%d)", int(typ))
+			f.ByteEnd = offset + n2
+			offset += n2
+			data = data[n2:]
+		}
+
+		fields = append(fields, f)
+	}
+	return fields
+}
+
+func isPrintableUTF8(b []byte) (string, bool) {
+	if len(b) == 0 {
+		return "", false
+	}
+	if !utf8.Valid(b) {
+		return "", false
+	}
+	s := string(b)
+	for _, r := range s {
+		if r < 32 && r != '\n' && r != '\r' && r != '\t' {
+			return "", false
+		}
+	}
+	return s, true
+}
+
 func extractBoundary(contentType string) string {
 	_, after, ok := strings.Cut(contentType, "boundary=")
 	if !ok {
@@ -407,6 +535,11 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		if isProtobufContentType(reqCT) {
+			if data, err := os.ReadFile(filepath.Join(binDir, entry.Request.BodyFile)); err == nil {
+				entry.Request.ParsedProtobuf = parseProtobufWire(data)
+			}
+		}
 	}
 
 	if entry.Request.BodyFile != "" {
@@ -425,9 +558,20 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if entry.Response != nil && entry.Response.BodyFile != "" && entry.Response.IsBinaryBody {
-		if data, err := os.ReadFile(filepath.Join(binDir, entry.Response.BodyFile)); err == nil {
-			entry.Response.BodyHex = generateHexDump(data, hexDumpMaxLines)
+	if entry.Response != nil && entry.Response.BodyFile != "" {
+		var respCT string
+		if cts, ok := entry.Response.Headers["Content-Type"]; ok && len(cts) > 0 {
+			respCT = cts[0]
+		}
+		if isProtobufContentType(respCT) {
+			if data, err := os.ReadFile(filepath.Join(binDir, entry.Response.BodyFile)); err == nil {
+				entry.Response.ParsedProtobuf = parseProtobufWire(data)
+			}
+		}
+		if entry.Response.IsBinaryBody {
+			if data, err := os.ReadFile(filepath.Join(binDir, entry.Response.BodyFile)); err == nil {
+				entry.Response.BodyHex = generateHexDump(data, hexDumpMaxLines)
+			}
 		}
 	}
 	if entry.ServerResponse != nil && entry.ServerResponse.BodyFile != "" && entry.ServerResponse.IsBinaryBody {

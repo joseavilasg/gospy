@@ -41,17 +41,25 @@ export function registerBodyType(config) {
 export function detectBodyType(contentType, entry, isBinaryBody) {
     if (!contentType) return isBinaryBody ? 'binary' : 'text';
     const ct = contentType.toLowerCase();
-    if (ct.includes('multipart/form-data') && entry?.parsedMultipart?.length > 0) return 'multipart';
-    if (isBinaryBody) return 'binary';
-    return 'text';
+    for (const t of bodyTypes) {
+        if (t.detect && t.detect(ct, entry, isBinaryBody)) return t.name;
+    }
+    return isBinaryBody ? 'binary' : 'text';
 }
 
 export function detectBodyTypeFromDOM(target) {
     const panel = document.querySelector(`.section-panel[data-body-target="${target}"]`);
     if (!panel) return 'text';
-    if (panel.querySelector('.multipart-parts[data-body-target]')) return 'multipart';
-    if (panel.querySelector('pre[data-binary]')) return 'binary';
+    for (const t of bodyTypes) {
+        if (t.detectFromDOM && t.detectFromDOM(panel)) return t.name;
+    }
     return 'text';
+}
+
+export function getEntryData(entry, contentType, isBinaryBody) {
+    const bodyType = detectBodyType(contentType, entry, isBinaryBody);
+    const config = getTypeConfig(bodyType);
+    return config?.getEntryData ? config.getEntryData(entry) : {};
 }
 
 function getTypeConfig(name) {
@@ -303,6 +311,13 @@ registerBodyType({
     name: 'binary',
     isEditable: false,
 
+    detectFromDOM(panel) {
+        const pre = panel.querySelector('pre[data-binary]');
+        if (!pre) return false;
+        return !panel.querySelector('.proto-tree[data-body-target]')
+            && !panel.querySelector('.multipart-parts[data-body-target]');
+    },
+
     getKebabItems(target, canEdit, hasEdited, entryId) {
         return [
             { action: 'copy-hex', label: '⧉ Copy hex', target },
@@ -336,6 +351,18 @@ registerBodyType({
 registerBodyType({
     name: 'multipart',
     isEditable: true,
+
+    detect(ct) {
+        return ct.includes('multipart/form-data');
+    },
+
+    detectFromDOM(panel) {
+        return !!panel.querySelector('.multipart-parts[data-body-target]');
+    },
+
+    getEntryData(entry) {
+        return { parsedMultipart: entry?.parsedMultipart || [] };
+    },
 
     getKebabItems(target, canEdit, hasEdited, entryId) {
         const items = [];
@@ -520,5 +547,112 @@ registerBodyType({
             parts.push(`${name}=${value}`);
         });
         navigator.clipboard.writeText(parts.join('\n'));
+    },
+});
+
+// ── Protobuf body type ──────────────────────────────────────────
+
+function protoTypeBadge(wireType) {
+    const map = {
+        varint: 'varint',
+        fixed32: 'fixed32',
+        fixed64: 'fixed64',
+        string: 'string',
+        message: 'message',
+        bytes: 'bytes',
+    };
+    return map[wireType] || wireType;
+}
+
+function protoValueHtml(field) {
+    switch (field.wireType) {
+        case 'varint':
+        case 'fixed32':
+        case 'fixed64': {
+            let inner = `<span class="proto-val">${field.value}</span>`;
+            if (field.zigzagValue !== undefined && field.zigzagValue !== null) {
+                inner += ` <span class="proto-zigzag">(zigzag ${field.zigzagValue})</span>`;
+            }
+            return `<span class="proto-val-nowrap">${inner}</span>`;
+        }
+        case 'string': {
+            const s = field.value;
+            return `<span class="proto-val proto-val-string">${escapeHtml(s)}</span>`;
+        }
+        case 'bytes':
+            return `<span class="proto-val proto-val-hex">${escapeHtml(String(field.value || ''))}</span>`;
+        default:
+            return `<span class="proto-val">${escapeHtml(String(field.value || ''))}</span>`;
+    }
+}
+
+function renderProtoTable(fields) {
+    if (!fields || fields.length === 0) return '';
+    const rows = fields.map(f => {
+        const hasSubs = f.subFields && f.subFields.length > 0;
+        const badge = protoTypeBadge(f.wireType);
+        const badgeLabel = hasSubs ? `${badge} (${f.byteSize} bytes)` : badge;
+        let valueCell;
+        if (hasSubs) {
+            valueCell = renderProtoTable(f.subFields);
+        } else {
+            valueCell = protoValueHtml(f);
+        }
+        const byteRange = f.byteEnd != null ? `${f.byteOffset}-${f.byteEnd}` : '';
+        return `<tr>
+            <td class="proto-td-proto">${f.fieldNumber}</td>
+            <td class="proto-td-type"><span class="proto-badge proto-badge-${f.wireType}">${badgeLabel}</span></td>
+            <td class="proto-td-bytes">${byteRange}</td>
+            <td class="proto-td-value">${valueCell}</td>
+        </tr>`;
+    }).join('');
+    return `<table class="proto-table"><thead><tr><th>Field</th><th>Type</th><th>Bytes</th><th>Value</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+registerBodyType({
+    name: 'protobuf',
+    isEditable: false,
+
+    detect(ct, entry) {
+        return (ct.includes('protobuf') || ct.includes('x-protobuf')) && entry?.parsedProtobuf?.length > 0;
+    },
+
+    detectFromDOM(panel) {
+        return !!panel.querySelector('.proto-tree[data-body-target]');
+    },
+
+    getEntryData(entry) {
+        return { parsedProtobuf: entry?.parsedProtobuf || [] };
+    },
+
+    getKebabItems(target, canEdit, hasEdited, entryId) {
+        return [
+            { action: 'copy-hex', label: '⧉ Copy hex', target },
+            { action: 'download-bin', label: '⬇ Download .bin', target, entryId },
+        ];
+    },
+
+    renderContent(target, data) {
+        const { bodyHex, parsedProtobuf } = data;
+        const treeHtml = parsedProtobuf && parsedProtobuf.length > 0
+            ? renderProtoTable(parsedProtobuf)
+            : '<span class="proto-empty">No fields decoded</span>';
+
+        return `<div class="proto-tree" data-body-target="${target}" data-view-mode="pretty">${treeHtml}</div><pre class="body-content" data-body-target="${target}" data-binary="true" data-view-mode="raw" style="display:none">${escapeHtml(bodyHex || '')}</pre>`;
+    },
+
+    setView(target, view) {
+        const sectionPanel = document.querySelector(`.section-panel[data-body-target="${target}"]`);
+        if (!sectionPanel) return;
+        const tree = sectionPanel.querySelector('.proto-tree[data-body-target]');
+        const pre = sectionPanel.querySelector('pre[data-body-target]');
+        if (tree) tree.style.display = view === 'pretty' ? '' : 'none';
+        if (pre) pre.style.display = view === 'raw' ? '' : 'none';
+    },
+
+    copy(target) {
+        const pre = document.querySelector(`pre[data-body-target="${target}"][data-binary]`);
+        if (!pre) return;
+        navigator.clipboard.writeText(pre.textContent || '');
     },
 });

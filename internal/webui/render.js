@@ -1,6 +1,6 @@
 import { requests, selectedId, filterText, ignoredHosts, focusedHosts, focusEnabled, setSelectedId, rules } from './state.js';
 import { applyFilters, isAnyFilterActive } from './filters.js';
-import { detectBodyType, getKebabItems, renderContent } from './body-types.js';
+import { detectBodyType, getKebabItems, renderContent, isEditable, getEntryData } from './body-types.js';
 
 const ITEM_HEIGHT = 35;
 const BUFFER = 5;
@@ -239,9 +239,8 @@ export function renderDetail(req, activeTab = 'request') {
         if (isMocked) badges.push(`<span class="body-badge body-badge-mocked">mocked</span>`);
         const badgesHtml = badges.join('');
 
-        const bodyType = detectBodyType(contentType, req.request, isBinaryBody);
-        const isBinaryType = bodyType === 'binary';
-        if (isBinaryType) canEdit = false;
+        const bodyType = detectBodyType(contentType, target === 'response' ? req.response : req.request, isBinaryBody);
+        if (!isEditable(bodyType)) canEdit = false;
 
         const viewModeHtml = `<button class="body-tool body-view active" data-action="set-view" data-target="${target}" data-view="pretty">Pretty</button><button class="body-tool body-view" data-action="set-view" data-target="${target}" data-view="raw">Raw</button>`;
 
@@ -260,10 +259,12 @@ export function renderDetail(req, activeTab = 'request') {
         const hasToolbar = badges.length > 0 || viewModeHtml.length > 0 || contentBtns.length > 0;
         const bodyHex = (target === 'request') ? (req.request.bodyHex || '') : ((req.response && req.response.bodyHex) || '');
 
+        const entry = target === 'response' ? req.response : req.request;
         const bodyContentHtml = renderContent(bodyType, target, {
             body, rawBody, compression, isModified, modifiedBody, isMocked, mockedBody,
             hasEdited, editedBody, defaultContent, bodyHex, bodySize, contentType,
-            bodyTarget: target, parsedMultipart: req.request.parsedMultipart || [],
+            bodyTarget: target,
+            ...getEntryData(entry, contentType, isBinaryBody),
         });
 
         return `<div class="section-panel" data-body-target="${target}" data-content-type="${escapeHtml(contentType)}">

@@ -33,6 +33,17 @@ type Entry struct {
 	ClientDisplayName string          `json:"clientDisplayName,omitempty"`
 }
 
+type ProtobufField struct {
+	FieldNumber int             `json:"fieldNumber"`
+	WireType    string          `json:"wireType"`
+	Value       interface{}     `json:"value,omitempty"`
+	ByteOffset  int             `json:"byteOffset"`
+	ByteEnd     int             `json:"byteEnd,omitempty"`
+	ByteSize    int             `json:"byteSize,omitempty"`
+	ZigzagValue interface{}     `json:"zigzagValue,omitempty"`
+	SubFields   []ProtobufField `json:"subFields,omitempty"`
+}
+
 type MultipartPart struct {
 	Name        string `json:"name"`
 	Filename    string `json:"filename,omitempty"`
@@ -58,19 +69,21 @@ type RequestRecord struct {
 	BodyHex         string              `json:"bodyHex,omitempty"`
 	IsBinaryBody    bool                `json:"isBinaryBody,omitempty"`
 	ParsedMultipart []MultipartPart     `json:"parsedMultipart,omitempty"`
+	ParsedProtobuf  []ProtobufField     `json:"parsedProtobuf,omitempty"`
 }
 
 type ResponseRecord struct {
-	Status       int                 `json:"status"`
-	Headers      map[string][]string `json:"headers"`
-	Body         string              `json:"body,omitempty"`
-	RawBody      string              `json:"rawBody,omitempty"`
-	Compression  string              `json:"compression,omitempty"`
-	EditedBody   string              `json:"editedBody,omitempty"`
-	BodyFile     string              `json:"bodyFile,omitempty"`
-	BodySize     int64               `json:"bodySize,omitempty"`
-	BodyHex      string              `json:"bodyHex,omitempty"`
-	IsBinaryBody bool                `json:"isBinaryBody,omitempty"`
+	Status         int                 `json:"status"`
+	Headers        map[string][]string `json:"headers"`
+	Body           string              `json:"body,omitempty"`
+	RawBody        string              `json:"rawBody,omitempty"`
+	Compression    string              `json:"compression,omitempty"`
+	EditedBody     string              `json:"editedBody,omitempty"`
+	BodyFile       string              `json:"bodyFile,omitempty"`
+	BodySize       int64               `json:"bodySize,omitempty"`
+	BodyHex        string              `json:"bodyHex,omitempty"`
+	IsBinaryBody   bool                `json:"isBinaryBody,omitempty"`
+	ParsedProtobuf []ProtobufField     `json:"parsedProtobuf,omitempty"`
 }
 
 type Store struct {
