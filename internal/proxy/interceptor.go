@@ -465,12 +465,33 @@ func IsTextResponse(contentType string) bool {
 	return false
 }
 
+func isKnownBinaryContentType(contentType string) bool {
+	ct := strings.ToLower(contentType)
+	knownBinary := []string{
+		"application/x-protobuf",
+		"application/protobuf",
+		"application/msgpack",
+	}
+	for _, t := range knownBinary {
+		if strings.Contains(ct, t) {
+			return true
+		}
+	}
+	if strings.HasPrefix(ct, "image/") || strings.HasPrefix(ct, "audio/") || strings.HasPrefix(ct, "video/") || strings.HasPrefix(ct, "font/") {
+		return true
+	}
+	return false
+}
+
 func isBinaryBody(data []byte, contentEncoding, contentType string) bool {
 	if len(data) == 0 {
 		return false
 	}
 	if contentEncoding != "" {
 		return !IsTextResponse(contentType)
+	}
+	if isKnownBinaryContentType(contentType) {
+		return true
 	}
 	checkLen := min(8192, len(data))
 	for i := 0; i < checkLen; i++ {
