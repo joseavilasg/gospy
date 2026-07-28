@@ -2,6 +2,7 @@ import { setFilterText, setFocusEnabled, setLastTimestamp, selectedId, requests,
 import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch } from './api.js';
 import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, openRuleModal, closeRuleModal, openRuleModalFromRequest, extractRefererOrigin } from './render.js';
 import { registerFilter, setOnFilterChange, initFilterPopover, openFilterPopover, closeFilterPopover, closeChip, openChip, getFilterChipsData, getMatchMode, setMatchMode, clearAllFilters } from './filters.js';
+import { initBodyTypes, editBody, saveBody, cancelBody, setBodyView, copyBody, getActiveEditor, postRenderBody } from './body-types.js';
 
 registerFilter({
     type: 'process',
@@ -200,16 +201,14 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
             showTab(btn, btn.dataset.tab);
             break;
         case 'set-view':
-            setView(btn.dataset.target, btn.dataset.view);
+            setBodyView(btn.dataset.target, btn.dataset.view);
             break;
         case 'set-content':
             setContent(btn.dataset.target, btn.dataset.content);
             break;
         case 'copy-body':
-            copyBody(btn.dataset.target);
-            break;
         case 'copy-hex':
-            copyHex(btn.dataset.target);
+            copyBody(btn.dataset.target);
             break;
         case 'download-bin':
             downloadBin(btn.dataset.target, btn.dataset.entryId);
@@ -320,24 +319,9 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
 document.getElementById('detailPanel').addEventListener('detail-rendered', () => {
     renderCurrentContent('request');
     renderCurrentContent('response');
+    postRenderBody('request');
+    postRenderBody('response');
 });
-
-function setView(target, view) {
-    const sectionPanel = document.querySelector(`.section-panel[data-body-target="${target}"]`);
-    if (!sectionPanel) return;
-    sectionPanel.querySelectorAll('[data-action="set-view"]').forEach(b => {
-        b.classList.toggle('active', b.dataset.view === view);
-    });
-    const pre = sectionPanel.querySelector('pre[data-body-target]');
-    if (pre && pre.dataset.binary) {
-        const placeholder = sectionPanel.querySelector('.binary-placeholder');
-        if (placeholder) placeholder.style.display = view === 'pretty' ? '' : 'none';
-        pre.style.display = view === 'raw' ? '' : 'none';
-    } else if (pre) {
-        pre.dataset.viewMode = view;
-        renderCurrentContent(target);
-    }
-}
 
 function setContent(target, content) {
     const pre = document.querySelector(`pre[data-body-target="${target}"]`);
@@ -354,7 +338,7 @@ function setContent(target, content) {
 
 function renderCurrentContent(target) {
     const pre = document.querySelector(`pre[data-body-target="${target}"]`);
-    if (!pre || pre.dataset.binary) return;
+    if (!pre || pre.dataset.binary || pre.dataset.multipart) return;
     const sectionPanel = pre.closest('.section-panel');
     if (!sectionPanel) return;
 
@@ -393,20 +377,6 @@ function renderCurrentContent(target) {
     }
 }
 
-function copyBody(target) {
-    const pre = document.querySelector(`pre[data-body-target="${target}"]`);
-    if (!pre) return;
-
-    const content = pre.dataset.edited || pre.dataset.decoded || pre.textContent || '';
-    navigator.clipboard.writeText(content);
-}
-
-function copyHex(target) {
-    const pre = document.querySelector(`pre[data-body-target="${target}"][data-binary]`);
-    if (!pre) return;
-    navigator.clipboard.writeText(pre.textContent || '');
-}
-
 function downloadBin(target, entryId) {
     if (!entryId || !target) return;
     const a = document.createElement('a');
@@ -442,8 +412,6 @@ function copyHeaders(target) {
     navigator.clipboard.writeText(lines.join('\n'));
 }
 
-let activeMonacoEditor = null;
-let savedToolbarHtml = null;
 let modalMonacoEditors = { modifyBody: null, mockReqBody: null, mockRespBody: null };
 
 function disposeModalMonacoEditors() {
@@ -482,158 +450,13 @@ function mapContentType(ct) {
     return 'plaintext';
 }
 
-function editBody(target) {
-    const pre = document.querySelector(`pre[data-body-target="${target}"]`);
-    if (!pre) return;
-    const sectionPanel = pre.closest('.section-panel');
-    if (!sectionPanel) return;
-
-    const existingTree = sectionPanel.querySelector('.json-viewer-container');
-    if (existingTree) {
-        existingTree.remove();
-        pre.style.display = '';
-    }
-
-    const contentType = sectionPanel.dataset.contentType || '';
-    const autoLang = mapContentType(contentType);
-    const savedLang = localStorage.getItem('gospy-editor-lang');
-    const lang = autoLang || savedLang || 'json';
-    const tools = sectionPanel.querySelector('.content-toolbar');
-    savedToolbarHtml = tools.innerHTML;
-    tools.innerHTML = `
-        <div class="body-tools-group">
-            <button class="body-tool body-tool-save" data-action="save-body" data-target="${target}">Save</button>
-            <button class="body-tool body-tool-cancel" data-action="cancel-body" data-target="${target}">Cancel</button>
-        </div>
-        <select class="body-lang-select" id="editorLangSelect"></select>`;
-
-    const editorContainer = document.createElement('div');
-    editorContainer.className = 'monaco-editor-container';
-    pre.parentNode.insertBefore(editorContainer, pre.nextSibling);
-    pre.style.display = 'none';
-
-    const content = pre.dataset.decoded || pre.textContent || '';
-    createMonacoEditor(editorContainer, content, lang).then((editor) => {
-        activeMonacoEditor = editor;
-
-        const select = document.getElementById('editorLangSelect');
-        const languages = monaco.languages.getLanguages();
-        const seen = new Set();
-        languages.forEach((l) => {
-            if (seen.has(l.id)) return;
-            seen.add(l.id);
-            const opt = document.createElement('option');
-            opt.value = l.id;
-            opt.textContent = l.aliases?.[0] || l.id;
-            if (l.id === lang) opt.selected = true;
-            select.appendChild(opt);
-        });
-
-        select.addEventListener('change', () => {
-            const lang = select.value;
-            monaco.editor.setModelLanguage(editor.getModel(), lang);
-            if (!contentType || autoLang === 'plaintext') {
-                localStorage.setItem('gospy-editor-lang', lang);
-            }
-        });
-
-        editor.focus();
-    });
-}
-
-function saveBody(target) {
-    const pre = document.querySelector(`pre[data-body-target="${target}"]`);
-    if (!pre) return;
-    const sectionPanel = pre.closest('.section-panel');
-    if (!sectionPanel) return;
-
-    if (activeMonacoEditor) {
-        const value = activeMonacoEditor.getValue();
-        let formatted = value;
-        try {
-            const parsed = JSON.parse(value);
-            formatted = JSON.stringify(parsed, null, 2);
-        } catch {
-            // not JSON, use raw
-        }
-
-        fetch(`/api/requests/${selectedId}/body`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ target, body: formatted })
-        }).then(r => r.json()).then(() => {
-            pre.dataset.edited = formatted;
-            pre.textContent = formatted;
-
-            activeMonacoEditor.dispose();
-            activeMonacoEditor = null;
-            const container = sectionPanel.querySelector('.monaco-editor-container');
-            if (container) container.remove();
-            pre.style.display = '';
-
-            if (savedToolbarHtml) {
-                const toolsDiv = sectionPanel.querySelector('.content-toolbar');
-                let html = savedToolbarHtml;
-                if (!toolsDiv.querySelector('.body-badge-edited')) {
-                    const compression = pre.dataset.compression || '';
-                    html = `<div class="toolbar-left">
-                        <div class="body-tools-group">
-                            <button class="body-tool body-view active" data-action="set-view" data-target="${target}" data-view="pretty">Pretty</button>
-                            <button class="body-tool body-view" data-action="set-view" data-target="${target}" data-view="raw">Raw</button>
-                        </div>
-                        <div class="divider-v"></div>
-                        <div class="body-tools-group">
-                            <button class="body-tool body-content" data-action="set-content" data-target="${target}" data-content="original">Original</button>
-                            <button class="body-tool body-content active" data-action="set-content" data-target="${target}" data-content="edited">Edited</button>
-                        </div>
-                    </div>
-                    <div class="toolbar-right">
-                        ${compression ? `<span class="body-badge body-badge-compression">${escapeHtml(compression)}</span>` : ''}
-                        <span class="body-badge body-badge-edited">edited</span>
-                    </div>`;
-                }
-                toolsDiv.innerHTML = html;
-                savedToolbarHtml = null;
-            }
-            pre.dataset.contentMode = 'edited';
-            const kebabMenu = sectionPanel.querySelector('.kebab-menu');
-            if (kebabMenu && !kebabMenu.querySelector('[data-action="revert-body"]')) {
-                kebabMenu.insertAdjacentHTML('beforeend', '<div class="menu-item" data-action="revert-body" data-target="' + target + '">↩ Revert</div>');
-            }
-            renderCurrentContent(target);
-        }).catch(e => console.error('Failed to save body:', e));
-    }
-}
-
-function cancelBody(target) {
-    const pre = document.querySelector(`pre[data-body-target="${target}"]`);
-    if (!pre) return;
-    const sectionPanel = pre.closest('.section-panel');
-    if (!sectionPanel) return;
-
-    if (activeMonacoEditor) {
-        activeMonacoEditor.dispose();
-        activeMonacoEditor = null;
-    }
-
-    const container = sectionPanel.querySelector('.monaco-editor-container');
-    if (container) container.remove();
-
-    pre.style.display = '';
-    const tools = sectionPanel.querySelector('.content-toolbar');
-    if (savedToolbarHtml) {
-        tools.innerHTML = savedToolbarHtml;
-        savedToolbarHtml = null;
-    }
-    renderCurrentContent(target);
-}
-
 function sendReplay() {
     if (!confirm('Send replay? This will execute the request and create a new entry.')) return;
 
     let body = '';
-    if (activeMonacoEditor) {
-        body = activeMonacoEditor.getValue();
+    const editor = getActiveEditor();
+    if (editor) {
+        body = editor.getValue();
     } else {
         const pre = document.querySelector('pre[data-body-target="request"]');
         if (pre) body = pre.dataset.edited || pre.dataset.decoded || '';
@@ -644,7 +467,7 @@ function sendReplay() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ body })
     }).then(r => r.json()).then(({ id }) => {
-        if (activeMonacoEditor) cancelBody('request');
+        if (getActiveEditor()) cancelBody('request');
         setLastTimestamp('');
         loadRequests().then(() => selectRequest(id));
     }).catch(e => console.error('Replay failed:', e));
@@ -1065,6 +888,7 @@ function refreshFilters() {
 }
 
 setOnFilterChange(refreshFilters);
+initBodyTypes({ refreshDetail, createMonacoEditor, mapContentType, renderCurrentContent });
 
 function renderFilterChips() {
     const chips = getFilterChipsData();

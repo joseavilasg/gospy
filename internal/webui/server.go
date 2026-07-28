@@ -1,11 +1,13 @@
 package webui
 
 import (
+	"bytes"
 	"crypto/rand"
 	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -38,6 +40,9 @@ var renderJS string
 
 //go:embed filters.js
 var filtersJS string
+
+//go:embed body-types.js
+var bodyTypesJS string
 
 //go:embed json-viewer.js
 var jsonViewerJS string
@@ -114,6 +119,7 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/api.js", s.handleStatic(apiJS, "application/javascript"))
 	mux.HandleFunc("/render.js", s.handleStatic(renderJS, "application/javascript"))
 	mux.HandleFunc("/filters.js", s.handleStatic(filtersJS, "application/javascript"))
+	mux.HandleFunc("/body-types.js", s.handleStatic(bodyTypesJS, "application/javascript"))
 	mux.HandleFunc("/json-viewer.js", s.handleStatic(jsonViewerJS, "application/javascript"))
 	mux.HandleFunc("/json-viewer.css", s.handleStatic(jsonViewerCSS, "text/css"))
 	mux.HandleFunc("/monaco-init.js", s.handleStatic(monacoInitJS, "application/javascript"))
@@ -234,6 +240,82 @@ func generateHexDump(data []byte, maxLines int) string {
 	return sb.String()
 }
 
+func extractBoundary(contentType string) string {
+	_, after, ok := strings.Cut(contentType, "boundary=")
+	if !ok {
+		return ""
+	}
+	b := after
+	b = strings.Trim(b, "\"' ")
+	return b
+}
+
+const multipartHexPreviewLines = 20
+
+func parseMultipartBody(data []byte, boundary string) []history.MultipartPart {
+	if boundary == "" || len(data) == 0 {
+		return nil
+	}
+	reader := multipart.NewReader(bytes.NewReader(data), boundary)
+	var parts []history.MultipartPart
+	for {
+		part, err := reader.NextPart()
+		if err != nil {
+			break
+		}
+		name := part.FormName()
+		if name == "" {
+			name = part.FileName()
+		}
+		mp := history.MultipartPart{
+			Name:        name,
+			Filename:    part.FileName(),
+			ContentType: part.Header.Get("Content-Type"),
+		}
+		content, err := io.ReadAll(part)
+		if err != nil {
+			parts = append(parts, mp)
+			continue
+		}
+		mp.Size = len(content)
+		if mp.Filename != "" || (!isLikelyTextContentType(mp.ContentType) && containsNullBytes(content)) {
+			mp.IsBinary = true
+			mp.HexPreview = generateHexDump(content, multipartHexPreviewLines)
+		} else {
+			mp.Value = string(content)
+		}
+		parts = append(parts, mp)
+	}
+	return parts
+}
+
+func isLikelyTextContentType(ct string) bool {
+	ct = strings.ToLower(ct)
+	for _, prefix := range []string{
+		"text/", "application/json", "application/xml",
+		"application/x-www-form-urlencoded", "application/javascript",
+		"application/css", "application/x-yaml", "application/yaml",
+	} {
+		if strings.HasPrefix(ct, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsNullBytes(data []byte) bool {
+	limit := 8192
+	if len(data) < limit {
+		limit = len(data)
+	}
+	for _, b := range data[:limit] {
+		if b == 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/requests/")
 	parts := strings.SplitN(path, "/", 2)
@@ -261,6 +343,8 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 			s.handleGetBodyBin(w, r, id)
 		case sub == "curl" && r.Method == http.MethodGet:
 			s.handleCopyCurl(w, r, id)
+		case sub == "body-multipart" && r.Method == http.MethodPut:
+			s.handleSaveMultipart(w, r, id)
 		default:
 			http.NotFound(w, r)
 		}
@@ -310,9 +394,35 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	binDir := filepath.Join(s.history.Dir(), "bin")
-	if entry.Request.BodyFile != "" && entry.Request.IsBinaryBody {
-		if data, err := os.ReadFile(filepath.Join(binDir, entry.Request.BodyFile)); err == nil {
-			entry.Request.BodyHex = generateHexDump(data, hexDumpMaxLines)
+
+	if entry.Request.BodyFile != "" {
+		var reqCT string
+		if cts, ok := entry.Request.Headers["Content-Type"]; ok && len(cts) > 0 {
+			reqCT = cts[0]
+		}
+		if strings.Contains(strings.ToLower(reqCT), "multipart/form-data") {
+			if boundary := extractBoundary(reqCT); boundary != "" {
+				if data, err := os.ReadFile(filepath.Join(binDir, entry.Request.BodyFile)); err == nil {
+					entry.Request.ParsedMultipart = parseMultipartBody(data, boundary)
+				}
+			}
+		}
+	}
+
+	if entry.Request.BodyFile != "" {
+		needHex := entry.Request.IsBinaryBody
+		if !needHex {
+			for _, p := range entry.Request.ParsedMultipart {
+				if p.IsBinary {
+					needHex = true
+					break
+				}
+			}
+		}
+		if needHex {
+			if data, err := os.ReadFile(filepath.Join(binDir, entry.Request.BodyFile)); err == nil {
+				entry.Request.BodyHex = generateHexDump(data, hexDumpMaxLines)
+			}
 		}
 	}
 	if entry.Response != nil && entry.Response.BodyFile != "" && entry.Response.IsBinaryBody {
@@ -367,6 +477,95 @@ func (s *Server) handleGetBodyBin(w http.ResponseWriter, r *http.Request, id str
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-%s.bin"`, id, target))
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Write(data)
+}
+
+func (s *Server) handleSaveMultipart(w http.ResponseWriter, r *http.Request, id string) {
+	entry, err := s.history.Get(id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	var req struct {
+		Parts []struct {
+			Name  string `json:"name"`
+			Value string `json:"value"`
+		} `json:"parts"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	var reqCT string
+	if cts, ok := entry.Request.Headers["Content-Type"]; ok && len(cts) > 0 {
+		reqCT = cts[0]
+	}
+	boundary := extractBoundary(reqCT)
+	if boundary == "" {
+		http.Error(w, "not multipart/form-data", http.StatusBadRequest)
+		return
+	}
+
+	binDir := filepath.Join(s.history.Dir(), "bin")
+	origData, err := os.ReadFile(filepath.Join(binDir, entry.Request.BodyFile))
+	if err != nil {
+		http.Error(w, "original body not found", http.StatusInternalServerError)
+		return
+	}
+
+	modifiedValues := make(map[string]string)
+	for _, p := range req.Parts {
+		modifiedValues[p.Name] = p.Value
+	}
+
+	reader := multipart.NewReader(bytes.NewReader(origData), boundary)
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	writer.SetBoundary(boundary)
+
+	for {
+		part, err := reader.NextPart()
+		if err != nil {
+			break
+		}
+		name := part.FormName()
+		if name == "" {
+			name = part.FileName()
+		}
+		header := make(map[string][]string)
+		for k, v := range part.Header {
+			header[k] = v
+		}
+
+		if newVal, ok := modifiedValues[name]; ok && part.FileName() == "" {
+			if err := writer.WriteField(name, newVal); err != nil {
+				http.Error(w, "write field failed", http.StatusInternalServerError)
+				return
+			}
+		} else {
+			p, err := writer.CreatePart(header)
+			if err != nil {
+				http.Error(w, "create part failed", http.StatusInternalServerError)
+				return
+			}
+			if _, err := io.Copy(p, part); err != nil {
+				http.Error(w, "copy part failed", http.StatusInternalServerError)
+				return
+			}
+		}
+	}
+	writer.Close()
+
+	entry.Request.EditedBody = buf.String()
+	if err := s.history.Update(entry); err != nil {
+		http.Error(w, "save failed", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	json.NewEncoder(w).Encode(entry)
 }
 
 func (s *Server) handleCopyCurl(w http.ResponseWriter, r *http.Request, id string) {

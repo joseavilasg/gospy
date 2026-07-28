@@ -33,20 +33,31 @@ type Entry struct {
 	ClientDisplayName string          `json:"clientDisplayName,omitempty"`
 }
 
+type MultipartPart struct {
+	Name        string `json:"name"`
+	Filename    string `json:"filename,omitempty"`
+	ContentType string `json:"contentType,omitempty"`
+	Value       string `json:"value,omitempty"`
+	IsBinary    bool   `json:"isBinary"`
+	Size        int    `json:"size"`
+	HexPreview  string `json:"hexPreview,omitempty"`
+}
+
 type RequestRecord struct {
-	Method        string              `json:"method"`
-	URL           string              `json:"url"`
-	Host          string              `json:"host"`
-	Headers       map[string][]string `json:"headers"`
-	EditedHeaders map[string][]string `json:"editedHeaders,omitempty"`
-	Body          string              `json:"body,omitempty"`
-	RawBody       string              `json:"rawBody,omitempty"`
-	Compression   string              `json:"compression,omitempty"`
-	EditedBody    string              `json:"editedBody,omitempty"`
-	BodyFile      string              `json:"bodyFile,omitempty"`
-	BodySize      int64               `json:"bodySize,omitempty"`
-	BodyHex       string              `json:"bodyHex,omitempty"`
-	IsBinaryBody  bool                `json:"isBinaryBody,omitempty"`
+	Method          string              `json:"method"`
+	URL             string              `json:"url"`
+	Host            string              `json:"host"`
+	Headers         map[string][]string `json:"headers"`
+	EditedHeaders   map[string][]string `json:"editedHeaders,omitempty"`
+	Body            string              `json:"body,omitempty"`
+	RawBody         string              `json:"rawBody,omitempty"`
+	Compression     string              `json:"compression,omitempty"`
+	EditedBody      string              `json:"editedBody,omitempty"`
+	BodyFile        string              `json:"bodyFile,omitempty"`
+	BodySize        int64               `json:"bodySize,omitempty"`
+	BodyHex         string              `json:"bodyHex,omitempty"`
+	IsBinaryBody    bool                `json:"isBinaryBody,omitempty"`
+	ParsedMultipart []MultipartPart     `json:"parsedMultipart,omitempty"`
 }
 
 type ResponseRecord struct {

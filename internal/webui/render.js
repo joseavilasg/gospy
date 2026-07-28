@@ -1,5 +1,6 @@
 import { requests, selectedId, filterText, ignoredHosts, focusedHosts, focusEnabled, setSelectedId, rules } from './state.js';
 import { applyFilters, isAnyFilterActive } from './filters.js';
+import { detectBodyType, getKebabItems, renderContent } from './body-types.js';
 
 const ITEM_HEIGHT = 35;
 const BUFFER = 5;
@@ -13,13 +14,6 @@ export const SVG_REVERT = '<svg width="14" height="14" viewBox="0 0 16 16"><path
 export function escapeHtml(str) {
     if (!str) return '';
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-function formatBytes(bytes) {
-    if (!bytes || bytes === 0) return '0 B';
-    const units = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(1024));
-    return (bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
 }
 
 function hostMatchesPattern(host, pattern) {
@@ -245,8 +239,9 @@ export function renderDetail(req, activeTab = 'request') {
         if (isMocked) badges.push(`<span class="body-badge body-badge-mocked">mocked</span>`);
         const badgesHtml = badges.join('');
 
-        const isBinary = !!isBinaryBody;
-        if (isBinary) canEdit = false;
+        const bodyType = detectBodyType(contentType, req.request, isBinaryBody);
+        const isBinaryType = bodyType === 'binary';
+        if (isBinaryType) canEdit = false;
 
         const viewModeHtml = `<button class="body-tool body-view active" data-action="set-view" data-target="${target}" data-view="pretty">Pretty</button><button class="body-tool body-view" data-action="set-view" data-target="${target}" data-view="raw">Raw</button>`;
 
@@ -258,33 +253,25 @@ export function renderDetail(req, activeTab = 'request') {
         if (isModified && modifiedBody) contentBtns.push(`<button class="body-tool body-content" data-action="set-content" data-target="${target}" data-content="modified">Modified</button>`);
         if (isMocked && mockedBody) contentBtns.push(`<button class="body-tool body-content${defaultContent === 'mocked' ? ' active' : ''}" data-action="set-content" data-target="${target}" data-content="mocked">Mocked</button>`);
 
-        const menuItems = [];
-        if (isBinary) {
-            menuItems.push(`<div class="menu-item" data-action="copy-hex" data-target="${target}">⧉ Copy hex</div>`);
-            menuItems.push(`<div class="menu-item" data-action="download-bin" data-target="${target}" data-entry-id="${entryId}">⬇ Download .bin</div>`);
-        } else {
-            menuItems.push(`<div class="menu-item" data-action="copy-body" data-target="${target}">⧉ Copy</div>`);
-            if (canEdit) menuItems.push(`<div class="menu-item" data-action="edit-body" data-target="${target}">✎ Edit</div>`);
-            if (hasEdited) menuItems.push(`<div class="menu-item" data-action="revert-body" data-target="${target}">↩ Revert</div>`);
-        }
+        const menuItems = getKebabItems(bodyType, target, canEdit, hasEdited, entryId)
+            .map(item => `<div class="menu-item" data-action="${item.action}" data-target="${item.target}"${item.entryId ? ` data-entry-id="${item.entryId}"` : ''}>${item.label}</div>`)
+            .join('');
 
         const hasToolbar = badges.length > 0 || viewModeHtml.length > 0 || contentBtns.length > 0;
         const bodyHex = (target === 'request') ? (req.request.bodyHex || '') : ((req.response && req.response.bodyHex) || '');
-        const displayBody = isBinary ? '' : body;
 
-        let bodyContentHtml;
-        if (isBinary) {
-            bodyContentHtml = `<div class="binary-placeholder" data-body-target="${target}"><svg class="binary-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="14" y="14" width="4" height="6" rx="2"/><rect x="6" y="4" width="4" height="6" rx="2"/><path d="M6 20h4"/><path d="M14 10h4"/><path d="M6 14h2v6"/><path d="M14 4h2v6"/></svg> Binary ${escapeHtml(target)} body — ${escapeHtml(contentType || 'unknown')} (${formatBytes(bodySize)})</div><pre class="body-content" data-body-target="${target}" data-binary="true" data-view-mode="raw" style="display:none">${escapeHtml(bodyHex)}</pre>`;
-        } else {
-            bodyContentHtml = `<pre class="body-content" data-body-target="${target}" data-decoded="${escapeHtml((isMocked && mockedBody) ? mockedBody : body)}" data-raw="${escapeHtml(rawBody)}" data-edited="${escapeHtml(hasEdited ? editedBody : '')}" data-modified="${escapeHtml(isModified ? modifiedBody : '')}" data-mocked="${escapeHtml(isMocked ? body : '')}" data-compression="${compression}" data-view-mode="pretty" data-content-mode="${defaultContent}">${escapeHtml(displayBody)}</pre>`;
-        }
+        const bodyContentHtml = renderContent(bodyType, target, {
+            body, rawBody, compression, isModified, modifiedBody, isMocked, mockedBody,
+            hasEdited, editedBody, defaultContent, bodyHex, bodySize, contentType,
+            bodyTarget: target, parsedMultipart: req.request.parsedMultipart || [],
+        });
 
         return `<div class="section-panel" data-body-target="${target}" data-content-type="${escapeHtml(contentType)}">
             <div class="section-header">
                 <span class="section-title">Body</span>
                 ${menuItems.length > 0 ? `<div class="kebab" data-action="toggle-menu">
                     ⋮
-                    <div class="kebab-menu">${menuItems.join('')}</div>
+                    <div class="kebab-menu">${menuItems}</div>
                 </div>` : ''}
             </div>
             <div class="content-block">
