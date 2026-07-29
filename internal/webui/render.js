@@ -10,6 +10,8 @@ let filteredCache = null;
 
 export const SVG_EDIT = '<svg width="14" height="14" viewBox="0 0 16 16"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>';
 export const SVG_REVERT = '<svg width="14" height="14" viewBox="0 0 16 16"><path d="M3 7h7a3 3 0 010 6H8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><polyline points="6,4 3,7 6,10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+export const SVG_MAXIMIZE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>';
+export const SVG_MINIMIZE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></svg>';
 
 export function escapeHtml(str) {
     if (!str) return '';
@@ -178,6 +180,8 @@ export function selectRequest(id, activeTab = 'request') {
 }
 
 export function renderDetail(req, activeTab = 'request') {
+    document.body.classList.remove('fullscreen-active');
+    document.querySelectorAll('.section-panel.fullscreen-mode').forEach(p => p.classList.remove('fullscreen-mode'));
     const panel = document.getElementById('detailPanel');
     const host = req.request.host || '';
     const isIgnored = ignoredHosts.includes(host);
@@ -281,9 +285,9 @@ export function renderDetail(req, activeTab = 'request') {
                         ${viewModeHtml ? `<div class="body-tools-group">${viewModeHtml}</div>` : ''}
                         ${contentBtns.length > 0 ? `<div class="divider-v"></div><div class="body-tools-group">${contentBtns.join('')}</div>` : ''}
                     </div>
-                    <div class="toolbar-right">${badgesHtml}</div>
+                    <div class="toolbar-right">${badgesHtml}<button class="fullscreen-btn" data-action="toggle-fullscreen-body" data-target="${target}" title="Full screen">${SVG_MAXIMIZE}</button></div>
                 </div>
-                ${bodyContentHtml}
+                <div class="body-scroll">${bodyContentHtml}</div>
             </div>
         </div>`;
     }

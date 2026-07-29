@@ -1,8 +1,11 @@
 import { setFilterText, setFocusEnabled, setLastTimestamp, selectedId, requests, rules, setRules, setSignatureCache } from './state.js';
 import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch } from './api.js';
-import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, openRuleModal, closeRuleModal, openRuleModalFromRequest, extractRefererOrigin } from './render.js';
+import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, extractRefererOrigin } from './render.js';
 import { registerFilter, setOnFilterChange, initFilterPopover, openFilterPopover, closeFilterPopover, closeChip, openChip, getFilterChipsData, getMatchMode, setMatchMode, clearAllFilters } from './filters.js';
 import { initBodyTypes, editBody, saveBody, cancelBody, setBodyView, copyBody, getActiveEditor, postRenderBody } from './body-types.js';
+
+let _pendingFullscreenTarget = null;
+let _savedScrollTop = 0;
 
 registerFilter({
     type: 'process',
@@ -256,6 +259,9 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
             const toggle = btn.querySelector('.replays-toggle');
             if (toggle) toggle.textContent = replaysList.classList.contains('collapsed') ? '▸' : '▾';
             break;
+        case 'toggle-fullscreen-body':
+            toggleFullscreenBody(btn.dataset.target, btn);
+            break;
         case 'edit-headers':
             editHeaders(btn.closest('.tab-content')?.querySelector('.headers-container'));
             break;
@@ -321,6 +327,12 @@ document.getElementById('detailPanel').addEventListener('detail-rendered', () =>
     renderCurrentContent('response');
     postRenderBody('request');
     postRenderBody('response');
+    if (_pendingFullscreenTarget) {
+        const panel = document.querySelector(`.section-panel[data-body-target="${_pendingFullscreenTarget}"]`);
+        const btn = panel?.querySelector('[data-action="toggle-fullscreen-body"]');
+        if (panel && btn) enterFullscreenBody(panel, btn);
+        _pendingFullscreenTarget = null;
+    }
 });
 
 function setContent(target, content) {
@@ -334,6 +346,62 @@ function setContent(target, content) {
         });
     }
     renderCurrentContent(target);
+}
+
+function toggleFullscreenBody(target, btn) {
+    const panel = document.querySelector(`.section-panel[data-body-target="${target}"]`);
+    if (!panel) return;
+    if (panel.classList.contains('fullscreen-mode')) {
+        exitFullscreenBody(panel, btn);
+    } else {
+        enterFullscreenBody(panel, btn);
+    }
+}
+
+function enterFullscreenBody(panel, btn) {
+    const scrollContainer = document.querySelector('.detail-panel');
+    _savedScrollTop = scrollContainer?.scrollTop || 0;
+
+    panel.classList.add('fullscreen-mode');
+    document.body.classList.add('fullscreen-active');
+
+    const kebab = panel.querySelector('.section-header .kebab');
+    const toolbarRight = panel.querySelector('.toolbar-right');
+    if (kebab && toolbarRight && !toolbarRight.querySelector('.kebab-clone')) {
+        const clone = kebab.cloneNode(true);
+        clone.classList.add('kebab-clone');
+        toolbarRight.appendChild(clone);
+    }
+
+    btn.innerHTML = SVG_MINIMIZE;
+    btn.title = 'Exit full screen';
+
+    document.removeEventListener('keydown', onFullscreenEsc);
+    document.addEventListener('keydown', onFullscreenEsc);
+}
+
+function exitFullscreenBody(panel, btn) {
+    panel.classList.remove('fullscreen-mode');
+    document.body.classList.remove('fullscreen-active');
+
+    const clone = panel.querySelector('.kebab-clone');
+    if (clone) clone.remove();
+
+    btn.innerHTML = SVG_MAXIMIZE;
+    btn.title = 'Full screen';
+
+    document.removeEventListener('keydown', onFullscreenEsc);
+
+    const scrollContainer = document.querySelector('.detail-panel');
+    if (scrollContainer) scrollContainer.scrollTop = _savedScrollTop;
+}
+
+function onFullscreenEsc(e) {
+    if (e.key !== 'Escape') return;
+    const panel = document.querySelector('.section-panel.fullscreen-mode');
+    if (!panel) return;
+    const btn = panel.querySelector('[data-action="toggle-fullscreen-body"]');
+    if (btn) exitFullscreenBody(panel, btn);
 }
 
 function renderCurrentContent(target) {
@@ -354,7 +422,9 @@ function renderCurrentContent(target) {
     }
 
     const contentBlock = sectionPanel.querySelector('.content-block');
-    const existingTree = contentBlock?.querySelector('.json-viewer-container');
+    const bodyScroll = sectionPanel.querySelector('.body-scroll');
+    const parentEl = bodyScroll || contentBlock;
+    const existingTree = parentEl?.querySelector('.json-viewer-container');
     if (existingTree) existingTree.remove();
 
     if (viewMode === 'pretty') {
@@ -362,7 +432,7 @@ function renderCurrentContent(target) {
             const obj = JSON.parse(content);
             const container = document.createElement('div');
             container.className = 'json-viewer-container';
-            if (contentBlock) contentBlock.appendChild(container);
+            if (parentEl) parentEl.appendChild(container);
             const jsonViewer = new JSONViewer();
             container.appendChild(jsonViewer.getContainer());
             jsonViewer.showJSON(obj, -1, 1);
@@ -474,6 +544,8 @@ function sendReplay() {
 }
 
 function revertBody(target) {
+    const wasFullscreen = document.querySelector(`.section-panel[data-body-target="${target}"].fullscreen-mode`);
+    _pendingFullscreenTarget = wasFullscreen ? target : null;
     fetch(`/api/requests/${selectedId}/body?target=${target}`, {
         method: 'DELETE'
     }).then(r => r.json()).then(() => {

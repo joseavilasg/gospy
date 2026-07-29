@@ -243,33 +243,31 @@ registerBodyType({
 
             if (_savedToolbarHtml) {
                 const toolsDiv = sectionPanel.querySelector('.content-toolbar');
-                let html = _savedToolbarHtml;
+                toolsDiv.innerHTML = _savedToolbarHtml;
+                document.querySelectorAll('.kebab-menu.open').forEach(m => m.classList.remove('open'));
                 if (!toolsDiv.querySelector('.body-badge-edited')) {
-                    const compression = pre.dataset.compression || '';
-                    html = `<div class="toolbar-left">
-                        <div class="body-tools-group">
-                            <button class="body-tool body-view active" data-action="set-view" data-target="${target}" data-view="pretty">Pretty</button>
-                            <button class="body-tool body-view" data-action="set-view" data-target="${target}" data-view="raw">Raw</button>
-                        </div>
-                        <div class="divider-v"></div>
-                        <div class="body-tools-group">
-                            <button class="body-tool body-content" data-action="set-content" data-target="${target}" data-content="original">Original</button>
-                            <button class="body-tool body-content active" data-action="set-content" data-target="${target}" data-content="edited">Edited</button>
-                        </div>
-                    </div>
-                    <div class="toolbar-right">
-                        ${compression ? `<span class="body-badge body-badge-compression">${escapeHtml(compression)}</span>` : ''}
-                        <span class="body-badge body-badge-edited">edited</span>
-                    </div>`;
+                    const leftGroup = toolsDiv.querySelector('.toolbar-left');
+                    if (leftGroup) {
+                        leftGroup.insertAdjacentHTML('beforeend',
+                            `<div class="divider-v"></div>
+                             <div class="body-tools-group">
+                                 <button class="body-tool body-content" data-action="set-content" data-target="${target}" data-content="original">Original</button>
+                                 <button class="body-tool body-content active" data-action="set-content" data-target="${target}" data-content="edited">Edited</button>
+                             </div>`);
+                    }
+                    const rightGroup = toolsDiv.querySelector('.toolbar-right');
+                    if (rightGroup) {
+                        rightGroup.insertAdjacentHTML('afterbegin', '<span class="body-badge body-badge-edited">edited</span>');
+                    }
                 }
-                toolsDiv.innerHTML = html;
                 _savedToolbarHtml = null;
             }
             pre.dataset.contentMode = 'edited';
-            const kebabMenu = sectionPanel.querySelector('.kebab-menu');
-            if (kebabMenu && !kebabMenu.querySelector('[data-action="revert-body"]')) {
-                kebabMenu.insertAdjacentHTML('beforeend', '<div class="menu-item" data-action="revert-body" data-target="' + target + '">↩ Revert</div>');
-            }
+            sectionPanel.querySelectorAll('.kebab-menu').forEach(menu => {
+                if (!menu.querySelector('[data-action="revert-body"]')) {
+                    menu.insertAdjacentHTML('beforeend', '<div class="menu-item" data-action="revert-body" data-target="' + target + '">↩ Revert</div>');
+                }
+            });
             _renderCurrentContent(target);
         }).catch(e => console.error('Failed to save body:', e));
     },
