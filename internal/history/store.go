@@ -87,13 +87,23 @@ type ResponseRecord struct {
 }
 
 type Store struct {
-	dir     string
-	mu      sync.Mutex
-	index   []*ListEntry
-	pending []*Entry
+	dir      string
+	mu       sync.Mutex
+	index    []*ListEntry
+	pending  []*Entry
+	onSave   []func(entry *Entry)
+	onUpdate []func(entry *Entry)
 }
 
 func (s *Store) Dir() string { return s.dir }
+
+func (s *Store) OnSave(fn func(entry *Entry)) {
+	s.onSave = append(s.onSave, fn)
+}
+
+func (s *Store) OnUpdate(fn func(entry *Entry)) {
+	s.onUpdate = append(s.onUpdate, fn)
+}
 
 type ListEntry struct {
 	ID                  string    `json:"id"`
@@ -362,6 +372,10 @@ func (s *Store) Save(entry *Entry) error {
 	err = s.persistIndex()
 	s.mu.Unlock()
 
+	for _, fn := range s.onSave {
+		fn(entry)
+	}
+
 	return err
 }
 
@@ -454,6 +468,10 @@ func (s *Store) Update(entry *Entry) error {
 	}
 	err = s.persistIndex()
 	s.mu.Unlock()
+
+	for _, fn := range s.onUpdate {
+		fn(entry)
+	}
 
 	return err
 }
