@@ -127,6 +127,7 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/json-viewer.css", s.handleStatic(jsonViewerCSS, "text/css"))
 	mux.HandleFunc("/monaco-init.js", s.handleStatic(monacoInitJS, "application/javascript"))
 	mux.HandleFunc("/monaco/", handleMonacoFile)
+	mux.HandleFunc("/api/requests/search", s.handleSearch)
 	mux.HandleFunc("/api/requests", s.handleListRequests)
 	mux.HandleFunc("/api/requests/", s.handleGetRequest)
 	mux.HandleFunc("/api/ignored", s.handleIgnored)
@@ -202,6 +203,144 @@ func (s *Server) handleListRequests(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	json.NewEncoder(w).Encode(filtered)
+}
+
+type searchResult struct {
+	ID      string `json:"id"`
+	Field   string `json:"field"`
+	Snippet string `json:"snippet"`
+}
+
+func makeSnippet(text, query string, idx int) string {
+	const ctx = 60
+	start := idx - ctx
+	if start < 0 {
+		start = 0
+	}
+	end := idx + len(query) + ctx
+	if end > len(text) {
+		end = len(text)
+	}
+	s := text[start:end]
+	if start > 0 {
+		s = "..." + s
+	}
+	if end < len(text) {
+		s = s + "..."
+	}
+	return s
+}
+
+func searchResponseBody(resp *history.ResponseRecord) string {
+	if resp == nil {
+		return ""
+	}
+	if resp.Body != "" {
+		return resp.Body
+	}
+	if resp.RawBody == "" {
+		return ""
+	}
+	ces := resp.Headers["Content-Encoding"]
+	if len(ces) > 0 {
+		result := proxy.DecompressBody([]byte(resp.RawBody), ces[0])
+		if len(strings.TrimSpace(result.Decoded)) > 0 {
+			return result.Decoded
+		}
+		if result.Compression != "" {
+			return ""
+		}
+	}
+	return resp.RawBody
+}
+
+func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Q string `json:"q"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	q := strings.ToLower(strings.TrimSpace(req.Q))
+	if len(q) < 3 {
+		http.Error(w, "query too short", http.StatusBadRequest)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+
+	entries := s.history.ListSummary()
+	enc := json.NewEncoder(w)
+	var results []searchResult
+	scanned := 0
+	total := len(entries)
+
+	for i := len(entries) - 1; i >= 0; i-- {
+		id := entries[i].ID
+		select {
+		case <-r.Context().Done():
+			return
+		default:
+		}
+
+		entry, err := s.history.Get(id)
+		if err != nil {
+			continue
+		}
+		scanned++
+
+		if !entry.Request.IsBinaryBody && entry.Request.Body != "" {
+			if idx := strings.Index(strings.ToLower(entry.Request.Body), q); idx >= 0 {
+				results = append(results, searchResult{
+					ID: id, Field: "request.body",
+					Snippet: makeSnippet(entry.Request.Body, q, idx),
+				})
+			}
+		}
+
+		if entry.Response != nil && !entry.Response.IsBinaryBody {
+			body := searchResponseBody(entry.Response)
+			if body != "" {
+				if idx := strings.Index(strings.ToLower(body), q); idx >= 0 {
+					results = append(results, searchResult{
+						ID: id, Field: "response.body",
+						Snippet: makeSnippet(body, q, idx),
+					})
+				}
+			}
+		}
+
+		if scanned%5 == 0 || scanned == total {
+			enc.Encode(map[string]interface{}{
+				"scanned": scanned,
+				"total":   total,
+			})
+			flusher.Flush()
+		}
+	}
+
+	for _, res := range results {
+		enc.Encode(res)
+		flusher.Flush()
+	}
+	enc.Encode(map[string]interface{}{
+		"done":       true,
+		"matchCount": len(results),
+	})
+	flusher.Flush()
 }
 
 const hexDumpMaxLines = 20
@@ -491,7 +630,7 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 		if len(ce) > 0 {
 			enc = ce[0]
 		}
-		entry.Request.Body = proxy.DecompressBody([]byte(entry.Request.RawBody), enc)
+		entry.Request.Body = proxy.DecompressBody([]byte(entry.Request.RawBody), enc).Decoded
 	}
 	if entry.Response != nil && entry.Response.RawBody != "" && entry.Response.Body == "" {
 		ce := entry.Response.Headers["Content-Encoding"]
@@ -499,7 +638,7 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 		if len(ce) > 0 {
 			enc = ce[0]
 		}
-		entry.Response.Body = proxy.DecompressBody([]byte(entry.Response.RawBody), enc)
+		entry.Response.Body = proxy.DecompressBody([]byte(entry.Response.RawBody), enc).Decoded
 	}
 	if entry.ServerResponse != nil && entry.ServerResponse.RawBody != "" && entry.ServerResponse.Body == "" {
 		ce := entry.ServerResponse.Headers["Content-Encoding"]
@@ -507,7 +646,7 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 		if len(ce) > 0 {
 			enc = ce[0]
 		}
-		entry.ServerResponse.Body = proxy.DecompressBody([]byte(entry.ServerResponse.RawBody), enc)
+		entry.ServerResponse.Body = proxy.DecompressBody([]byte(entry.ServerResponse.RawBody), enc).Decoded
 	}
 
 	const maxBodyLen = 2 * 1024 * 1024

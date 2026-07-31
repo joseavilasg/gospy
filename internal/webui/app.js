@@ -1,7 +1,7 @@
 import { setFilterText, setFocusEnabled, setLastTimestamp, selectedId, requests, rules, setRules, setSignatureCache } from './state.js';
 import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch } from './api.js';
 import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, extractRefererOrigin } from './render.js';
-import { registerFilter, setOnFilterChange, initFilterPopover, openFilterPopover, closeFilterPopover, closeChip, openChip, getFilterChipsData, getMatchMode, setMatchMode, clearAllFilters } from './filters.js';
+import { isBodySearching, restoreBodyFilter, registerFilter, setOnFilterChange, initFilterPopover, openFilterPopover, closeFilterPopover, closeChip, openChip, getFilterChipsData, getMatchMode, setMatchMode, clearAllFilters } from './filters.js';
 import { initBodyTypes, editBody, saveBody, cancelBody, setBodyView, copyBody, getActiveEditor, postRenderBody } from './body-types.js';
 
 let _pendingFullscreenTarget = null;
@@ -589,6 +589,7 @@ loadRequests();
 loadIgnored();
 loadFocused();
 loadRules();
+restoreBodyFilter();
 setInterval(() => {
     if (document.getElementById('autoRefresh').checked) { loadRequests(); }
 }, 2000);
@@ -970,39 +971,21 @@ function renderFilterChips() {
         return;
     }
 
-    filterChips.innerHTML = chips.map(c => c.html).join('');
+    closeOverflowPanel();
 
-    requestAnimationFrame(() => {
-        if (filterChips.scrollWidth > filterChips.clientWidth + 2) {
-            let lastFit = 0;
-            const chipEls = filterChips.querySelectorAll('.filter-chip');
-            for (let i = 0; i < chipEls.length; i++) {
-                chipEls[i].style.flexShrink = '0';
-            }
-            let cumWidth = 0;
-            const available = filterChips.clientWidth - 40;
-            for (let i = 0; i < chipEls.length; i++) {
-                const w = chipEls[i].getBoundingClientRect().width + 6;
-                if (cumWidth + w > available) break;
-                cumWidth += w;
-                lastFit = i + 1;
-            }
-            if (lastFit < chipEls.length) {
-                lastFit = Math.max(1, lastFit);
-                const overflowCount = chipEls.length - lastFit;
-                const visible = chips.slice(0, lastFit).map(c => c.html).join('');
-                filterChips.innerHTML = visible + `<span class="filter-chips-more" id="filterChipsMore">+${overflowCount} more</span>`;
-                document.getElementById('filterChipsMore').addEventListener('click', toggleOverflowPanel);
-                const chipSpans = filterChips.querySelectorAll('.filter-chip');
-                const lastChip = chipSpans[chipSpans.length - 1];
-                if (lastChip) {
-                    lastChip.style.flex = '1';
-                    lastChip.style.minWidth = '0';
-                }
-            }
+    if (chips.length > 1) {
+        const chipCount = chips.filter(c => c.type !== 'connector').length;
+        if (chipCount > 1) {
+            const visible = chips.slice(0, 1).map(c => c.html).join('');
+            filterChips.innerHTML = visible + `<span class="filter-chips-more" id="filterChipsMore">+${chipCount - 1} more</span>`;
+            document.getElementById('filterChipsMore').addEventListener('click', toggleOverflowPanel);
+        } else {
+            filterChips.innerHTML = chips.map(c => c.html).join('');
         }
-        renderOverflowChips();
-    });
+    } else {
+        filterChips.innerHTML = chips[0].html;
+    }
+    renderOverflowChips();
 }
 
 function renderOverflowChips() {
@@ -1071,14 +1054,16 @@ initFilterPopover();
 // Match mode toggle
 function updateToggleUI() {
     const mode = getMatchMode();
+    const bodySearching = isBodySearching();
     filterModeToggle.querySelectorAll('.filter-mode-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.mode === mode);
+        btn.classList.toggle('disabled', bodySearching);
     });
 }
 
 filterModeToggle.addEventListener('click', (e) => {
     const btn = e.target.closest('.filter-mode-btn');
-    if (!btn) return;
+    if (!btn || isBodySearching()) return;
     setMatchMode(btn.dataset.mode);
 });
 

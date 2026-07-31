@@ -37,20 +37,20 @@
                             <div class="filter-popover-search">
                                 <input type="text" placeholder="Search filter..." id="filterTypeSearch">
                             </div>
-                            <div class="filter-popover-list">
+                            <div class="filter-popover-content">
                                 <!-- populated dynamically from registered filter types -->
                             </div>
                         </div>
                         <div class="filter-popover-step" id="filterStep2" style="display:none">
-                            <div class="filter-popover-search" style="display:flex;gap:6px;align-items:center">
+                            <div class="filter-popover-search">
                                 <button class="filter-type-back" id="filterTypeBack">←</button>
-                                <input type="text" placeholder="" id="modalFilterInput" style="flex:1">
+                                <span class="filter-popover-title" id="filterStep2Title"></span>
                             </div>
-                            <div class="filter-popover-list" id="modalFilterDropdown"></div>
+                            <div class="filter-popover-content" id="modalFilterContent"></div>
                             <div class="filter-popover-footer">
                                 <span class="filter-popover-count" id="filterMatchCount"></span>
                                 <button class="filter-popover-clear" id="filterClearBtn">Clear all</button>
-                                <button class="filter-popover-add" id="filterAddBtn">Apply</button>
+                                <button class="filter-popover-confirm" id="filterConfirmBtn">Apply</button>
                             </div>
                         </div>
                     </div>

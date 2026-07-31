@@ -86,7 +86,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 				}
 				isBinary = isBinaryBody(data, ce, ct)
 				if !isBinary {
-					result := decompressBody(data, ce)
+					result := DecompressBody(data, ce)
 					body = result.Decoded
 					rawBody = result.Raw
 					compression = result.Compression
@@ -502,15 +502,15 @@ func isBinaryBody(data []byte, contentEncoding, contentType string) bool {
 	return false
 }
 
-type decompressResult struct {
+type DecompressResult struct {
 	Decoded     string
 	Raw         string
 	Compression string
 }
 
-func decompressBody(data []byte, contentEncoding string) decompressResult {
+func decompressBody(data []byte, contentEncoding string) DecompressResult {
 	if len(data) == 0 {
-		return decompressResult{}
+		return DecompressResult{}
 	}
 
 	raw := string(data)
@@ -520,7 +520,7 @@ func decompressBody(data []byte, contentEncoding string) decompressResult {
 		if err == nil {
 			defer reader.Close()
 			if decompressed, err := io.ReadAll(reader); err == nil {
-				return decompressResult{Decoded: string(decompressed), Raw: raw, Compression: "gzip"}
+				return DecompressResult{Decoded: string(decompressed), Raw: raw, Compression: "gzip"}
 			}
 		}
 	}
@@ -530,7 +530,7 @@ func decompressBody(data []byte, contentEncoding string) decompressResult {
 		if err == nil {
 			defer reader.Close()
 			if decompressed, err := io.ReadAll(reader); err == nil {
-				return decompressResult{Decoded: string(decompressed), Raw: raw, Compression: "zlib"}
+				return DecompressResult{Decoded: string(decompressed), Raw: raw, Compression: "zlib"}
 			}
 		}
 	}
@@ -538,16 +538,16 @@ func decompressBody(data []byte, contentEncoding string) decompressResult {
 	if len(contentEncoding) > 0 && strings.Contains(strings.ToLower(contentEncoding), "br") {
 		reader := brotli.NewReader(bytes.NewReader(data))
 		if decompressed, err := io.ReadAll(reader); err == nil {
-			return decompressResult{Decoded: string(decompressed), Raw: raw, Compression: "brotli"}
+			return DecompressResult{Decoded: string(decompressed), Raw: raw, Compression: "brotli"}
 		}
 	}
 
 	if len(contentEncoding) > 0 && strings.Contains(strings.ToLower(contentEncoding), "deflate") {
 		reader := flate.NewReader(bytes.NewReader(data))
 		if decompressed, err := io.ReadAll(reader); err == nil {
-			return decompressResult{Decoded: string(decompressed), Raw: raw, Compression: "deflate"}
+			return DecompressResult{Decoded: string(decompressed), Raw: raw, Compression: "deflate"}
 		}
 	}
 
-	return decompressResult{Decoded: raw}
+	return DecompressResult{Decoded: raw}
 }
