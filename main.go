@@ -134,12 +134,17 @@ func main() {
 		proxy.LogInfo(fmt.Sprintf("Recording session to %s", *sessionDir))
 	}
 
+	filterStore := webui.NewFilterStore(*dataDir + "/filters.json")
+	if err := filterStore.Load(); err != nil {
+		proxy.LogError(fmt.Sprintf("Failed to load filters: %v", err))
+	}
+
 	srv := proxy.NewServer(*proxyAddr, *uiAddr, caCert, hist, ruleEngine, ignoreStore, *dataDir)
 
 	proxy.LogInfo(fmt.Sprintf("Proxy listening on %s", *proxyAddr))
 
 	go func() {
-		if err := webui.NewServer(*uiAddr, hist, ignoreStore, focusStore, rulesStore, ruleEngine, *proxyAddr, srv.Resolver(), srv.SigCache()).ListenAndServe(); err != nil {
+		if err := webui.NewServer(*uiAddr, hist, ignoreStore, focusStore, rulesStore, ruleEngine, *proxyAddr, srv.Resolver(), srv.SigCache(), filterStore).ListenAndServe(); err != nil {
 			proxy.LogError(fmt.Sprintf("Web UI error: %v", err))
 		}
 	}()

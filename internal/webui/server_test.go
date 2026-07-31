@@ -35,7 +35,7 @@ func newTestServer(t *testing.T) (*Server, *rules.Store, *history.Store) {
 	ignoreStore := newMockIgnoreChecker()
 	focusStore := newMockFocusChecker()
 
-	s := NewServer(":0", hist, ignoreStore, focusStore, rulesStore, engine, ":8080", nil, nil)
+	s := NewServer(":0", hist, ignoreStore, focusStore, rulesStore, engine, ":8080", nil, nil, NewFilterStore(t.TempDir()+"/filters.json"))
 	return s, rulesStore, hist
 }
 
@@ -53,15 +53,25 @@ func (m *mockIgnoreChecker) List() []string             { return nil }
 func (m *mockIgnoreChecker) Add(host string) error      { m.hosts[host] = true; return nil }
 func (m *mockIgnoreChecker) Remove(host string) error   { delete(m.hosts, host); return nil }
 
-type mockFocusChecker struct{}
+type mockFocusChecker struct {
+	hosts map[string]bool
+}
 
-func newMockFocusChecker() *mockFocusChecker { return &mockFocusChecker{} }
+func newMockFocusChecker() *mockFocusChecker {
+	return &mockFocusChecker{hosts: make(map[string]bool)}
+}
 
-func (m *mockFocusChecker) IsFocused(host string) bool { return false }
-func (m *mockFocusChecker) Matches(host string) bool   { return false }
-func (m *mockFocusChecker) List() []string             { return nil }
-func (m *mockFocusChecker) Add(host string) error      { return nil }
-func (m *mockFocusChecker) Remove(host string) error   { return nil }
+func (m *mockFocusChecker) IsFocused(host string) bool { return m.hosts[host] }
+func (m *mockFocusChecker) Matches(host string) bool   { return m.hosts[host] }
+func (m *mockFocusChecker) List() []string {
+	var out []string
+	for h := range m.hosts {
+		out = append(out, h)
+	}
+	return out
+}
+func (m *mockFocusChecker) Add(host string) error    { m.hosts[host] = true; return nil }
+func (m *mockFocusChecker) Remove(host string) error { delete(m.hosts, host); return nil }
 
 func TestHandleRules_GET_Empty(t *testing.T) {
 	s, _, _ := newTestServer(t)

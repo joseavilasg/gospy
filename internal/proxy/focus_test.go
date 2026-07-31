@@ -23,7 +23,7 @@ func TestFocusStore_Matches(t *testing.T) {
 		{"wildcard prefix", []string{"telemetry.*"}, "telemetry.microsoft.com", true},
 		{"wildcard prefix no match", []string{"telemetry.*"}, "logs.microsoft.com", false},
 		{"multiple patterns", []string{"a.com", "*.b.com"}, "x.b.com", true},
-		{"empty store", []string{}, "anything.com", false},
+		{"empty store is no-op", []string{}, "anything.com", true},
 	}
 
 	for _, tc := range cases {

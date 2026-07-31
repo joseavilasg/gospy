@@ -12,7 +12,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -81,10 +83,17 @@ type Server struct {
 	focusStore  FocusChecker
 	rulesStore  *rules.Store
 	engine      *rules.Engine
+	filterStore *FilterStore
 	addr        string
 	proxyAddr   string
 	resolver    ProcessResolver
 	sigCache    SignatureChecker
+
+	listMu          sync.Mutex
+	lastVisible     map[string]bool
+	totalMu         sync.Mutex
+	nonIgnoredTotal int
+	searchToken     uint64
 }
 
 type ProcessResolver interface {
@@ -98,18 +107,48 @@ type SignatureChecker interface {
 	OnUpdate(fn func(*proxy.SignatureResult))
 }
 
-func NewServer(addr string, h *history.Store, ignore IgnoreChecker, focus FocusChecker, rulesStore *rules.Store, engine *rules.Engine, proxyAddr string, resolver ProcessResolver, sigCache SignatureChecker) *Server {
-	return &Server{
+func NewServer(addr string, h *history.Store, ignore IgnoreChecker, focus FocusChecker, rulesStore *rules.Store, engine *rules.Engine, proxyAddr string, resolver ProcessResolver, sigCache SignatureChecker, filterStore *FilterStore) *Server {
+	s := &Server{
 		history:     h,
 		ignoreStore: ignore,
 		focusStore:  focus,
 		rulesStore:  rulesStore,
 		engine:      engine,
+		filterStore: filterStore,
 		addr:        addr,
 		proxyAddr:   proxyAddr,
 		resolver:    resolver,
 		sigCache:    sigCache,
+		lastVisible: make(map[string]bool),
 	}
+	s.recomputeTotal()
+	h.OnSave(func(e *history.Entry) {
+		if !ignore.Matches(e.Request.Host) {
+			s.totalMu.Lock()
+			s.nonIgnoredTotal++
+			s.totalMu.Unlock()
+		}
+	})
+	return s
+}
+
+func (s *Server) recomputeTotal() {
+	entries := s.history.ListSummary()
+	total := 0
+	for _, le := range entries {
+		if !s.ignoreStore.Matches(le.Host) {
+			total++
+		}
+	}
+	s.totalMu.Lock()
+	s.nonIgnoredTotal = total
+	s.totalMu.Unlock()
+}
+
+func (s *Server) total() int {
+	s.totalMu.Lock()
+	defer s.totalMu.Unlock()
+	return s.nonIgnoredTotal
 }
 
 func (s *Server) ListenAndServe() error {
@@ -130,6 +169,9 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/api/requests/search", s.handleSearch)
 	mux.HandleFunc("/api/requests", s.handleListRequests)
 	mux.HandleFunc("/api/requests/", s.handleGetRequest)
+	mux.HandleFunc("/api/filters/options", s.handleFilterOptions)
+	mux.HandleFunc("/api/filters/body", s.handleClearBodyFilter)
+	mux.HandleFunc("/api/filters", s.handleSaveFilters)
 	mux.HandleFunc("/api/ignored", s.handleIgnored)
 	mux.HandleFunc("/api/ignored/", s.handleIgnoredHost)
 	mux.HandleFunc("/api/focused", s.handleFocused)
@@ -178,57 +220,148 @@ func (s *Server) handleStatic(content, contentType string) http.HandlerFunc {
 	}
 }
 
-func (s *Server) handleListRequests(w http.ResponseWriter, r *http.Request) {
-	var entries []*history.ListEntry
+type listResponse struct {
+	Entries      []*history.ListEntry `json:"entries"`
+	Upserts      []*history.ListEntry `json:"upserts"`
+	Removed      []string             `json:"removed,omitempty"`
+	Total        int                  `json:"total"`
+	Version      int                  `json:"version"`
+	Filters      *history.Filters     `json:"filters,omitempty"`
+	FocusEnabled bool                 `json:"focusEnabled"`
+}
 
-	if since := r.URL.Query().Get("since"); since != "" {
-		t, err := time.Parse(time.RFC3339Nano, since)
-		if err == nil {
-			entries = s.history.ListSince(t)
+func (s *Server) matchOpts(focusEnabled bool) history.MatchOpts {
+	return history.MatchOpts{
+		Ignored:      s.ignoreStore,
+		Focused:      s.focusStore,
+		FocusEnabled: focusEnabled,
+	}
+}
+
+func (s *Server) handleListRequests(w http.ResponseWriter, r *http.Request) {
+	sinceStr := r.URL.Query().Get("since")
+	verStr := r.URL.Query().Get("version")
+
+	if sinceStr != "" && verStr != "" {
+		if t, err := time.Parse(time.RFC3339Nano, sinceStr); err == nil {
+			if v, err := strconv.Atoi(verStr); err == nil && v == s.filterStore.Version() {
+				s.writeJSON(w, s.diffList(t))
+				return
+			}
 		}
 	}
 
-	if entries == nil {
-		entries = s.history.ListSummary()
-	}
+	s.writeJSON(w, s.fullList())
+}
 
-	filtered := make([]*history.ListEntry, 0, len(entries))
-	for _, e := range entries {
-		if s.ignoreStore.Matches(e.Host) {
+func (s *Server) fullList() listResponse {
+	filters, focusEnabled, version := s.filterStore.Snapshot()
+	opts := s.matchOpts(focusEnabled)
+
+	entries := s.history.ListSummary()
+	visible := make([]*history.ListEntry, 0, len(entries))
+	total := 0
+	for _, le := range entries {
+		if s.ignoreStore.Matches(le.Host) {
 			continue
 		}
-		filtered = append(filtered, e)
+		total++
+		if filters.Matches(le, opts) {
+			visible = append(visible, le)
+		}
 	}
 
+	s.listMu.Lock()
+	s.lastVisible = make(map[string]bool, len(visible))
+	for _, le := range visible {
+		s.lastVisible[le.ID] = true
+	}
+	s.listMu.Unlock()
+
+	s.totalMu.Lock()
+	s.nonIgnoredTotal = total
+	s.totalMu.Unlock()
+
+	return listResponse{
+		Entries:      visible,
+		Total:        total,
+		Version:      version,
+		Filters:      &filters,
+		FocusEnabled: focusEnabled,
+	}
+}
+
+func (s *Server) diffList(since time.Time) listResponse {
+	filters, focusEnabled, version := s.filterStore.Snapshot()
+	opts := s.matchOpts(focusEnabled)
+
+	s.listMu.Lock()
+	defer s.listMu.Unlock()
+
+	upserts := make([]*history.ListEntry, 0)
+	removed := make([]string, 0)
+
+	for _, le := range s.history.ListSince(since) {
+		isVisible := filters.Matches(le, opts)
+		wasVisible := s.lastVisible[le.ID]
+		if isVisible {
+			upserts = append(upserts, le)
+			s.lastVisible[le.ID] = true
+		} else if wasVisible {
+			removed = append(removed, le.ID)
+			delete(s.lastVisible, le.ID)
+		}
+	}
+
+	return listResponse{
+		Upserts:      upserts,
+		Removed:      removed,
+		Total:        s.total(),
+		Version:      version,
+		FocusEnabled: focusEnabled,
+	}
+}
+
+func (s *Server) writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	json.NewEncoder(w).Encode(filtered)
+	json.NewEncoder(w).Encode(v)
 }
 
-type searchResult struct {
-	ID      string `json:"id"`
-	Field   string `json:"field"`
-	Snippet string `json:"snippet"`
+type saveFiltersRequest struct {
+	Filters      history.Filters `json:"filters"`
+	FocusEnabled bool            `json:"focusEnabled"`
 }
 
-func makeSnippet(text, query string, idx int) string {
-	const ctx = 60
-	start := idx - ctx
-	if start < 0 {
-		start = 0
+func (s *Server) handleSaveFilters(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
-	end := idx + len(query) + ctx
-	if end > len(text) {
-		end = len(text)
+	var req saveFiltersRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
 	}
-	s := text[start:end]
-	if start > 0 {
-		s = "..." + s
+	s.filterStore.Set(req.Filters, req.FocusEnabled)
+	s.writeJSON(w, s.fullList())
+}
+
+func (s *Server) handleFilterOptions(w http.ResponseWriter, r *http.Request) {
+	typ := r.URL.Query().Get("type")
+	entries := s.history.ListSummary()
+	s.writeJSON(w, map[string]interface{}{
+		"values": history.Options(entries, typ, s.ignoreStore),
+	})
+}
+
+func (s *Server) handleClearBodyFilter(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
-	if end < len(text) {
-		s = s + "..."
-	}
-	return s
+	s.filterStore.ClearBodyAll()
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func searchResponseBody(resp *history.ResponseRecord) string {
@@ -282,16 +415,28 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Cache-Control", "no-cache")
 
+	s.searchToken++
+	token := s.searchToken
+	s.filterStore.SetBodyIDs(nil, token)
+
 	entries := s.history.ListSummary()
 	enc := json.NewEncoder(w)
-	var results []searchResult
+	var ids []string
 	scanned := 0
 	total := len(entries)
+
+	commit := func() {
+		if len(ids) == 0 {
+			return
+		}
+		s.filterStore.SetBodyIDs(ids, token)
+	}
 
 	for i := len(entries) - 1; i >= 0; i-- {
 		id := entries[i].ID
 		select {
 		case <-r.Context().Done():
+			s.filterStore.ClearBody(token)
 			return
 		default:
 		}
@@ -302,28 +447,26 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		}
 		scanned++
 
+		matched := false
 		if !entry.Request.IsBinaryBody && entry.Request.Body != "" {
-			if idx := strings.Index(strings.ToLower(entry.Request.Body), q); idx >= 0 {
-				results = append(results, searchResult{
-					ID: id, Field: "request.body",
-					Snippet: makeSnippet(entry.Request.Body, q, idx),
-				})
+			if strings.Contains(strings.ToLower(entry.Request.Body), q) {
+				matched = true
 			}
 		}
 
-		if entry.Response != nil && !entry.Response.IsBinaryBody {
+		if !matched && entry.Response != nil && !entry.Response.IsBinaryBody {
 			body := searchResponseBody(entry.Response)
-			if body != "" {
-				if idx := strings.Index(strings.ToLower(body), q); idx >= 0 {
-					results = append(results, searchResult{
-						ID: id, Field: "response.body",
-						Snippet: makeSnippet(body, q, idx),
-					})
-				}
+			if body != "" && strings.Contains(strings.ToLower(body), q) {
+				matched = true
 			}
+		}
+
+		if matched {
+			ids = append(ids, id)
 		}
 
 		if scanned%5 == 0 || scanned == total {
+			commit()
 			enc.Encode(map[string]interface{}{
 				"scanned": scanned,
 				"total":   total,
@@ -332,13 +475,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	for _, res := range results {
-		enc.Encode(res)
-		flusher.Flush()
-	}
+	commit()
 	enc.Encode(map[string]interface{}{
 		"done":       true,
-		"matchCount": len(results),
+		"matchCount": len(ids),
 	})
 	flusher.Flush()
 }
@@ -1129,6 +1269,8 @@ func (s *Server) handleIgnored(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"failed to add"}`, http.StatusInternalServerError)
 			return
 		}
+		s.recomputeTotal()
+		s.filterStore.Touch()
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(s.ignoreStore.List())
 	default:
@@ -1151,6 +1293,8 @@ func (s *Server) handleIgnoredHost(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"failed to remove"}`, http.StatusInternalServerError)
 			return
 		}
+		s.recomputeTotal()
+		s.filterStore.Touch()
 		json.NewEncoder(w).Encode(s.ignoreStore.List())
 		return
 	}
@@ -1177,6 +1321,7 @@ func (s *Server) handleFocused(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"failed to add"}`, http.StatusInternalServerError)
 			return
 		}
+		s.filterStore.Touch()
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(s.focusStore.List())
 	default:
@@ -1199,6 +1344,7 @@ func (s *Server) handleFocusedHost(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"failed to remove"}`, http.StatusInternalServerError)
 			return
 		}
+		s.filterStore.Touch()
 		json.NewEncoder(w).Encode(s.focusStore.List())
 		return
 	}

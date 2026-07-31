@@ -99,7 +99,7 @@ func (s *FocusStore) Matches(host string) bool {
 	defer s.mu.Unlock()
 
 	if len(s.hosts) == 0 {
-		return false
+		return true
 	}
 	for _, pattern := range s.hosts {
 		if pattern == host {

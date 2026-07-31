@@ -1,12 +1,11 @@
-import { requests, selectedId, filterText, ignoredHosts, focusedHosts, focusEnabled, setSelectedId, rules } from './state.js';
-import { applyFilters, isAnyFilterActive } from './filters.js';
+import { requests, selectedId, filterText, ignoredHosts, focusedHosts, focusEnabled, setSelectedId, rules, totalRequests } from './state.js';
+import { isAnyFilterActive } from './filters.js';
 import { detectBodyType, getKebabItems, renderContent, isEditable, getEntryData } from './body-types.js';
 
 const ITEM_HEIGHT = 35;
 const BUFFER = 5;
 let lastFiltered = [];
 let lastRange = { start: -1, end: -1 };
-let filteredCache = null;
 
 export const SVG_EDIT = '<svg width="14" height="14" viewBox="0 0 16 16"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>';
 export const SVG_REVERT = '<svg width="14" height="14" viewBox="0 0 16 16"><path d="M3 7h7a3 3 0 010 6H8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><polyline points="6,4 3,7 6,10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -18,60 +17,11 @@ export function escapeHtml(str) {
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function hostMatchesPattern(host, pattern) {
-    if (pattern === host) return true;
-    if (pattern.includes('*')) {
-        const regex = '^' + pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$';
-        return new RegExp(regex).test(host);
-    }
-    return false;
-}
-
-function hostMatchesFocus(host) {
-    if (!focusEnabled || focusedHosts.length === 0) return true;
-    return focusedHosts.some(p => hostMatchesPattern(host, p));
-}
-
-function hostMatchesIgnore(host) {
-    return ignoredHosts.some(p => hostMatchesPattern(host, p));
-}
-
-export function extractRefererOrigin(referer) {
-    if (!referer) return '';
-    try {
-        const u = new URL(referer);
-        return u.host;
-    } catch {
-        return '';
-    }
-}
-
 export function getFilteredRequests() {
-    if (filteredCache) return filteredCache;
-    let result = requests.filter(r => !hostMatchesIgnore(r.host));
-    result = result.filter(r => hostMatchesFocus(r.host));
-
-    result = applyFilters(result);
-
-    if (filterText) {
-        const q = filterText.toLowerCase();
-        result = result.filter(r => {
-            const method = (r.method || '').toLowerCase();
-            const url = (r.url || r.host || '').toLowerCase();
-            const status = r.status != null ? String(r.status) : '';
-            const process = (r.clientDisplayName || r.clientProcess || '').toLowerCase();
-            const id = (r.id || '').toLowerCase();
-            return method.includes(q) || url.includes(q) || status.includes(q) || process.includes(q) || id.includes(q);
-        });
-    }
-
-    filteredCache = result;
-    return result;
+    return requests;
 }
 
-export function invalidateFilterCache() {
-    filteredCache = null;
-}
+export function invalidateFilterCache() {}
 
 function buildItemHtml(r) {
     const method = r.method;
@@ -106,7 +56,7 @@ export function renderList() {
     const list = document.getElementById('requestList');
     const filtered = getFilteredRequests();
     lastFiltered = filtered;
-    const total = requests.length;
+    const total = totalRequests;
 
     if (filterText || isAnyFilterActive() || (focusEnabled && focusedHosts.length > 0)) {
         document.getElementById('stats').textContent = filtered.length + ' / ' + total + ' requests';
@@ -179,6 +129,154 @@ export function selectRequest(id, activeTab = 'request') {
         .catch(e => console.error('Failed to load request detail:', e));
 }
 
+function buildHeaderRows(headers) {
+    return Object.entries(headers).length > 0
+        ? Object.entries(headers).map(([k,v]) => {
+            const val = Array.isArray(v) ? v.join(', ') : v;
+            const dataValues = Array.isArray(v) ? JSON.stringify(v) : JSON.stringify([v]);
+            return `<div class="header-row" data-key="${escapeHtml(k)}" data-values='${escapeHtml(dataValues)}'><span class="header-key">${escapeHtml(k)}:</span><span class="header-value">${escapeHtml(val)}</span></div>`;
+        }).join('')
+        : '<div style="color:#666">No headers</div>';
+}
+
+function buildBodyViewer(target, entry, body, rawBody, compression, hasEdited, editedBody, contentType, isModified, modifiedBody, modifiedContentType, isMocked, mockedBody, mockedContentType, canEdit, bodyFile, bodySize, entryId, isBinaryBody) {
+    const badges = [];
+    if (compression) badges.push(`<span class="body-badge body-badge-compression">${escapeHtml(compression)}</span>`);
+    if (hasEdited) badges.push(`<span class="body-badge body-badge-edited">edited</span>`);
+    if (isModified) badges.push(`<span class="body-badge body-badge-modified">modified</span>`);
+    if (isMocked) badges.push(`<span class="body-badge body-badge-mocked">mocked</span>`);
+    const badgesHtml = badges.join('');
+
+    const bodyType = detectBodyType(contentType, entry, isBinaryBody);
+    if (!isEditable(bodyType)) canEdit = false;
+
+    const viewModeHtml = `<button class="body-tool body-view active" data-action="set-view" data-target="${target}" data-view="pretty">Pretty</button><button class="body-tool body-view" data-action="set-view" data-target="${target}" data-view="raw">Raw</button>`;
+
+    const hasOtherContent = hasEdited || (isModified && modifiedBody) || (isMocked && mockedBody);
+    const defaultContent = (isMocked && mockedBody) ? 'mocked' : 'original';
+    const contentBtns = [];
+    if (hasOtherContent) contentBtns.push(`<button class="body-tool body-content${defaultContent === 'original' ? ' active' : ''}" data-action="set-content" data-target="${target}" data-content="original">Original</button>`);
+    if (hasEdited) contentBtns.push(`<button class="body-tool body-content" data-action="set-content" data-target="${target}" data-content="edited">Edited</button>`);
+    if (isModified && modifiedBody) contentBtns.push(`<button class="body-tool body-content" data-action="set-content" data-target="${target}" data-content="modified">Modified</button>`);
+    if (isMocked && mockedBody) contentBtns.push(`<button class="body-tool body-content${defaultContent === 'mocked' ? ' active' : ''}" data-action="set-content" data-target="${target}" data-content="mocked">Mocked</button>`);
+
+    const menuItems = getKebabItems(bodyType, target, canEdit, hasEdited, entryId)
+        .map(item => `<div class="menu-item" data-action="${item.action}" data-target="${item.target}"${item.entryId ? ` data-entry-id="${item.entryId}"` : ''}>${item.label}</div>`)
+        .join('');
+
+    const hasToolbar = badges.length > 0 || viewModeHtml.length > 0 || contentBtns.length > 0;
+    const bodyHex = entry.bodyHex || '';
+
+    const bodyContentHtml = renderContent(bodyType, target, {
+        body, rawBody, compression, isModified, modifiedBody, isMocked, mockedBody,
+        hasEdited, editedBody, defaultContent, bodyHex, bodySize, contentType,
+        bodyTarget: target,
+        ...getEntryData(entry, contentType, isBinaryBody),
+    });
+
+    return `<div class="section-panel" data-body-target="${target}" data-content-type="${escapeHtml(contentType)}">
+        <div class="section-header">
+            <span class="section-title">Body</span>
+            ${menuItems.length > 0 ? `<div class="kebab" data-action="toggle-menu">
+                ⋮
+                <div class="kebab-menu">${menuItems}</div>
+            </div>` : ''}
+        </div>
+        <div class="content-block">
+            <div class="content-toolbar${hasToolbar ? '' : ' empty'}">
+                <div class="toolbar-left">
+                    ${viewModeHtml ? `<div class="body-tools-group">${viewModeHtml}</div>` : ''}
+                    ${contentBtns.length > 0 ? `<div class="divider-v"></div><div class="body-tools-group">${contentBtns.join('')}</div>` : ''}
+                </div>
+                <div class="toolbar-right">${badgesHtml}<button class="fullscreen-btn" data-action="toggle-fullscreen-body" data-target="${target}" title="Full screen">${SVG_MAXIMIZE}</button></div>
+            </div>
+            <div class="body-scroll">${bodyContentHtml}</div>
+        </div>
+    </div>`;
+}
+
+export function buildResponseTab(req) {
+    const isModified = req.appliedAction === 'modify';
+    const isDropped = req.appliedAction === 'drop';
+    const isMocked = req.appliedAction === 'mock' || req.appliedAction === 'response_mock';
+    const canEdit = !isModified && !isMocked && !isDropped;
+
+    const serverRespBody = req.serverResponse ? (req.serverResponse.body || '') : '';
+    const serverRespHeaders = req.serverResponse ? (req.serverResponse.headers || {}) : {};
+    const serverRespContentType = req.serverResponse?.headers?.['content-type']?.[0] || req.serverResponse?.headers?.['Content-Type']?.[0] || '';
+
+    const respHeaders = req.response && req.response.headers ? Object.entries(req.response.headers).map(([k,v]) =>
+        `<div class="header-row"><span class="header-key">${escapeHtml(k)}:</span><span class="header-value">${escapeHtml(Array.isArray(v) ? v.join(', ') : v)}</span></div>`
+    ).join('') : '<div style="color:#666">No response yet</div>';
+
+    const respBody = req.response ? (req.response.body || '') : '';
+    const respRawBody = req.response ? (req.response.rawBody || '') : '';
+    const respCompression = req.response ? (req.response.compression || '') : '';
+    const respContentType = req.response?.headers?.['content-type']?.[0] || req.response?.headers?.['Content-Type']?.[0] || '';
+
+    const respBodyFile = req.response?.bodyFile || '';
+    const respBodySize = req.response?.bodySize || 0;
+    const respIsBinary = req.response?.isBinaryBody || false;
+
+    let respBodyHtml = '';
+    if (respBody || respBodyFile) {
+        const respHasEdited = req.response && req.response.editedBody && req.response.editedBody !== '';
+        respBodyHtml = buildBodyViewer('response', req.response, respBody, respRawBody, respCompression, respHasEdited && canEdit, req.response.editedBody, respContentType, false, '', '', isMocked, serverRespBody, serverRespContentType, canEdit, respBodyFile, respBodySize, req.id, respIsBinary);
+    }
+
+    return `
+        <div class="section-panel">
+            <div class="section-header">
+                <span class="section-title">Response</span>
+            </div>
+            <div class="content-block">
+                <pre>Status: ${req.response ? req.response.status : (isDropped ? 'Dropped' : 'Pending')}</pre>
+            </div>
+        </div>
+
+        ${isDropped ? `<div class="action-banner action-banner-drop">✕ Request was dropped — no response received</div>` : ''}
+
+        <div class="section-panel">
+            <div class="section-header">
+                <span class="section-title">Headers</span>
+                <div class="kebab" data-action="toggle-menu">
+                    ⋮
+                    <div class="kebab-menu">
+                        <div class="menu-item" data-action="copy-headers" data-target="response">⧉ Copy</div>
+                    </div>
+                </div>
+            </div>
+            <div class="content-block">
+                ${isMocked && Object.keys(serverRespHeaders).length > 0
+                    ? (() => {
+                        const serverRespRows = buildHeaderRows(serverRespHeaders);
+                        const mockRespRows = req.response && req.response.headers
+                            ? Object.entries(req.response.headers).map(([k,v]) => {
+                                const val = Array.isArray(v) ? v.join(', ') : v;
+                                return `<div class="header-row"><span class="header-key">${escapeHtml(k)}:</span><span class="header-value">${escapeHtml(val)}</span></div>`;
+                            }).join('') || '<div style="color:#666">No headers</div>'
+                            : '<div style="color:#666">No headers</div>';
+                        return `<div class="content-toolbar">
+                            <div class="toolbar-left">
+                                <div class="body-tools-group">
+                                    <button class="body-tool body-content" data-action="set-header-content" data-target="response" data-content="original">Original</button>
+                                    <button class="body-tool body-content active" data-action="set-header-content" data-target="response" data-content="mocked">Mocked</button>
+                                </div>
+                            </div>
+                            <div class="toolbar-right">
+                                <span class="body-badge body-badge-mocked">mocked</span>
+                            </div>
+                        </div>
+                        <div class="headers-container" data-target="response" data-original-html="${escapeHtml(serverRespRows)}" data-mocked-html="${escapeHtml(mockRespRows)}" data-header-mode="mocked">${mockRespRows}</div>`;
+                    })()
+                    : `<div class="headers-container" data-target="response">${respHeaders}</div>`}
+            </div>
+        </div>
+
+        ${respBodyHtml}
+    `;
+}
+
 export function renderDetail(req, activeTab = 'request') {
     document.body.classList.remove('fullscreen-active');
     document.querySelectorAll('.section-panel.fullscreen-mode').forEach(p => p.classList.remove('fullscreen-mode'));
@@ -194,34 +292,16 @@ export function renderDetail(req, activeTab = 'request') {
     const serverReqHeaders = req.serverRequest ? (req.serverRequest.headers || {}) : {};
     const hasServerReqHeaders = isModified && Object.keys(serverReqHeaders).length > 0;
 
-    function buildHeaderRows(headers) {
-        return Object.entries(headers).length > 0
-            ? Object.entries(headers).map(([k,v]) => {
-                const val = Array.isArray(v) ? v.join(', ') : v;
-                const dataValues = Array.isArray(v) ? JSON.stringify(v) : JSON.stringify([v]);
-                return `<div class="header-row" data-key="${escapeHtml(k)}" data-values='${escapeHtml(dataValues)}'><span class="header-key">${escapeHtml(k)}:</span><span class="header-value">${escapeHtml(val)}</span></div>`;
-            }).join('')
-            : '<div style="color:#666">No headers</div>';
-    }
-
     const reqOriginalHtml = buildHeaderRows(reqOriginalHeaders);
     const reqEditedHtml = reqHasEditedHeaders ? buildHeaderRows(reqEditedHeaders) : '';
     const reqModifiedHtml = hasServerReqHeaders ? buildHeaderRows(serverReqHeaders) : '';
     const reqHeadersHtml = reqHasEditedHeaders ? reqEditedHtml : (isModified && hasServerReqHeaders ? reqModifiedHtml : reqOriginalHtml);
 
-    const respHeaders = req.response && req.response.headers ? Object.entries(req.response.headers).map(([k,v]) =>
-        `<div class="header-row"><span class="header-key">${escapeHtml(k)}:</span><span class="header-value">${escapeHtml(Array.isArray(v) ? v.join(', ') : v)}</span></div>`
-    ).join('') : '<div style="color:#666">No response yet</div>';
-
     const reqBody = req.request.body || '';
-    const respBody = req.response ? (req.response.body || '') : '';
     const reqRawBody = req.request.rawBody || '';
-    const respRawBody = req.response ? (req.response.rawBody || '') : '';
     const reqCompression = req.request.compression || '';
-    const respCompression = req.response ? (req.response.compression || '') : '';
 
     const reqContentType = req.request.headers?.['content-type']?.[0] || req.request.headers?.['Content-Type']?.[0] || '';
-    const respContentType = req.response?.headers?.['content-type']?.[0] || req.response?.headers?.['Content-Type']?.[0] || '';
 
     const ignoreBtn = isIgnored
         ? `<button class="btn-active" data-action="unignore" data-host="${escapeHtml(host)}"><svg width="16" height="16" viewBox="0 0 16 16"><polyline points="3,8 7,12 13,4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg> Remove ignore</button>`
@@ -235,62 +315,6 @@ export function renderDetail(req, activeTab = 'request') {
     }
 
     const SVG_COPY_SMALL = '<svg width="10" height="10" viewBox="0 0 16 16"><rect x="5" y="5" width="9" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-7A1.5 1.5 0 013.5 1h7A1.5 1.5 0 0112 2.5V5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
-    function buildBodyViewer(target, body, rawBody, compression, hasEdited, editedBody, contentType, isModified, modifiedBody, modifiedContentType, isMocked, mockedBody, mockedContentType, canEdit, bodyFile, bodySize, entryId, isBinaryBody) {
-        const badges = [];
-        if (compression) badges.push(`<span class="body-badge body-badge-compression">${escapeHtml(compression)}</span>`);
-        if (hasEdited) badges.push(`<span class="body-badge body-badge-edited">edited</span>`);
-        if (isModified) badges.push(`<span class="body-badge body-badge-modified">modified</span>`);
-        if (isMocked) badges.push(`<span class="body-badge body-badge-mocked">mocked</span>`);
-        const badgesHtml = badges.join('');
-
-        const bodyType = detectBodyType(contentType, target === 'response' ? req.response : req.request, isBinaryBody);
-        if (!isEditable(bodyType)) canEdit = false;
-
-        const viewModeHtml = `<button class="body-tool body-view active" data-action="set-view" data-target="${target}" data-view="pretty">Pretty</button><button class="body-tool body-view" data-action="set-view" data-target="${target}" data-view="raw">Raw</button>`;
-
-        const hasOtherContent = hasEdited || (isModified && modifiedBody) || (isMocked && mockedBody);
-        const defaultContent = (isMocked && mockedBody) ? 'mocked' : 'original';
-        const contentBtns = [];
-        if (hasOtherContent) contentBtns.push(`<button class="body-tool body-content${defaultContent === 'original' ? ' active' : ''}" data-action="set-content" data-target="${target}" data-content="original">Original</button>`);
-        if (hasEdited) contentBtns.push(`<button class="body-tool body-content" data-action="set-content" data-target="${target}" data-content="edited">Edited</button>`);
-        if (isModified && modifiedBody) contentBtns.push(`<button class="body-tool body-content" data-action="set-content" data-target="${target}" data-content="modified">Modified</button>`);
-        if (isMocked && mockedBody) contentBtns.push(`<button class="body-tool body-content${defaultContent === 'mocked' ? ' active' : ''}" data-action="set-content" data-target="${target}" data-content="mocked">Mocked</button>`);
-
-        const menuItems = getKebabItems(bodyType, target, canEdit, hasEdited, entryId)
-            .map(item => `<div class="menu-item" data-action="${item.action}" data-target="${item.target}"${item.entryId ? ` data-entry-id="${item.entryId}"` : ''}>${item.label}</div>`)
-            .join('');
-
-        const hasToolbar = badges.length > 0 || viewModeHtml.length > 0 || contentBtns.length > 0;
-        const bodyHex = (target === 'request') ? (req.request.bodyHex || '') : ((req.response && req.response.bodyHex) || '');
-
-        const entry = target === 'response' ? req.response : req.request;
-        const bodyContentHtml = renderContent(bodyType, target, {
-            body, rawBody, compression, isModified, modifiedBody, isMocked, mockedBody,
-            hasEdited, editedBody, defaultContent, bodyHex, bodySize, contentType,
-            bodyTarget: target,
-            ...getEntryData(entry, contentType, isBinaryBody),
-        });
-
-        return `<div class="section-panel" data-body-target="${target}" data-content-type="${escapeHtml(contentType)}">
-            <div class="section-header">
-                <span class="section-title">Body</span>
-                ${menuItems.length > 0 ? `<div class="kebab" data-action="toggle-menu">
-                    ⋮
-                    <div class="kebab-menu">${menuItems}</div>
-                </div>` : ''}
-            </div>
-            <div class="content-block">
-                <div class="content-toolbar${hasToolbar ? '' : ' empty'}">
-                    <div class="toolbar-left">
-                        ${viewModeHtml ? `<div class="body-tools-group">${viewModeHtml}</div>` : ''}
-                        ${contentBtns.length > 0 ? `<div class="divider-v"></div><div class="body-tools-group">${contentBtns.join('')}</div>` : ''}
-                    </div>
-                    <div class="toolbar-right">${badgesHtml}<button class="fullscreen-btn" data-action="toggle-fullscreen-body" data-target="${target}" title="Full screen">${SVG_MAXIMIZE}</button></div>
-                </div>
-                <div class="body-scroll">${bodyContentHtml}</div>
-            </div>
-        </div>`;
-    }
 
     const actionBanner = (() => {
         if (!req.appliedAction || req.appliedAction === 'passthrough') return '';
@@ -308,30 +332,18 @@ export function renderDetail(req, activeTab = 'request') {
     const isDropped = req.appliedAction === 'drop';
 
     const serverReqBody = req.serverRequest ? (req.serverRequest.body || '') : '';
-    const serverRespBody = req.serverResponse ? (req.serverResponse.body || '') : '';
-    const serverRespHeaders = req.serverResponse ? (req.serverResponse.headers || {}) : {};
     const serverReqContentType = req.serverRequest?.headers?.['content-type']?.[0] || req.serverRequest?.headers?.['Content-Type']?.[0] || '';
-    const serverRespContentType = req.serverResponse?.headers?.['content-type']?.[0] || req.serverResponse?.headers?.['Content-Type']?.[0] || '';
 
     const canEdit = !isModified && !isMocked && !isDropped;
 
     const reqBodyFile = req.request.bodyFile || '';
     const reqBodySize = req.request.bodySize || 0;
     const reqIsBinary = req.request.isBinaryBody || false;
-    const respBodyFile = req.response?.bodyFile || '';
-    const respBodySize = req.response?.bodySize || 0;
-    const respIsBinary = req.response?.isBinaryBody || false;
 
     let reqBodyHtml = '';
     if (reqBody || reqBodyFile) {
         const reqHasEdited = req.request.editedBody && req.request.editedBody !== '';
-        reqBodyHtml = buildBodyViewer('request', reqBody, reqRawBody, reqCompression, reqHasEdited, req.request.editedBody, reqContentType, isModified, serverReqBody, serverReqContentType, false, '', '', canEdit, reqBodyFile, reqBodySize, req.id, reqIsBinary);
-    }
-
-    let respBodyHtml = '';
-    if (respBody || respBodyFile) {
-        const respHasEdited = req.response && req.response.editedBody && req.response.editedBody !== '';
-        respBodyHtml = buildBodyViewer('response', respBody, respRawBody, respCompression, respHasEdited && canEdit, req.response.editedBody, respContentType, false, '', '', isMocked, serverRespBody, serverRespContentType, canEdit, respBodyFile, respBodySize, req.id, respIsBinary);
+        reqBodyHtml = buildBodyViewer('request', req.request, reqBody, reqRawBody, reqCompression, reqHasEdited, req.request.editedBody, reqContentType, isModified, serverReqBody, serverReqContentType, false, '', '', canEdit, reqBodyFile, reqBodySize, req.id, reqIsBinary);
     }
 
     let replayedFromHtml = '';
@@ -462,55 +474,7 @@ export function renderDetail(req, activeTab = 'request') {
         </div>
 
         <div id="tab-response" class="tab-content" style="${activeTab === 'response' ? '' : 'display:none'}">
-            <div class="section-panel">
-                <div class="section-header">
-                    <span class="section-title">Response</span>
-                </div>
-                <div class="content-block">
-                    <pre>Status: ${req.response ? req.response.status : (isDropped ? 'Dropped' : 'Pending')}</pre>
-                </div>
-            </div>
-
-            ${isDropped ? `<div class="action-banner action-banner-drop">✕ Request was dropped — no response received</div>` : ''}
-
-            <div class="section-panel">
-                <div class="section-header">
-                    <span class="section-title">Headers</span>
-                    <div class="kebab" data-action="toggle-menu">
-                        ⋮
-                        <div class="kebab-menu">
-                            <div class="menu-item" data-action="copy-headers" data-target="response">⧉ Copy</div>
-                        </div>
-                    </div>
-                </div>
-                <div class="content-block">
-                    ${isMocked && Object.keys(serverRespHeaders).length > 0
-                        ? (() => {
-                            const serverRespRows = buildHeaderRows(serverRespHeaders);
-                            const mockRespRows = req.response && req.response.headers
-                                ? Object.entries(req.response.headers).map(([k,v]) => {
-                                    const val = Array.isArray(v) ? v.join(', ') : v;
-                                    return `<div class="header-row"><span class="header-key">${escapeHtml(k)}:</span><span class="header-value">${escapeHtml(val)}</span></div>`;
-                                }).join('') || '<div style="color:#666">No headers</div>'
-                                : '<div style="color:#666">No headers</div>';
-                            return `<div class="content-toolbar">
-                                <div class="toolbar-left">
-                                    <div class="body-tools-group">
-                                        <button class="body-tool body-content" data-action="set-header-content" data-target="response" data-content="original">Original</button>
-                                        <button class="body-tool body-content active" data-action="set-header-content" data-target="response" data-content="mocked">Mocked</button>
-                                    </div>
-                                </div>
-                                <div class="toolbar-right">
-                                    <span class="body-badge body-badge-mocked">mocked</span>
-                                </div>
-                            </div>
-                            <div class="headers-container" data-target="response" data-original-html="${escapeHtml(serverRespRows)}" data-mocked-html="${escapeHtml(mockRespRows)}" data-header-mode="mocked">${mockRespRows}</div>`;
-                        })()
-                        : `<div class="headers-container" data-target="response">${respHeaders}</div>`}
-                </div>
-            </div>
-
-            ${respBodyHtml}
+            ${buildResponseTab(req)}
         </div>
 
         <div id="tab-origin" class="tab-content" style="${activeTab === 'origin' ? '' : 'display:none'}">

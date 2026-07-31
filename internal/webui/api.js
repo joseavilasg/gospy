@@ -1,24 +1,40 @@
-import { requests, setRequests, upsertRequests, ignoredHosts, setIgnoredHosts, focusedHosts, setFocusedHosts, setFocusEnabled, lastTimestamp, setLastTimestamp, rules, setRules } from './state.js';
+import { requests, setRequests, upsertRequests, removeRequests, applyFullList, applyListDiff, ignoredHosts, setIgnoredHosts, focusedHosts, setFocusedHosts, lastTimestamp, setLastTimestamp, criteriaVersion, rules, setRules, selectedId } from './state.js';
 import { renderList, renderIgnoredList, renderFocusedList, renderRulesList, invalidateFilterCache } from './render.js';
+import { syncCriteriaFromServer } from './filters.js';
+
+let onSelectedUpdated = () => {};
+
+export function setOnSelectedUpdated(cb) { onSelectedUpdated = cb; }
 
 export async function loadRequests() {
     try {
-        const url = lastTimestamp ? `/api/requests?since=${encodeURIComponent(lastTimestamp)}` : '/api/requests';
-        const resp = await fetch(url);
-        const newItems = await resp.json();
+        const params = new URLSearchParams();
+        if (lastTimestamp) params.set('since', lastTimestamp);
+        if (criteriaVersion != null) params.set('version', criteriaVersion);
+        const qs = params.toString();
+        const resp = await fetch('/api/requests' + (qs ? '?' + qs : ''));
+        const data = await resp.json();
 
-        if (lastTimestamp && newItems.length > 0) {
-            upsertRequests(newItems);
-        } else if (!lastTimestamp) {
-            setRequests(newItems);
+        if (data.upserts) {
+            if (data.version !== criteriaVersion) return;
+            const selUpdated = selectedId && data.upserts.some(u => u.id === selectedId);
+            applyListDiff(data);
+            if (requests.length > 0) {
+                setLastTimestamp(requests[0].updatedAt || requests[0].timestamp);
+            }
+            invalidateFilterCache();
+            renderList();
+            if (selUpdated) onSelectedUpdated(selectedId);
+        } else if (data.entries) {
+            const prevSel = selectedId ? requests.find(r => r.id === selectedId) : null;
+            applyFullList(data);
+            if (requests.length > 0) {
+                setLastTimestamp(requests[0].updatedAt || requests[0].timestamp);
+            }
+            syncCriteriaFromServer(data.filters, data.focusEnabled);
+            const currSel = selectedId ? requests.find(r => r.id === selectedId) : null;
+            if (prevSel && currSel && prevSel.updatedAt !== currSel.updatedAt) onSelectedUpdated(selectedId);
         }
-
-        if (requests.length > 0) {
-            setLastTimestamp(requests[0].updatedAt || requests[0].timestamp);
-        }
-
-        invalidateFilterCache();
-        renderList();
     } catch (e) {
         console.error('Failed to load requests:', e);
     }
@@ -41,7 +57,6 @@ export async function loadFocused() {
         setFocusedHosts(await resp.json());
         document.getElementById('focusedCount').textContent = focusedHosts.length;
         renderFocusedList();
-        document.getElementById('focusEnabled').checked = localStorage.getItem('gospy-focus-enabled') === 'true';
     } catch (e) {
         console.error('Failed to load focused:', e);
     }

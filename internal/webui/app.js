@@ -1,7 +1,7 @@
 import { setFilterText, setFocusEnabled, setLastTimestamp, selectedId, requests, rules, setRules, setSignatureCache } from './state.js';
-import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch } from './api.js';
-import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, extractRefererOrigin } from './render.js';
-import { isBodySearching, restoreBodyFilter, registerFilter, setOnFilterChange, initFilterPopover, openFilterPopover, closeFilterPopover, closeChip, openChip, getFilterChipsData, getMatchMode, setMatchMode, clearAllFilters } from './filters.js';
+import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch, setOnSelectedUpdated } from './api.js';
+import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, buildResponseTab } from './render.js';
+import { isBodySearching, restoreBodyFilter, registerFilter, setOnFilterChange, setOnListRefresh, initFilterPopover, openFilterPopover, closeFilterPopover, closeChip, openChip, getFilterChipsData, getMatchMode, setMatchMode, queueCriteriaSave } from './filters.js';
 import { initBodyTypes, editBody, saveBody, cancelBody, setBodyView, copyBody, getActiveEditor, postRenderBody } from './body-types.js';
 
 let _pendingFullscreenTarget = null;
@@ -10,24 +10,18 @@ let _savedScrollTop = 0;
 registerFilter({
     type: 'process',
     label: 'Process',
-    localStorageKey: 'gospy-process-filter',
-    extractValue: (r) => r.clientDisplayName || r.clientProcess || '',
     searchPlaceholder: 'Search processes...',
 });
 
 registerFilter({
     type: 'referer',
     label: 'Referer',
-    localStorageKey: 'gospy-referer-filter',
-    extractValue: (r) => extractRefererOrigin(r.referer),
     searchPlaceholder: 'Search referers...',
 });
 
 registerFilter({
     type: 'host',
     label: 'Host',
-    localStorageKey: 'gospy-host-filter',
-    extractValue: (r) => r.host || '',
     searchPlaceholder: 'Search hosts...',
 });
 
@@ -35,8 +29,6 @@ registerFilter({
     type: 'requestContentType',
     label: 'Request Content-Type',
     chipLabel: 'Req CT',
-    localStorageKey: 'gospy-request-ct-filter',
-    extractValue: (r) => r.requestContentType || '',
     searchPlaceholder: 'Search request content types...',
 });
 
@@ -44,14 +36,12 @@ registerFilter({
     type: 'responseContentType',
     label: 'Response Content-Type',
     chipLabel: 'Resp CT',
-    localStorageKey: 'gospy-response-ct-filter',
-    extractValue: (r) => r.responseContentType || '',
     searchPlaceholder: 'Search response content types...',
 });
 
 document.getElementById('filterInput').addEventListener('input', (e) => {
     setFilterText(e.target.value.trim());
-    invalidateFilterCache();
+    queueCriteriaSave();
     document.getElementById('requestList').scrollTop = 0;
     renderList();
 });
@@ -67,9 +57,8 @@ document.getElementById('refreshBtn').addEventListener('click', () => {
 
 document.getElementById('focusEnabled').addEventListener('change', (e) => {
     setFocusEnabled(e.target.checked);
-    invalidateFilterCache();
+    queueCriteriaSave();
     document.getElementById('requestList').scrollTop = 0;
-    renderList();
 });
 
 document.getElementById('focusAddBtn').addEventListener('click', () => {
@@ -321,6 +310,20 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
         closeAllKebabMenus();
     }
 });
+
+function updateResponseInPlace(entry) {
+    const tab = document.getElementById('tab-response');
+    if (!tab) return;
+    const wasFullscreen = !!document.querySelector('.section-panel.fullscreen-mode[data-body-target="response"]');
+    tab.innerHTML = buildResponseTab(entry);
+    renderCurrentContent('response');
+    postRenderBody('response');
+    if (wasFullscreen) {
+        const panel = tab.querySelector('.section-panel[data-body-target="response"]');
+        const btn = panel?.querySelector('[data-action="toggle-fullscreen-body"]');
+        if (panel && btn) enterFullscreenBody(panel, btn);
+    }
+}
 
 document.getElementById('detailPanel').addEventListener('detail-rendered', () => {
     renderCurrentContent('request');
@@ -961,6 +964,14 @@ function refreshFilters() {
 }
 
 setOnFilterChange(refreshFilters);
+setOnListRefresh(loadRequests);
+setOnSelectedUpdated((id) => {
+    if (id !== selectedId) return;
+    fetch(`/api/requests/${id}`)
+        .then(r => r.json())
+        .then(entry => updateResponseInPlace(entry))
+        .catch(e => console.error('Failed to refresh response detail:', e));
+});
 initBodyTypes({ refreshDetail, createMonacoEditor, mapContentType, renderCurrentContent });
 
 function renderFilterChips() {
