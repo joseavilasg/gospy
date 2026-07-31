@@ -1,4 +1,4 @@
-import { requests, filterText, setFilterText, focusEnabled, setFocusEnabled, applyFullList } from './state.js';
+import { requests, filterText, setFilterText, focusEnabled, setFocusEnabled, getAgentView, setAgentView, applyFullList } from './state.js';
 
 function escapeHtml(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -62,13 +62,20 @@ export function saveCriteria() {
         if (mySeq !== criteriaSaveSeq) return;
         criteriaDirty = false;
         applyFullList(data);
-        syncCriteriaFromServer(data.filters, data.focusEnabled);
+        syncCriteriaFromServer(data.filters, data.focusEnabled, data.agentEnabled);
     }).catch(() => {
         criteriaDirty = false;
     });
 }
 
-export function syncCriteriaFromServer(filters, focusEnabledVal) {
+export function invalidateCriteriaSave() {
+    clearTimeout(criteriaSaveTimer);
+    criteriaSaveTimer = null;
+    criteriaSaveSeq++;
+    criteriaDirty = false;
+}
+
+export function syncCriteriaFromServer(filters, focusEnabledVal, agentEnabledVal) {
     if (!filters) return;
     if (criteriaDirty) return;
     matchMode = filters.matchMode || 'all';
@@ -78,14 +85,20 @@ export function syncCriteriaFromServer(filters, focusEnabledVal) {
     }
     setFilterText(filters.text || '');
     setFocusEnabled(focusEnabledVal);
+    if (agentEnabledVal !== undefined) {
+        setAgentView(agentEnabledVal);
+        const cb = document.getElementById('agentView');
+        if (cb) cb.checked = !!agentEnabledVal;
+    }
     const input = document.getElementById('filterInput');
     if (input) input.value = filters.text || '';
-    const cb = document.getElementById('focusEnabled');
-    if (cb) cb.checked = !!focusEnabledVal;
+    const cb2 = document.getElementById('focusEnabled');
+    if (cb2) cb2.checked = !!focusEnabledVal;
     onFilterChange();
 }
 
 export function isAnyFilterActive() {
+    if (filterText) return true;
     return filterTypes.some(f => f.getIsActive ? f.getIsActive() : (filterState[f.type] || []).length > 0);
 }
 
@@ -328,7 +341,20 @@ function renderOptions() {
 
 let bodySearchState = { q: '', scanning: false, scanned: 0, total: 0, matchCount: 0, abortController: null };
 
+function bodyFilterKey() {
+    return getAgentView() ? 'gospy-body-filter.agent' : 'gospy-body-filter';
+}
+
 export function isBodySearching() { return bodySearchState.scanning; }
+
+export function resetBodySearchState() {
+    bodySearchState = { q: '', scanning: false, scanned: 0, total: 0, matchCount: 0, abortController: null };
+}
+
+export function cancelBodySearch() {
+    if (bodySearchState.abortController) bodySearchState.abortController.abort();
+    resetBodySearchState();
+}
 
 async function handleSearchStream(resp) {
     const reader = resp.body.getReader();
@@ -420,7 +446,7 @@ registerFilter({
         const ac = new AbortController();
         bodySearchState = { q, scanning: true, scanned: 0, total: 0, matchCount: 0, abortController: ac };
         setFilter('body', []);
-        localStorage.setItem('gospy-body-filter', JSON.stringify([q]));
+        localStorage.setItem(bodyFilterKey(), JSON.stringify([q]));
         onFilterChange();
 
         fetch('/api/requests/search', {
@@ -441,15 +467,15 @@ registerFilter({
 
     onClose() {
         if (bodySearchState.abortController) bodySearchState.abortController.abort();
-        localStorage.removeItem('gospy-body-filter');
-        bodySearchState = { q: '', scanning: false, scanned: 0, total: 0, matchCount: 0, abortController: null };
+        localStorage.removeItem(bodyFilterKey());
+        resetBodySearchState();
         fetch('/api/filters/body', { method: 'DELETE' }).catch(() => {});
         onListRefresh();
     },
 });
 
 export function restoreBodyFilter() {
-    const saved = JSON.parse(localStorage.getItem('gospy-body-filter') || '[]');
+    const saved = JSON.parse(localStorage.getItem(bodyFilterKey()) || '[]');
     if (saved.length > 0 && typeof saved[0] === 'string' && saved[0].length >= 3 && !bodySearchState.scanning) {
         const config = filterTypes.find(f => f.type === 'body');
         if (config) config.onSearch(saved[0]);

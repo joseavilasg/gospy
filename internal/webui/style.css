@@ -912,6 +912,34 @@ pre {
     accent-color: var(--accent);
     cursor: pointer;
 }
+.agent-view-toggle {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-4);
+    font-size: var(--fs-base);
+    color: var(--text-dim);
+    cursor: pointer;
+    -webkit-user-select: none;
+    user-select: none;
+    white-space: nowrap;
+}
+.agent-view-toggle input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+.agent-view-toggle:hover {
+    color: var(--text-strong);
+}
+.agent-banner {
+    display: none;
+    padding: var(--sp-3) var(--sp-8);
+    background: rgba(255,152,0,0.1);
+    color: var(--orange);
+    font-size: var(--fs-sm);
+    border-bottom: 1px solid var(--border-subtle);
+}
 .badge {
     background: var(--red-strong);
     color: var(--text-white);

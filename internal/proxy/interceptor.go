@@ -65,6 +65,12 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 		return req, nil
 	}
 
+	origin := ""
+	if req.Header.Get("X-Gospy-Agent") != "" {
+		req.Header.Del("X-Gospy-Agent")
+		origin = "agent"
+	}
+
 	body := ""
 	rawBody := ""
 	compression := ""
@@ -138,6 +144,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			ClientPID:         clientPID,
 			ClientPath:        clientPath,
 			ClientDisplayName: clientDisplayName,
+			Origin:            origin,
 		}
 		_ = ic.history.Save(entry)
 		ctx.UserData = &entryUserData{entryID: entry.ID}
@@ -156,6 +163,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			ClientPID:         clientPID,
 			ClientPath:        clientPath,
 			ClientDisplayName: clientDisplayName,
+			Origin:            origin,
 		}
 		_ = ic.history.Save(entry)
 		LogRequest(entry.ID, req.Method, url)
@@ -185,6 +193,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			ClientPID:         clientPID,
 			ClientPath:        clientPath,
 			ClientDisplayName: clientDisplayName,
+			Origin:            origin,
 		}
 		_ = ic.history.Save(entry)
 		LogRequest(entry.ID, req.Method, url)
@@ -232,6 +241,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			ClientPID:         clientPID,
 			ClientPath:        clientPath,
 			ClientDisplayName: clientDisplayName,
+			Origin:            origin,
 		}
 		_ = ic.history.Save(entry)
 		ctx.UserData = &entryUserData{entryID: entry.ID}
@@ -249,6 +259,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			ClientPID:         clientPID,
 			ClientPath:        clientPath,
 			ClientDisplayName: clientDisplayName,
+			Origin:            origin,
 		}
 		_ = ic.history.Save(entry)
 		LogRequest(entry.ID, req.Method, url)
@@ -265,6 +276,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 		Request:       originalRequest,
 		AppliedAction: string(rule.Action),
 		RuleName:      rule.Name,
+		Origin:        origin,
 	}
 	_ = ic.history.Save(entry)
 	ctx.UserData = &entryUserData{entryID: entry.ID}

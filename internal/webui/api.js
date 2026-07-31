@@ -31,7 +31,7 @@ export async function loadRequests() {
             if (requests.length > 0) {
                 setLastTimestamp(requests[0].updatedAt || requests[0].timestamp);
             }
-            syncCriteriaFromServer(data.filters, data.focusEnabled);
+            syncCriteriaFromServer(data.filters, data.focusEnabled, data.agentEnabled);
             const currSel = selectedId ? requests.find(r => r.id === selectedId) : null;
             if (prevSel && currSel && prevSel.updatedAt !== currSel.updatedAt) onSelectedUpdated(selectedId);
         }

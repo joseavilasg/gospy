@@ -242,3 +242,41 @@ func TestOptions_IgnoresIgnoredHosts(t *testing.T) {
 		t.Fatalf("expected ignored host excluded from options: %+v", opts)
 	}
 }
+
+func TestFilters_Origin(t *testing.T) {
+	agent := testEntry()
+	agent.Origin = "agent"
+	browser := testEntry()
+	browser.ID = "e2"
+	browser.Origin = ""
+
+	f := &Filters{Origin: []string{"agent"}}
+	if !f.Matches(agent, MatchOpts{}) {
+		t.Fatal("expected origin agent match")
+	}
+	if f.Matches(browser, MatchOpts{}) {
+		t.Fatal("expected no match for browser entry with origin=agent filter")
+	}
+
+	// Origin is just another filter type: participates in all/any mode.
+	f2 := &Filters{Origin: []string{"agent"}, Host: []string{"other.com"}, MatchMode: "any"}
+	if !f2.Matches(agent, MatchOpts{}) {
+		t.Fatal("expected any-mode match via origin")
+	}
+	f3 := &Filters{Origin: []string{"agent"}, Host: []string{"other.com"}}
+	if f3.Matches(agent, MatchOpts{}) {
+		t.Fatal("expected no all-mode match when host doesn't match")
+	}
+}
+
+func TestOptions_Origin(t *testing.T) {
+	entries := []*ListEntry{
+		func() *ListEntry { le := testEntry(); le.Origin = "agent"; return le }(),
+		func() *ListEntry { le := testEntry(); le.ID = "e2"; le.Origin = "agent"; return le }(),
+		func() *ListEntry { le := testEntry(); le.ID = "e3"; le.Origin = ""; return le }(),
+	}
+	opts := Options(entries, "origin", nil)
+	if len(opts) != 1 || opts[0].Value != "agent" || opts[0].Count != 2 {
+		t.Fatalf("expected only agent origin with count 2, got %+v", opts)
+	}
+}

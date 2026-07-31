@@ -172,6 +172,7 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/api/filters/options", s.handleFilterOptions)
 	mux.HandleFunc("/api/filters/body", s.handleClearBodyFilter)
 	mux.HandleFunc("/api/filters", s.handleSaveFilters)
+	mux.HandleFunc("/api/agent/view", s.handleAgentView)
 	mux.HandleFunc("/api/ignored", s.handleIgnored)
 	mux.HandleFunc("/api/ignored/", s.handleIgnoredHost)
 	mux.HandleFunc("/api/focused", s.handleFocused)
@@ -228,6 +229,7 @@ type listResponse struct {
 	Version      int                  `json:"version"`
 	Filters      *history.Filters     `json:"filters,omitempty"`
 	FocusEnabled bool                 `json:"focusEnabled"`
+	AgentEnabled bool                 `json:"agentEnabled"`
 }
 
 func (s *Server) matchOpts(focusEnabled bool) history.MatchOpts {
@@ -288,6 +290,7 @@ func (s *Server) fullList() listResponse {
 		Version:      version,
 		Filters:      &filters,
 		FocusEnabled: focusEnabled,
+		AgentEnabled: s.filterStore.AgentEnabled(),
 	}
 }
 
@@ -319,6 +322,7 @@ func (s *Server) diffList(since time.Time) listResponse {
 		Total:        s.total(),
 		Version:      version,
 		FocusEnabled: focusEnabled,
+		AgentEnabled: s.filterStore.AgentEnabled(),
 	}
 }
 
@@ -331,6 +335,25 @@ func (s *Server) writeJSON(w http.ResponseWriter, v interface{}) {
 type saveFiltersRequest struct {
 	Filters      history.Filters `json:"filters"`
 	FocusEnabled bool            `json:"focusEnabled"`
+}
+
+type agentViewRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+func (s *Server) handleAgentView(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req agentViewRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	s.filterStore.ClearBodyAll()
+	s.filterStore.SetAgentEnabled(req.Enabled)
+	s.writeJSON(w, s.fullList())
 }
 
 func (s *Server) handleSaveFilters(w http.ResponseWriter, r *http.Request) {
@@ -417,7 +440,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	s.searchToken++
 	token := s.searchToken
-	s.filterStore.SetBodyIDs(nil, token)
+	profile := s.filterStore.ActiveProfile()
+	s.filterStore.SetBodyIDsFor(profile, nil, token)
 
 	entries := s.history.ListSummary()
 	enc := json.NewEncoder(w)
@@ -429,14 +453,14 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		if len(ids) == 0 {
 			return
 		}
-		s.filterStore.SetBodyIDs(ids, token)
+		s.filterStore.SetBodyIDsFor(profile, ids, token)
 	}
 
 	for i := len(entries) - 1; i >= 0; i-- {
 		id := entries[i].ID
 		select {
 		case <-r.Context().Done():
-			s.filterStore.ClearBody(token)
+			s.filterStore.ClearBodyFor(profile, token)
 			return
 		default:
 		}

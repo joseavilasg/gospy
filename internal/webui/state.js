@@ -5,6 +5,7 @@ export let filterText = '';
 export let ignoredHosts = [];
 export let focusedHosts = [];
 export let focusEnabled = false;
+export let agentView = false;
 export let lastTimestamp = '';
 export let signatureCache = {};
 export let criteriaVersion = null;
@@ -35,6 +36,8 @@ export function setFilterText(val) { filterText = val; }
 export function setIgnoredHosts(val) { ignoredHosts = val; }
 export function setFocusedHosts(val) { focusedHosts = val; }
 export function setFocusEnabled(val) { focusEnabled = val; }
+export function setAgentView(val) { agentView = val; }
+export function getAgentView() { return agentView; }
 export function setLastTimestamp(val) { lastTimestamp = val; }
 export function setSignatureCache(val) { signatureCache = val; }
 export function setCriteriaVersion(val) { criteriaVersion = val; }

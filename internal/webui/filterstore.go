@@ -9,26 +9,50 @@ import (
 	"gospy/internal/history"
 )
 
-type filterFile struct {
+const (
+	profileNormal = "normal"
+	profileAgent  = "agent"
+)
+
+type profileState struct {
 	Filters      history.Filters `json:"filters"`
+	FocusEnabled bool            `json:"focusEnabled,omitempty"`
+
+	// Body holds entry IDs produced by an on-demand deep search. It is volatile
+	// session state for this profile - never written to disk.
+	Body      []string `json:"-"`
+	bodyToken uint64   `json:"-"`
+}
+
+type filterFile struct {
+	Profiles     map[string]profileState `json:"profiles"`
+	AgentEnabled bool                    `json:"agentEnabled"`
+
+	// Legacy single-profile format (pre-agent-view): migrated into the "normal"
+	// profile on load.
+	Filters      history.Filters `json:"filters,omitempty"`
 	FocusEnabled bool            `json:"focusEnabled,omitempty"`
 }
 
-// FilterStore holds the single server-side filter criteria. Durable fields
-// (hosts, referers, processes, content types, text, match mode, focus toggle)
-// are persisted to filters.json; the body search result IDs are volatile
-// session state - never written to disk.
+// FilterStore holds the server-side filter criteria per view profile. The
+// "normal" profile is what the WebUI edits with agent view off; the "agent"
+// profile defines the scope of the agent MCP. Both are persisted to
+// filters.json; body search result IDs are volatile session state - never
+// written to disk.
 type FilterStore struct {
 	path         string
 	mu           sync.Mutex
-	filters      history.Filters
-	focusEnabled bool
+	profiles     map[string]profileState
+	agentEnabled bool
 	version      int
-	bodyToken    uint64
 }
 
 func NewFilterStore(path string) *FilterStore {
-	return &FilterStore{path: path, version: 1}
+	return &FilterStore{
+		path:     path,
+		profiles: map[string]profileState{profileNormal: {}, profileAgent: {}},
+		version:  1,
+	}
 }
 
 func (s *FilterStore) Load() error {
@@ -47,15 +71,38 @@ func (s *FilterStore) Load() error {
 	if err := json.Unmarshal(data, &f); err != nil {
 		return fmt.Errorf("unmarshal filters file: %w", err)
 	}
-	f.Filters.Body = nil
-	s.filters = f.Filters
-	s.focusEnabled = f.FocusEnabled
+
+	if len(f.Profiles) == 0 {
+		// Legacy format: single profile becomes "normal".
+		f.Profiles = map[string]profileState{
+			profileNormal: {Filters: f.Filters, FocusEnabled: f.FocusEnabled},
+			profileAgent:  {},
+		}
+	}
+	for name, p := range f.Profiles {
+		if name != profileNormal && name != profileAgent {
+			continue
+		}
+		p.Body = nil
+		f.Profiles[name] = p
+	}
+	s.profiles = f.Profiles
+	s.agentEnabled = f.AgentEnabled
 	return nil
 }
 
 func (s *FilterStore) saveLocked() error {
-	f := filterFile{Filters: s.filters, FocusEnabled: s.focusEnabled}
-	f.Filters.Body = nil
+	f := filterFile{
+		Profiles:     make(map[string]profileState, len(s.profiles)),
+		AgentEnabled: s.agentEnabled,
+	}
+	for name, p := range s.profiles {
+		if name != profileNormal && name != profileAgent {
+			continue
+		}
+		p.Body = nil
+		f.Profiles[name] = p
+	}
 	data, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal filters: %w", err)
@@ -63,13 +110,59 @@ func (s *FilterStore) saveLocked() error {
 	return os.WriteFile(s.path, data, 0644)
 }
 
-// Snapshot returns a copy of the criteria, the focus toggle, and the current version.
+// ActiveProfile returns the profile currently edited/served by the WebUI,
+// derived from the agent view toggle.
+func (s *FilterStore) ActiveProfile() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.activeProfileLocked()
+}
+
+func (s *FilterStore) activeProfileLocked() string {
+	if s.agentEnabled {
+		return profileAgent
+	}
+	return profileNormal
+}
+
+// Snapshot returns the active profile's criteria, focus toggle, and the
+// current version.
 func (s *FilterStore) Snapshot() (history.Filters, bool, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	f := s.filters
-	f.Body = append([]string(nil), s.filters.Body...)
-	return f, s.focusEnabled, s.version
+	p := s.profiles[s.activeProfileLocked()]
+	f := p.Filters
+	f.Body = append([]string(nil), p.Body...)
+	return f, p.FocusEnabled, s.version
+}
+
+// SnapshotAgent returns the agent profile's criteria and focus toggle - the
+// scope served to the MCP. agentEnabled tells whether the scope is active.
+func (s *FilterStore) SnapshotAgent() (history.Filters, bool, bool, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.profiles[profileAgent]
+	f := p.Filters
+	f.Body = append([]string(nil), p.Body...)
+	return f, p.FocusEnabled, s.agentEnabled, s.version
+}
+
+// AgentEnabled reports whether the agent scope is active.
+func (s *FilterStore) AgentEnabled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.agentEnabled
+}
+
+// SetAgentEnabled toggles which profile is active. Persists and bumps the
+// version so consumers refetch. Returns the new version.
+func (s *FilterStore) SetAgentEnabled(enabled bool) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.agentEnabled = enabled
+	s.version++
+	_ = s.saveLocked()
+	return s.version
 }
 
 // Version returns the current criteria version.
@@ -79,50 +172,86 @@ func (s *FilterStore) Version() int {
 	return s.version
 }
 
-// Set replaces the durable criteria and focus toggle. The caller's Body field is
-// ignored - the current committed body IDs are preserved. Persists and bumps the
-// version. Returns the new version.
+// Set replaces the active profile's durable criteria and focus toggle. The
+// caller's Body field is ignored - the current committed body IDs are
+// preserved. Persists and bumps the version. Returns the new version.
 func (s *FilterStore) Set(f history.Filters, focusEnabled bool) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	f.Body = s.filters.Body
-	s.filters = f
-	s.focusEnabled = focusEnabled
+	name := s.activeProfileLocked()
+	p := s.profiles[name]
+	f.Body = p.Body
+	p.Filters = f
+	p.FocusEnabled = focusEnabled
+	s.profiles[name] = p
 	s.version++
 	_ = s.saveLocked()
 	return s.version
 }
 
-// SetBodyIDs commits the deep search results for the given search session.
-// Never persisted; bumps the version so consumers refetch. Returns the new version.
+// SetBodyIDs commits the deep search results for the given search session to
+// the active profile. Never persisted; bumps the version. Returns the new
+// version.
 func (s *FilterStore) SetBodyIDs(ids []string, token uint64) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.filters.Body = ids
-	s.bodyToken = token
+	return s.setBodyIDsLocked(s.activeProfileLocked(), ids, token)
+}
+
+// SetBodyIDsFor commits deep search results to an explicit profile - the one
+// the search started in, so a mid-scan view toggle cannot cross-contaminate.
+func (s *FilterStore) SetBodyIDsFor(profile string, ids []string, token uint64) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.setBodyIDsLocked(profile, ids, token)
+}
+
+func (s *FilterStore) setBodyIDsLocked(profile string, ids []string, token uint64) int {
+	p := s.profiles[profile]
+	p.Body = ids
+	p.bodyToken = token
+	s.profiles[profile] = p
 	s.version++
 	return s.version
 }
 
-// ClearBody clears the committed body IDs only if they belong to the given search
-// token (an aborted scan must not wipe a newer scan's results). Returns the new version.
+// ClearBody clears the active profile's committed body IDs only if they belong
+// to the given search token (an aborted scan must not wipe a newer scan's
+// results). Returns the new version.
 func (s *FilterStore) ClearBody(token uint64) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.bodyToken != token {
+	return s.clearBodyLocked(s.activeProfileLocked(), token)
+}
+
+// ClearBodyFor clears an explicit profile's committed body IDs (used by the
+// search abort path with the profile captured at search start).
+func (s *FilterStore) ClearBodyFor(profile string, token uint64) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.clearBodyLocked(profile, token)
+}
+
+func (s *FilterStore) clearBodyLocked(profile string, token uint64) int {
+	p := s.profiles[profile]
+	if p.bodyToken != token {
 		return s.version
 	}
-	s.filters.Body = nil
+	p.Body = nil
+	s.profiles[profile] = p
 	s.version++
 	return s.version
 }
 
-// ClearBodyAll unconditionally clears the committed body IDs (chip close).
-// Returns the new version.
+// ClearBodyAll unconditionally clears the active profile's committed body IDs
+// (chip close). Returns the new version.
 func (s *FilterStore) ClearBodyAll() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.filters.Body = nil
+	name := s.activeProfileLocked()
+	p := s.profiles[name]
+	p.Body = nil
+	s.profiles[name] = p
 	s.version++
 	return s.version
 }

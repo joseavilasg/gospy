@@ -16,6 +16,7 @@ type Filters struct {
 	Host                []string `json:"host,omitempty"`
 	RequestContentType  []string `json:"requestContentType,omitempty"`
 	ResponseContentType []string `json:"responseContentType,omitempty"`
+	Origin              []string `json:"origin,omitempty"`
 	Text                string   `json:"text,omitempty"`
 	MatchMode           string   `json:"matchMode,omitempty"`
 
@@ -61,7 +62,7 @@ type typeCheck struct {
 }
 
 func (f *Filters) matchesFilters(le *ListEntry) bool {
-	checks := make([]typeCheck, 0, 6)
+	checks := make([]typeCheck, 0, 7)
 	if len(f.Process) > 0 {
 		checks = append(checks, typeCheck{f.Process, processName(le)})
 	}
@@ -76,6 +77,9 @@ func (f *Filters) matchesFilters(le *ListEntry) bool {
 	}
 	if len(f.ResponseContentType) > 0 {
 		checks = append(checks, typeCheck{f.ResponseContentType, le.ResponseContentType})
+	}
+	if len(f.Origin) > 0 {
+		checks = append(checks, typeCheck{f.Origin, le.Origin})
 	}
 	if len(f.Body) > 0 {
 		checks = append(checks, typeCheck{f.Body, le.ID})
@@ -166,6 +170,8 @@ func Options(entries []*ListEntry, typ string, ignored HostMatcher) []OptionCoun
 			val = le.RequestContentType
 		case "responseContentType":
 			val = le.ResponseContentType
+		case "origin":
+			val = le.Origin
 		default:
 			return nil
 		}

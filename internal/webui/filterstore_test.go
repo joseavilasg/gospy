@@ -120,3 +120,134 @@ func TestFilterStore_PersistedFileDoesNotIncludeBody(t *testing.T) {
 		}
 	}
 }
+
+func TestFilterStore_MigratesLegacyFormat(t *testing.T) {
+	path := t.TempDir() + "/filters.json"
+	legacy := `{"filters":{"host":["api.example.com"],"matchMode":"any"},"focusEnabled":true}`
+	if err := os.WriteFile(path, []byte(legacy), 0644); err != nil {
+		t.Fatalf("write legacy file: %v", err)
+	}
+
+	fs := NewFilterStore(path)
+	if err := fs.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	f, focus, _ := fs.Snapshot()
+	if !focus || len(f.Host) != 1 || f.Host[0] != "api.example.com" || f.MatchMode != "any" {
+		t.Fatalf("legacy criteria not migrated into normal profile: %+v focus=%v", f, focus)
+	}
+	if fs.AgentEnabled() {
+		t.Fatal("agent must be disabled after legacy migration")
+	}
+
+	// A subsequent save rewrites the file in the new two-profile format.
+	fs.Set(history.Filters{Host: []string{"other.com"}}, false)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if !strings.Contains(string(data), "\"profiles\"") || !strings.Contains(string(data), "\"agentEnabled\"") {
+		t.Fatalf("file not rewritten in two-profile format: %s", data)
+	}
+}
+
+func TestFilterStore_AgentViewTogglePersists(t *testing.T) {
+	path := t.TempDir() + "/filters.json"
+	fs := NewFilterStore(path)
+
+	fs.Set(history.Filters{Host: []string{"api.example.com"}, MatchMode: "all"}, true)
+	fs.SetAgentEnabled(true)
+	fs.Set(history.Filters{Origin: []string{"agent"}, MatchMode: "any"}, false)
+
+	// Fresh store (restart) restores the agent profile and the toggle.
+	fs2 := NewFilterStore(path)
+	if err := fs2.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !fs2.AgentEnabled() {
+		t.Fatal("agentEnabled not restored")
+	}
+	f, focus, _ := fs2.Snapshot()
+	if len(f.Origin) != 1 || f.Origin[0] != "agent" || f.MatchMode != "any" || focus {
+		t.Fatalf("agent profile criteria not restored: %+v focus=%v", f, focus)
+	}
+	// Normal profile survives intact.
+	fs2.SetAgentEnabled(false)
+	fn, focusN, _ := fs2.Snapshot()
+	if len(fn.Host) != 1 || fn.Host[0] != "api.example.com" || !focusN {
+		t.Fatalf("normal profile clobbered: %+v focus=%v", fn, focusN)
+	}
+
+	af, _, enabled, _ := fs2.SnapshotAgent()
+	if enabled {
+		t.Fatal("agent must be disabled after toggle off")
+	}
+	if len(af.Origin) != 1 || af.Origin[0] != "agent" {
+		t.Fatalf("agent criteria must survive toggle: %+v", af)
+	}
+}
+
+func TestFilterStore_PerProfileBody(t *testing.T) {
+	fs := NewFilterStore(t.TempDir() + "/filters.json")
+
+	fs.SetBodyIDs([]string{"n1", "n2"}, 1)
+	fs.SetAgentEnabled(true)
+	fs.SetBodyIDs([]string{"a1"}, 2)
+
+	f, _, _ := fs.Snapshot()
+	if len(f.Body) != 1 || f.Body[0] != "a1" {
+		t.Fatalf("active profile (agent) body: %+v", f.Body)
+	}
+	// Toggling back restores the normal profile's committed body IDs.
+	fs.SetAgentEnabled(false)
+	fn, _, _ := fs.Snapshot()
+	if len(fn.Body) != 2 || fn.Body[0] != "n1" {
+		t.Fatalf("normal profile body lost after toggle: %+v", fn.Body)
+	}
+	// Chip close on the active profile must not touch the other profile.
+	fs.ClearBodyAll()
+	fn, _, _ = fs.Snapshot()
+	if len(fn.Body) != 0 {
+		t.Fatalf("ClearBodyAll failed: %+v", fn.Body)
+	}
+	af, _, _, _ := fs.SnapshotAgent()
+	if len(af.Body) != 1 {
+		t.Fatalf("agent body cleared by normal-profile ClearBodyAll: %+v", af.Body)
+	}
+}
+
+func TestFilterStore_SearchTargetsCapturedProfile(t *testing.T) {
+	fs := NewFilterStore(t.TempDir() + "/filters.json")
+
+	// Search starts in the normal profile, then the user toggles mid-scan.
+	fs.SetBodyIDsFor(profileNormal, []string{"x1", "x2"}, 5)
+	fs.SetAgentEnabled(true)
+	fs.SetBodyIDs([]string{"a1"}, 6)
+
+	// The abort must clear the profile the search started in, not the new active one.
+	fs.ClearBodyFor(profileNormal, 5)
+	fn, _, _, _ := fs.SnapshotAgent()
+	if len(fn.Body) != 1 || fn.Body[0] != "a1" {
+		t.Fatalf("agent body clobbered by normal-profile abort: %+v", fn.Body)
+	}
+	fs.SetAgentEnabled(false)
+	f, _, _ := fs.Snapshot()
+	if len(f.Body) != 0 {
+		t.Fatalf("normal body not cleared by its own abort: %+v", f.Body)
+	}
+}
+
+func TestFilterStore_SetAgentEnabledBumpsVersion(t *testing.T) {
+	fs := NewFilterStore(t.TempDir() + "/filters.json")
+	v1 := fs.Version()
+	fs.SetAgentEnabled(true)
+	v2 := fs.Version()
+	if !(v2 > v1) {
+		t.Fatalf("toggle must bump version: %d → %d", v1, v2)
+	}
+	_, _, enabled, _ := fs.SnapshotAgent()
+	if !enabled {
+		t.Fatal("agent not enabled after toggle")
+	}
+}

@@ -1,7 +1,7 @@
-import { setFilterText, setFocusEnabled, setLastTimestamp, selectedId, requests, rules, setRules, setSignatureCache } from './state.js';
+import { setFilterText, setFocusEnabled, setAgentView, applyFullList, setLastTimestamp, selectedId, requests, rules, setRules, setSignatureCache } from './state.js';
 import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch, setOnSelectedUpdated } from './api.js';
 import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, buildResponseTab } from './render.js';
-import { isBodySearching, restoreBodyFilter, registerFilter, setOnFilterChange, setOnListRefresh, initFilterPopover, openFilterPopover, closeFilterPopover, closeChip, openChip, getFilterChipsData, getMatchMode, setMatchMode, queueCriteriaSave } from './filters.js';
+import { isBodySearching, cancelBodySearch, invalidateCriteriaSave, syncCriteriaFromServer, isAnyFilterActive, restoreBodyFilter, registerFilter, setOnFilterChange, setOnListRefresh, initFilterPopover, openFilterPopover, closeFilterPopover, closeChip, openChip, getFilterChipsData, getMatchMode, setMatchMode, queueCriteriaSave } from './filters.js';
 import { initBodyTypes, editBody, saveBody, cancelBody, setBodyView, copyBody, getActiveEditor, postRenderBody } from './body-types.js';
 
 let _pendingFullscreenTarget = null;
@@ -39,6 +39,12 @@ registerFilter({
     searchPlaceholder: 'Search response content types...',
 });
 
+registerFilter({
+    type: 'origin',
+    label: 'Origin',
+    searchPlaceholder: 'Search origins...',
+});
+
 document.getElementById('filterInput').addEventListener('input', (e) => {
     setFilterText(e.target.value.trim());
     queueCriteriaSave();
@@ -59,6 +65,24 @@ document.getElementById('focusEnabled').addEventListener('change', (e) => {
     setFocusEnabled(e.target.checked);
     queueCriteriaSave();
     document.getElementById('requestList').scrollTop = 0;
+});
+
+document.getElementById('agentView').addEventListener('change', async (e) => {
+    const enabled = e.target.checked;
+    cancelBodySearch();
+    invalidateCriteriaSave();
+    setAgentView(enabled);
+    updateAgentBanner();
+    try {
+        const resp = await fetch('/api/agent/view', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled }),
+        });
+        const data = await resp.json();
+        applyFullList(data);
+        syncCriteriaFromServer(data.filters, data.focusEnabled, data.agentEnabled);
+    } catch (_) {}
 });
 
 document.getElementById('focusAddBtn').addEventListener('click', () => {
@@ -956,11 +980,19 @@ const overflowAddFilterBtn = document.getElementById('overflowAddFilterBtn');
 const filterBarHeader = document.getElementById('filterBarHeader');
 const filterModeToggle = document.getElementById('filterModeToggle');
 
+function updateAgentBanner() {
+    const banner = document.getElementById('agentBanner');
+    if (!banner) return;
+    const on = document.getElementById('agentView').checked;
+    banner.style.display = (on && !isAnyFilterActive()) ? 'block' : 'none';
+}
+
 function refreshFilters() {
     invalidateFilterCache();
     updateToggleUI();
     renderFilterChips();
     renderList();
+    updateAgentBanner();
 }
 
 setOnFilterChange(refreshFilters);

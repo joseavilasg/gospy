@@ -31,6 +31,7 @@ type Entry struct {
 	ClientPID         uint32          `json:"clientPid,omitempty"`
 	ClientPath        string          `json:"clientPath,omitempty"`
 	ClientDisplayName string          `json:"clientDisplayName,omitempty"`
+	Origin            string          `json:"origin,omitempty"`
 }
 
 type ProtobufField struct {
@@ -122,6 +123,7 @@ type ListEntry struct {
 	Referer             string    `json:"referer,omitempty"`
 	RequestContentType  string    `json:"requestContentType,omitempty"`
 	ResponseContentType string    `json:"responseContentType,omitempty"`
+	Origin              string    `json:"origin,omitempty"`
 }
 
 func New(dir string) (*Store, error) {
@@ -239,6 +241,7 @@ func (s *Store) parseEntryFile(path string) *ListEntry {
 		ClientProcess     string `json:"clientProcess,omitempty"`
 		ClientPID         uint32 `json:"clientPid,omitempty"`
 		ClientDisplayName string `json:"clientDisplayName,omitempty"`
+		Origin            string `json:"origin,omitempty"`
 		Request           struct {
 			Method  string          `json:"method"`
 			URL     string          `json:"url"`
@@ -267,6 +270,7 @@ func (s *Store) parseEntryFile(path string) *ListEntry {
 		ClientProcess:     raw.ClientProcess,
 		ClientPID:         raw.ClientPID,
 		ClientDisplayName: raw.ClientDisplayName,
+		Origin:            raw.Origin,
 	}
 
 	if len(raw.Request.Headers) > 0 {
@@ -347,6 +351,7 @@ func (s *Store) Save(entry *Entry) error {
 		RuleName:          entry.RuleName,
 		ClientProcess:     entry.ClientProcess,
 		ClientDisplayName: entry.ClientDisplayName,
+		Origin:            entry.Origin,
 	}
 	if refs, ok := entry.Request.Headers["Referer"]; ok && len(refs) > 0 {
 		le.Referer = refs[0]

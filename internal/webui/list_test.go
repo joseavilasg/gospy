@@ -449,3 +449,134 @@ func TestClearBodyFilter(t *testing.T) {
 		t.Fatalf("expected body cleared, got %+v", f.Body)
 	}
 }
+
+func TestListRequests_AgentViewSwitchesActiveProfile(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	agent := &history.Entry{
+		Request: history.RequestRecord{
+			Method:  "GET",
+			URL:     "http://api.example.com/path",
+			Host:    "api.example.com",
+			Headers: map[string][]string{},
+		},
+		Origin: "agent",
+	}
+	if err := s.history.Save(agent); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	saveTestEntry(t, s, "other.com", "POST")
+
+	// Normal profile: host filter active.
+	body := `{"filters":{"host":["api.example.com"]},"focusEnabled":false}`
+	req := httptest.NewRequest("PUT", "/api/filters", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleSaveFilters(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d, want 200", w.Code)
+	}
+	var resp listResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.AgentEnabled {
+		t.Fatal("agentEnabled must be false while off")
+	}
+	if len(resp.Entries) != 1 || resp.Entries[0].ID != agent.ID {
+		t.Fatalf("expected the host-filtered api.example.com entry, got %+v", resp.Entries)
+	}
+
+	// Enable agent view: response is the agent profile (empty criteria) — full list.
+	req2 := httptest.NewRequest("PUT", "/api/agent/view", strings.NewReader(`{"enabled":true}`))
+	w2 := httptest.NewRecorder()
+	s.handleAgentView(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("toggle status = %d, want 200", w2.Code)
+	}
+	// Raw wire check: agentEnabled always present (no omitempty) and true.
+	raw := w2.Body.String()
+	if !strings.Contains(raw, `"agentEnabled":true`) {
+		t.Fatalf("toggle response must carry agentEnabled:true, got %s", raw)
+	}
+	var resp2 listResponse
+	if err := json.NewDecoder(strings.NewReader(raw)).Decode(&resp2); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp2.AgentEnabled {
+		t.Fatal("agentEnabled must be true after toggle")
+	}
+	if len(resp2.Entries) != 2 {
+		t.Fatalf("expected all 2 entries in empty-criteria agent profile, got %d", len(resp2.Entries))
+	}
+
+	// Now filters are written to the AGENT profile.
+	body3 := `{"filters":{"origin":["agent"]},"focusEnabled":false}`
+	req3 := httptest.NewRequest("PUT", "/api/filters", strings.NewReader(body3))
+	w3 := httptest.NewRecorder()
+	s.handleSaveFilters(w3, req3)
+	var resp3 listResponse
+	if err := json.NewDecoder(w3.Body).Decode(&resp3); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp3.Entries) != 1 || resp3.Entries[0].ID != agent.ID {
+		t.Fatalf("expected only the agent-origin entry, got %+v", resp3.Entries)
+	}
+
+	// Toggling back restores the normal profile (host filter) untouched.
+	req4 := httptest.NewRequest("PUT", "/api/agent/view", strings.NewReader(`{"enabled":false}`))
+	w4 := httptest.NewRecorder()
+	s.handleAgentView(w4, req4)
+	var resp4 listResponse
+	if err := json.NewDecoder(w4.Body).Decode(&resp4); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp4.AgentEnabled {
+		t.Fatal("agentEnabled must be false after toggle off")
+	}
+	if len(resp4.Entries) != 1 || resp4.Entries[0].ID != agent.ID {
+		t.Fatalf("expected normal profile host filter restored (1 entry), got %+v", resp4.Entries)
+	}
+}
+
+func TestAgentView_ToggleClearsActiveProfileBody(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	saveTestEntry(t, s, "api.example.com", "GET")
+
+	// Body IDs committed to the normal profile (active).
+	s.filterStore.SetBodyIDs([]string{"x1"}, 1)
+	f, _, _ := s.filterStore.Snapshot()
+	if len(f.Body) != 1 {
+		t.Fatalf("setup: expected 1 body ID in normal, got %+v", f.Body)
+	}
+
+	// Toggle ON: clears the OLD active profile's body and switches.
+	req := httptest.NewRequest("PUT", "/api/agent/view", strings.NewReader(`{"enabled":true}`))
+	w := httptest.NewRecorder()
+	s.handleAgentView(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	af, _, enabled, _ := s.filterStore.SnapshotAgent()
+	if !enabled {
+		t.Fatal("agent must be enabled")
+	}
+	if len(af.Body) != 0 {
+		t.Fatalf("agent profile must start with empty body, got %+v", af.Body)
+	}
+
+	// Toggle OFF: clears the (now active) agent profile's body.
+	s.filterStore.SetBodyIDs([]string{"a1"}, 2)
+	req2 := httptest.NewRequest("PUT", "/api/agent/view", strings.NewReader(`{"enabled":false}`))
+	w2 := httptest.NewRecorder()
+	s.handleAgentView(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w2.Code)
+	}
+	f2, _, _ := s.filterStore.Snapshot()
+	if len(f2.Body) != 0 {
+		t.Fatalf("normal profile body must be empty after toggle, got %+v", f2.Body)
+	}
+	af2, _, enabled2, _ := s.filterStore.SnapshotAgent()
+	if enabled2 || len(af2.Body) != 0 {
+		t.Fatalf("agent body must be empty after toggle OFF, got %+v enabled=%v", af2.Body, enabled2)
+	}
+}
