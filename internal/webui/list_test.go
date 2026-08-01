@@ -3,6 +3,7 @@ package webui
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -42,6 +43,91 @@ func getListResponse(t *testing.T, s *Server, url string) listResponse {
 		t.Fatalf("decode: %v", err)
 	}
 	return resp
+}
+
+func TestListRequests_Pagination(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	// 15 entries with explicit timestamps so the newest-first index order is deterministic.
+	for i := 0; i < 15; i++ {
+		entry := &history.Entry{
+			Request: history.RequestRecord{
+				Method:  "GET",
+				URL:     fmt.Sprintf("http://host%d.example.com/path", i),
+				Host:    fmt.Sprintf("host%d.example.com", i),
+				Headers: map[string][]string{},
+			},
+			Timestamp: time.Unix(0, int64(i+1)), // i=14 is the newest
+		}
+		if err := s.history.Save(entry); err != nil {
+			t.Fatalf("Save %d: %v", i, err)
+		}
+	}
+
+	page0 := getListResponse(t, s, "/api/requests?offset=0&limit=5")
+	if len(page0.Entries) != 5 {
+		t.Fatalf("page 0 len = %d, want 5", len(page0.Entries))
+	}
+	if page0.VisibleCount != 15 {
+		t.Errorf("visibleCount = %d, want 15", page0.VisibleCount)
+	}
+	if page0.Offset != 0 {
+		t.Errorf("offset = %d, want 0", page0.Offset)
+	}
+	if page0.Entries[0].Host != "host14.example.com" {
+		t.Errorf("page 0 must start with newest entry, got %s", page0.Entries[0].Host)
+	}
+
+	page1 := getListResponse(t, s, "/api/requests?offset=5&limit=5")
+	if len(page1.Entries) != 5 || page1.Entries[0].Host != "host9.example.com" {
+		t.Fatalf("page 1 = %+v, want host9..host5", page1.Entries)
+	}
+	if page1.Offset != 5 || page1.VisibleCount != 15 {
+		t.Errorf("page 1 offset=%d visibleCount=%d, want 5/15", page1.Offset, page1.VisibleCount)
+	}
+
+	page2 := getListResponse(t, s, "/api/requests?offset=10&limit=5")
+	if len(page2.Entries) != 5 || page2.Entries[4].Host != "host0.example.com" {
+		t.Fatalf("page 2 = %+v, want host4..host0", page2.Entries)
+	}
+
+	// Past the end: empty page but the metadata still present in the wire.
+	page3 := getListResponse(t, s, "/api/requests?offset=15&limit=5")
+	if len(page3.Entries) != 0 {
+		t.Fatalf("page past end len = %d, want 0", len(page3.Entries))
+	}
+	if page3.VisibleCount != 15 || page3.Offset != 15 {
+		t.Errorf("page past end offset=%d visibleCount=%d, want 15/15", page3.Offset, page3.VisibleCount)
+	}
+
+	// Raw wire: visibleCount and offset always present, never omitted.
+	req := httptest.NewRequest("GET", "/api/requests?offset=3&limit=2", nil)
+	w := httptest.NewRecorder()
+	s.handleListRequests(w, req)
+	raw := w.Body.String()
+	for _, want := range []string{`"visibleCount":15`, `"offset":3`} {
+		if !strings.Contains(raw, want) {
+			t.Fatalf("full response must carry %s, got %s", want, raw)
+		}
+	}
+}
+
+func TestPageLimits(t *testing.T) {
+	cases := []struct {
+		offset, limit, wantO, wantL int
+	}{
+		{0, 0, 0, defaultPageSize},
+		{0, -1, 0, defaultPageSize},
+		{-5, 10, 0, 10},
+		{3, 5000, 3, maxPageSize},
+		{0, defaultPageSize, 0, defaultPageSize},
+		{0, maxPageSize + 1, 0, maxPageSize},
+	}
+	for _, c := range cases {
+		o, l := pageLimits(c.offset, c.limit)
+		if o != c.wantO || l != c.wantL {
+			t.Errorf("pageLimits(%d, %d) = (%d, %d), want (%d, %d)", c.offset, c.limit, o, l, c.wantO, c.wantL)
+		}
+	}
 }
 
 func TestListRequests_FullNoFilters(t *testing.T) {
@@ -242,6 +328,29 @@ func TestListRequests_DiffRemovedOnContentTypeChange(t *testing.T) {
 	}
 	if len(diff2.Removed) != 1 || diff2.Removed[0] != e.ID {
 		t.Fatalf("expected removed %s, got %+v", e.ID, diff2.Removed)
+	}
+	if diff2.VisibleCount != 0 {
+		t.Errorf("visibleCount after removal = %d, want 0 (entry left the visible set)", diff2.VisibleCount)
+	}
+}
+
+func TestListRequests_DiffCarriesVisibleCount(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	saveTestEntry(t, s, "api.example.com", "GET")
+	saveTestEntry(t, s, "other.com", "POST")
+
+	baseVersion := getListResponse(t, s, "/api/requests").Version
+
+	req := httptest.NewRequest("GET",
+		"/api/requests?since="+time.Now().Add(-time.Hour).Format(time.RFC3339Nano)+
+			"&version="+strconv.Itoa(baseVersion), nil)
+	w := httptest.NewRecorder()
+	s.handleListRequests(w, req)
+	raw := w.Body.String()
+	for _, want := range []string{`"visibleCount":2`, `"upserts":`} {
+		if !strings.Contains(raw, want) {
+			t.Fatalf("diff response must carry %s, got %s", want, raw)
+		}
 	}
 }
 
@@ -478,31 +587,39 @@ func TestListRequests_AgentViewSwitchesActiveProfile(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
+	if resp.AgentPreview {
+		t.Fatal("agentPreview must be false while off")
+	}
 	if resp.AgentEnabled {
-		t.Fatal("agentEnabled must be false while off")
+		t.Fatal("agentEnabled gate must be false while off")
 	}
 	if len(resp.Entries) != 1 || resp.Entries[0].ID != agent.ID {
 		t.Fatalf("expected the host-filtered api.example.com entry, got %+v", resp.Entries)
 	}
 
-	// Enable agent view: response is the agent profile (empty criteria) — full list.
-	req2 := httptest.NewRequest("PUT", "/api/agent/view", strings.NewReader(`{"enabled":true}`))
+	// Enable agent preview: response is the agent profile (empty criteria) — full list.
+	req2 := httptest.NewRequest("PUT", "/api/agent/view", strings.NewReader(`{"preview":true}`))
 	w2 := httptest.NewRecorder()
 	s.handleAgentView(w2, req2)
 	if w2.Code != http.StatusOK {
 		t.Fatalf("toggle status = %d, want 200", w2.Code)
 	}
-	// Raw wire check: agentEnabled always present (no omitempty) and true.
+	// Raw wire check: all agent fields always present (no omitempty).
 	raw := w2.Body.String()
-	if !strings.Contains(raw, `"agentEnabled":true`) {
-		t.Fatalf("toggle response must carry agentEnabled:true, got %s", raw)
+	for _, want := range []string{`"agentPreview":true`, `"agentEnabled":false`, `"agentExposed":false`, `"visibleCount":2`, `"offset":0`} {
+		if !strings.Contains(raw, want) {
+			t.Fatalf("toggle response must carry %s, got %s", want, raw)
+		}
 	}
 	var resp2 listResponse
 	if err := json.NewDecoder(strings.NewReader(raw)).Decode(&resp2); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if !resp2.AgentEnabled {
-		t.Fatal("agentEnabled must be true after toggle")
+	if !resp2.AgentPreview {
+		t.Fatal("agentPreview must be true after toggle")
+	}
+	if resp2.VisibleCount != 2 || resp2.Offset != 0 {
+		t.Fatalf("toggle must serve page 0, got visibleCount=%d offset=%d", resp2.VisibleCount, resp2.Offset)
 	}
 	if len(resp2.Entries) != 2 {
 		t.Fatalf("expected all 2 entries in empty-criteria agent profile, got %d", len(resp2.Entries))
@@ -522,15 +639,15 @@ func TestListRequests_AgentViewSwitchesActiveProfile(t *testing.T) {
 	}
 
 	// Toggling back restores the normal profile (host filter) untouched.
-	req4 := httptest.NewRequest("PUT", "/api/agent/view", strings.NewReader(`{"enabled":false}`))
+	req4 := httptest.NewRequest("PUT", "/api/agent/view", strings.NewReader(`{"preview":false}`))
 	w4 := httptest.NewRecorder()
 	s.handleAgentView(w4, req4)
 	var resp4 listResponse
 	if err := json.NewDecoder(w4.Body).Decode(&resp4); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp4.AgentEnabled {
-		t.Fatal("agentEnabled must be false after toggle off")
+	if resp4.AgentPreview {
+		t.Fatal("agentPreview must be false after toggle off")
 	}
 	if len(resp4.Entries) != 1 || resp4.Entries[0].ID != agent.ID {
 		t.Fatalf("expected normal profile host filter restored (1 entry), got %+v", resp4.Entries)
@@ -549,15 +666,15 @@ func TestAgentView_ToggleClearsActiveProfileBody(t *testing.T) {
 	}
 
 	// Toggle ON: clears the OLD active profile's body and switches.
-	req := httptest.NewRequest("PUT", "/api/agent/view", strings.NewReader(`{"enabled":true}`))
+	req := httptest.NewRequest("PUT", "/api/agent/view", strings.NewReader(`{"preview":true}`))
 	w := httptest.NewRecorder()
 	s.handleAgentView(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
-	af, _, enabled, _ := s.filterStore.SnapshotAgent()
-	if !enabled {
-		t.Fatal("agent must be enabled")
+	af, _, _ := s.filterStore.SnapshotAgent()
+	if !s.filterStore.AgentPreview() {
+		t.Fatal("agent preview must be on")
 	}
 	if len(af.Body) != 0 {
 		t.Fatalf("agent profile must start with empty body, got %+v", af.Body)
@@ -565,7 +682,7 @@ func TestAgentView_ToggleClearsActiveProfileBody(t *testing.T) {
 
 	// Toggle OFF: clears the (now active) agent profile's body.
 	s.filterStore.SetBodyIDs([]string{"a1"}, 2)
-	req2 := httptest.NewRequest("PUT", "/api/agent/view", strings.NewReader(`{"enabled":false}`))
+	req2 := httptest.NewRequest("PUT", "/api/agent/view", strings.NewReader(`{"preview":false}`))
 	w2 := httptest.NewRecorder()
 	s.handleAgentView(w2, req2)
 	if w2.Code != http.StatusOK {
@@ -575,8 +692,69 @@ func TestAgentView_ToggleClearsActiveProfileBody(t *testing.T) {
 	if len(f2.Body) != 0 {
 		t.Fatalf("normal profile body must be empty after toggle, got %+v", f2.Body)
 	}
-	af2, _, enabled2, _ := s.filterStore.SnapshotAgent()
-	if enabled2 || len(af2.Body) != 0 {
-		t.Fatalf("agent body must be empty after toggle OFF, got %+v enabled=%v", af2.Body, enabled2)
+	af2, _, _ := s.filterStore.SnapshotAgent()
+	if len(af2.Body) != 0 {
+		t.Fatalf("agent body must be empty after toggle OFF, got %+v", af2.Body)
+	}
+}
+
+func TestListRequests_AgentEnabledGate(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	saveTestEntry(t, s, "api.example.com", "GET")
+
+	// Full list with the gate off carries the three agent fields.
+	req := httptest.NewRequest("GET", "/api/requests", nil)
+	w := httptest.NewRecorder()
+	s.handleListRequests(w, req)
+	raw := w.Body.String()
+	for _, want := range []string{`"agentPreview":false`, `"agentEnabled":false`, `"agentExposed":false`} {
+		if !strings.Contains(raw, want) {
+			t.Fatalf("list must carry %s, got %s", want, raw)
+		}
+	}
+
+	// Enabling the gate with an empty agent profile exposes everything.
+	req2 := httptest.NewRequest("PUT", "/api/agent/enabled", strings.NewReader(`{"enabled":true}`))
+	w2 := httptest.NewRecorder()
+	s.handleAgentEnabled(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w2.Code)
+	}
+	var gateResp map[string]bool
+	if err := json.NewDecoder(w2.Body).Decode(&gateResp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !gateResp["enabled"] || !gateResp["exposed"] {
+		t.Fatalf("expected enabled+exposed true, got %+v", gateResp)
+	}
+
+	// A filter written to the AGENT profile removes the exposure.
+	req2b := httptest.NewRequest("PUT", "/api/agent/view", strings.NewReader(`{"preview":true}`))
+	w2b := httptest.NewRecorder()
+	s.handleAgentView(w2b, req2b)
+	if w2b.Code != http.StatusOK {
+		t.Fatalf("preview status = %d, want 200", w2b.Code)
+	}
+	body := `{"filters":{"host":["api.example.com"]},"focusEnabled":false}`
+	req3 := httptest.NewRequest("PUT", "/api/filters", strings.NewReader(body))
+	w3 := httptest.NewRecorder()
+	s.handleSaveFilters(w3, req3)
+	raw3 := w3.Body.String()
+	if !strings.Contains(raw3, `"agentPreview":true`) || !strings.Contains(raw3, `"agentEnabled":true`) || !strings.Contains(raw3, `"agentExposed":false`) {
+		t.Fatalf("filtered agent profile must keep gate on but exposure off, got %s", raw3)
+	}
+
+	// Disabling the gate clears the exposure.
+	req4 := httptest.NewRequest("PUT", "/api/agent/enabled", strings.NewReader(`{"enabled":false}`))
+	w4 := httptest.NewRecorder()
+	s.handleAgentEnabled(w4, req4)
+	if w4.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w4.Code)
+	}
+	if err := json.NewDecoder(w4.Body).Decode(&gateResp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if gateResp["enabled"] || gateResp["exposed"] {
+		t.Fatalf("expected enabled+exposed false, got %+v", gateResp)
 	}
 }

@@ -56,6 +56,17 @@ func (f *Filters) Matches(le *ListEntry, opts MatchOpts) bool {
 	return true
 }
 
+// Empty reports whether no filter criteria are active (used for the agent
+// exposure warning).
+func (f *Filters) Empty() bool {
+	if f.Text != "" || len(f.Body) > 0 {
+		return false
+	}
+	return len(f.Process) == 0 && len(f.Referer) == 0 && len(f.Host) == 0 &&
+		len(f.RequestContentType) == 0 && len(f.ResponseContentType) == 0 &&
+		len(f.Origin) == 0
+}
+
 type typeCheck struct {
 	values []string
 	value  string
@@ -141,6 +152,41 @@ func matchesText(le *ListEntry, text string) bool {
 		strings.Contains(status, q) ||
 		strings.Contains(process, q) ||
 		strings.Contains(id, q)
+}
+
+// PageVisibleSet slices the filtered view of entries into a single page. It is
+// the shared paging primitive used by every consumer of the visible set (WebUI
+// list endpoint, agent MCP list_entries) so their pagination stays identical by
+// construction. entries must be in display order (newest first). ignored reports
+// whether a host is on the ignore list (excluded from total and visibility);
+// matches decides full visibility (e.g. Filters.Matches with MatchOpts). When
+// lastVisible is non-nil it is filled with every visible entry ID (the diff
+// snapshot) in the same pass; pass nil to skip. It returns the page slice, the
+// number of non-ignored entries (total) and the size of the full visible set
+// (visibleCount). The caller is responsible for clamping offset/limit to its own
+// maximum page size - this helper never returns more than limit entries.
+func PageVisibleSet(entries []*ListEntry, ignored func(string) bool, matches func(*ListEntry) bool, lastVisible map[string]bool, offset, limit int) (page []*ListEntry, total, visibleCount int) {
+	start, end := offset, offset+limit
+	if limit <= 0 {
+		end = len(entries)
+	}
+	page = make([]*ListEntry, 0, limit)
+	for _, le := range entries {
+		if ignored != nil && ignored(le.Host) {
+			continue
+		}
+		total++
+		if matches(le) {
+			if lastVisible != nil {
+				lastVisible[le.ID] = true
+			}
+			visibleCount++
+			if visibleCount > start && visibleCount <= end {
+				page = append(page, le)
+			}
+		}
+	}
+	return page, total, visibleCount
 }
 
 // OptionCount is a distinct extractable value for a filter type and how many

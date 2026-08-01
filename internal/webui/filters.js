@@ -1,4 +1,4 @@
-import { requests, filterText, setFilterText, focusEnabled, setFocusEnabled, getAgentView, setAgentView, applyFullList } from './state.js';
+import { requests, filterText, setFilterText, focusEnabled, setFocusEnabled, getAgentPreview, setAgentPreview, setAgentEnabled, setAgentExposed, applyFullList } from './state.js';
 
 function escapeHtml(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -62,7 +62,11 @@ export function saveCriteria() {
         if (mySeq !== criteriaSaveSeq) return;
         criteriaDirty = false;
         applyFullList(data);
-        syncCriteriaFromServer(data.filters, data.focusEnabled, data.agentEnabled);
+        syncCriteriaFromServer(data.filters, data.focusEnabled, {
+            preview: data.agentPreview,
+            enabled: data.agentEnabled,
+            exposed: data.agentExposed,
+        });
     }).catch(() => {
         criteriaDirty = false;
     });
@@ -75,7 +79,7 @@ export function invalidateCriteriaSave() {
     criteriaDirty = false;
 }
 
-export function syncCriteriaFromServer(filters, focusEnabledVal, agentEnabledVal) {
+export function syncCriteriaFromServer(filters, focusEnabledVal, agentState) {
     if (!filters) return;
     if (criteriaDirty) return;
     matchMode = filters.matchMode || 'all';
@@ -85,10 +89,14 @@ export function syncCriteriaFromServer(filters, focusEnabledVal, agentEnabledVal
     }
     setFilterText(filters.text || '');
     setFocusEnabled(focusEnabledVal);
-    if (agentEnabledVal !== undefined) {
-        setAgentView(agentEnabledVal);
-        const cb = document.getElementById('agentView');
-        if (cb) cb.checked = !!agentEnabledVal;
+    if (agentState) {
+        setAgentPreview(agentState.preview);
+        setAgentEnabled(agentState.enabled);
+        setAgentExposed(agentState.exposed);
+        const cb = document.getElementById('agentPreview');
+        if (cb) cb.checked = !!agentState.preview;
+        const cbGate = document.getElementById('agentEnabled');
+        if (cbGate) cbGate.checked = !!agentState.enabled;
     }
     const input = document.getElementById('filterInput');
     if (input) input.value = filters.text || '';
@@ -342,7 +350,7 @@ function renderOptions() {
 let bodySearchState = { q: '', scanning: false, scanned: 0, total: 0, matchCount: 0, abortController: null };
 
 function bodyFilterKey() {
-    return getAgentView() ? 'gospy-body-filter.agent' : 'gospy-body-filter';
+    return getAgentPreview() ? 'gospy-body-filter.agent' : 'gospy-body-filter';
 }
 
 export function isBodySearching() { return bodySearchState.scanning; }

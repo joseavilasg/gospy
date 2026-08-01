@@ -26,7 +26,10 @@ type profileState struct {
 
 type filterFile struct {
 	Profiles     map[string]profileState `json:"profiles"`
-	AgentEnabled bool                    `json:"agentEnabled"`
+	AgentPreview bool                    `json:"agentPreview"`
+
+	// Legacy key (pre-agentPreview rename): migrated into AgentPreview on load.
+	LegacyAgentEnabled *bool `json:"agentEnabled,omitempty"`
 
 	// Legacy single-profile format (pre-agent-view): migrated into the "normal"
 	// profile on load.
@@ -35,14 +38,16 @@ type filterFile struct {
 }
 
 // FilterStore holds the server-side filter criteria per view profile. The
-// "normal" profile is what the WebUI edits with agent view off; the "agent"
+// "normal" profile is what the WebUI edits with agent preview off; the "agent"
 // profile defines the scope of the agent MCP. Both are persisted to
 // filters.json; body search result IDs are volatile session state - never
-// written to disk.
+// written to disk. The agent gate is in-memory session state - it resets to
+// off on every start.
 type FilterStore struct {
 	path         string
 	mu           sync.Mutex
 	profiles     map[string]profileState
+	agentPreview bool
 	agentEnabled bool
 	version      int
 }
@@ -87,14 +92,17 @@ func (s *FilterStore) Load() error {
 		f.Profiles[name] = p
 	}
 	s.profiles = f.Profiles
-	s.agentEnabled = f.AgentEnabled
+	s.agentPreview = f.AgentPreview
+	if f.LegacyAgentEnabled != nil {
+		s.agentPreview = *f.LegacyAgentEnabled
+	}
 	return nil
 }
 
 func (s *FilterStore) saveLocked() error {
 	f := filterFile{
 		Profiles:     make(map[string]profileState, len(s.profiles)),
-		AgentEnabled: s.agentEnabled,
+		AgentPreview: s.agentPreview,
 	}
 	for name, p := range s.profiles {
 		if name != profileNormal && name != profileAgent {
@@ -111,7 +119,7 @@ func (s *FilterStore) saveLocked() error {
 }
 
 // ActiveProfile returns the profile currently edited/served by the WebUI,
-// derived from the agent view toggle.
+// derived from the agent preview toggle.
 func (s *FilterStore) ActiveProfile() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -119,7 +127,7 @@ func (s *FilterStore) ActiveProfile() string {
 }
 
 func (s *FilterStore) activeProfileLocked() string {
-	if s.agentEnabled {
+	if s.agentPreview {
 		return profileAgent
 	}
 	return profileNormal
@@ -137,32 +145,49 @@ func (s *FilterStore) Snapshot() (history.Filters, bool, int) {
 }
 
 // SnapshotAgent returns the agent profile's criteria and focus toggle - the
-// scope served to the MCP. agentEnabled tells whether the scope is active.
-func (s *FilterStore) SnapshotAgent() (history.Filters, bool, bool, int) {
+// scope served to the MCP.
+func (s *FilterStore) SnapshotAgent() (history.Filters, bool, int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p := s.profiles[profileAgent]
 	f := p.Filters
 	f.Body = append([]string(nil), p.Body...)
-	return f, p.FocusEnabled, s.agentEnabled, s.version
+	return f, p.FocusEnabled, s.version
 }
 
-// AgentEnabled reports whether the agent scope is active.
-func (s *FilterStore) AgentEnabled() bool {
+// AgentPreview reports whether the WebUI previews the agent profile.
+func (s *FilterStore) AgentPreview() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.agentPreview
+}
+
+// AgentGate reports whether the agent MCP scope is active. The gate is
+// in-memory session state - it resets to off on every start.
+func (s *FilterStore) AgentGate() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.agentEnabled
 }
 
-// SetAgentEnabled toggles which profile is active. Persists and bumps the
-// version so consumers refetch. Returns the new version.
-func (s *FilterStore) SetAgentEnabled(enabled bool) int {
+// SetAgentPreview toggles which profile the WebUI previews. Persists and
+// bumps the version so consumers refetch. Returns the new version.
+func (s *FilterStore) SetAgentPreview(preview bool) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.agentEnabled = enabled
+	s.agentPreview = preview
 	s.version++
 	_ = s.saveLocked()
 	return s.version
+}
+
+// SetAgentGate enables or disables the agent MCP scope. In-memory only - never
+// persisted, so the gate is off on every fresh start. No version bump: the
+// gate does not change the WebUI's visible list.
+func (s *FilterStore) SetAgentGate(enabled bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.agentEnabled = enabled
 }
 
 // Version returns the current criteria version.

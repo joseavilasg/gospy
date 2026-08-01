@@ -6,6 +6,70 @@ import (
 
 func strPtr(s int) *int { return &s }
 
+func TestPageVisibleSet(t *testing.T) {
+	le := func(id, host string) *ListEntry {
+		return &ListEntry{ID: id, Host: host}
+	}
+	entries := []*ListEntry{
+		le("a", "h1"), le("b", "h2"), le("c", "h3"), le("d", "h4"), le("e", "h5"),
+	}
+	ignored := func(host string) bool { return host == "h2" }
+	matches := func(l *ListEntry) bool { return l.Host != "h4" }
+
+	// Page 0: skips ignored h2 and non-matching h4; total=4, visible=3.
+	lastVisible := map[string]bool{}
+	page, total, visible := PageVisibleSet(entries, ignored, matches, lastVisible, 0, 2)
+	if total != 4 || visible != 3 {
+		t.Fatalf("total=%d visible=%d, want 4/3", total, visible)
+	}
+	if len(page) != 2 || page[0].ID != "a" || page[1].ID != "c" {
+		t.Fatalf("page 0 = %+v, want [a c]", ids(page))
+	}
+	for _, id := range []string{"a", "c", "e"} {
+		if !lastVisible[id] {
+			t.Errorf("lastVisible missing %s", id)
+		}
+	}
+	if lastVisible["b"] || lastVisible["d"] {
+		t.Error("lastVisible must exclude ignored and non-matching entries")
+	}
+
+	// Page 1: the next visible entry.
+	page1, _, _ := PageVisibleSet(entries, ignored, matches, nil, 2, 2)
+	if len(page1) != 1 || page1[0].ID != "e" {
+		t.Fatalf("page 1 = %+v, want [e]", ids(page1))
+	}
+
+	// Offset past the end: empty page, never nil (wire serializes [] not null).
+	pageEnd, total2, visible2 := PageVisibleSet(entries, ignored, matches, nil, 10, 2)
+	if len(pageEnd) != 0 || pageEnd == nil {
+		t.Fatalf("page past end = %#v, want non-nil empty slice", pageEnd)
+	}
+	if total2 != 4 || visible2 != 3 {
+		t.Fatalf("total=%d visible=%d, want 4/3", total2, visible2)
+	}
+
+	// Non-positive limit: unbounded page.
+	pageAll, _, _ := PageVisibleSet(entries, ignored, matches, nil, 0, 0)
+	if len(pageAll) != 3 || pageAll[2].ID != "e" {
+		t.Fatalf("unbounded page = %+v, want [a c e]", ids(pageAll))
+	}
+
+	// Clamped page never returns more than limit entries.
+	pageClamped, _, _ := PageVisibleSet(entries, ignored, matches, nil, 0, 2)
+	if len(pageClamped) != 2 {
+		t.Fatalf("clamped page len = %d, want 2", len(pageClamped))
+	}
+}
+
+func ids(page []*ListEntry) []string {
+	out := make([]string, 0, len(page))
+	for _, l := range page {
+		out = append(out, l.ID)
+	}
+	return out
+}
+
 func testEntry() *ListEntry {
 	return &ListEntry{
 		ID:                  "e1",

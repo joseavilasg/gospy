@@ -173,6 +173,7 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/api/filters/body", s.handleClearBodyFilter)
 	mux.HandleFunc("/api/filters", s.handleSaveFilters)
 	mux.HandleFunc("/api/agent/view", s.handleAgentView)
+	mux.HandleFunc("/api/agent/enabled", s.handleAgentEnabled)
 	mux.HandleFunc("/api/ignored", s.handleIgnored)
 	mux.HandleFunc("/api/ignored/", s.handleIgnoredHost)
 	mux.HandleFunc("/api/focused", s.handleFocused)
@@ -221,15 +222,64 @@ func (s *Server) handleStatic(content, contentType string) http.HandlerFunc {
 	}
 }
 
+// Pagination bounds shared by every full-list consumer. The maximum is hard:
+// it is enforced server-side so no client (browser or agent MCP) can request an
+// unbounded page of the visible set.
+const (
+	defaultPageSize = 1000
+	maxPageSize     = 1000
+)
+
+// pageLimits normalizes and clamps an offset/limit pair. offset is floored at 0
+// and limit is clamped to [defaultPageSize, maxPageSize]; an absent or invalid
+// limit becomes the default page size.
+func pageLimits(offset, limit int) (int, int) {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = defaultPageSize
+	}
+	if limit > maxPageSize {
+		limit = maxPageSize
+	}
+	return offset, limit
+}
+
+func queryInt(r *http.Request, name string) int {
+	v, err := strconv.Atoi(r.URL.Query().Get(name))
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
 type listResponse struct {
 	Entries      []*history.ListEntry `json:"entries"`
 	Upserts      []*history.ListEntry `json:"upserts"`
 	Removed      []string             `json:"removed,omitempty"`
 	Total        int                  `json:"total"`
+	VisibleCount int                  `json:"visibleCount"`
+	Offset       int                  `json:"offset"`
 	Version      int                  `json:"version"`
 	Filters      *history.Filters     `json:"filters,omitempty"`
 	FocusEnabled bool                 `json:"focusEnabled"`
+	AgentPreview bool                 `json:"agentPreview"`
 	AgentEnabled bool                 `json:"agentEnabled"`
+	AgentExposed bool                 `json:"agentExposed"`
+}
+
+// agentExposed reports whether the agent MCP is active AND its profile has no
+// active filters - i.e. it would see the whole unfiltered traffic stream.
+func (s *Server) agentExposed() bool {
+	if !s.filterStore.AgentGate() {
+		return false
+	}
+	f, focusEnabled, _ := s.filterStore.SnapshotAgent()
+	if focusEnabled && len(s.focusStore.List()) > 0 {
+		return false
+	}
+	return f.Empty()
 }
 
 func (s *Server) matchOpts(focusEnabled bool) history.MatchOpts {
@@ -253,44 +303,40 @@ func (s *Server) handleListRequests(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	s.writeJSON(w, s.fullList())
+	offset, limit := pageLimits(queryInt(r, "offset"), queryInt(r, "limit"))
+	s.writeJSON(w, s.fullList(offset, limit))
 }
 
-func (s *Server) fullList() listResponse {
+func (s *Server) fullList(offset, limit int) listResponse {
 	filters, focusEnabled, version := s.filterStore.Snapshot()
 	opts := s.matchOpts(focusEnabled)
 
 	entries := s.history.ListSummary()
-	visible := make([]*history.ListEntry, 0, len(entries))
-	total := 0
-	for _, le := range entries {
-		if s.ignoreStore.Matches(le.Host) {
-			continue
-		}
-		total++
-		if filters.Matches(le, opts) {
-			visible = append(visible, le)
-		}
-	}
 
 	s.listMu.Lock()
-	s.lastVisible = make(map[string]bool, len(visible))
-	for _, le := range visible {
-		s.lastVisible[le.ID] = true
-	}
-	s.listMu.Unlock()
+	defer s.listMu.Unlock()
+	lastVisible := make(map[string]bool)
+	page, total, visibleCount := history.PageVisibleSet(entries,
+		func(host string) bool { return s.ignoreStore.Matches(host) },
+		func(le *history.ListEntry) bool { return filters.Matches(le, opts) },
+		lastVisible, offset, limit)
+	s.lastVisible = lastVisible
 
 	s.totalMu.Lock()
 	s.nonIgnoredTotal = total
 	s.totalMu.Unlock()
 
 	return listResponse{
-		Entries:      visible,
+		Entries:      page,
 		Total:        total,
+		VisibleCount: visibleCount,
+		Offset:       offset,
 		Version:      version,
 		Filters:      &filters,
 		FocusEnabled: focusEnabled,
-		AgentEnabled: s.filterStore.AgentEnabled(),
+		AgentPreview: s.filterStore.AgentPreview(),
+		AgentEnabled: s.filterStore.AgentGate(),
+		AgentExposed: s.agentExposed(),
 	}
 }
 
@@ -320,9 +366,12 @@ func (s *Server) diffList(since time.Time) listResponse {
 		Upserts:      upserts,
 		Removed:      removed,
 		Total:        s.total(),
+		VisibleCount: len(s.lastVisible),
 		Version:      version,
 		FocusEnabled: focusEnabled,
-		AgentEnabled: s.filterStore.AgentEnabled(),
+		AgentPreview: s.filterStore.AgentPreview(),
+		AgentEnabled: s.filterStore.AgentGate(),
+		AgentExposed: s.agentExposed(),
 	}
 }
 
@@ -338,7 +387,7 @@ type saveFiltersRequest struct {
 }
 
 type agentViewRequest struct {
-	Enabled bool `json:"enabled"`
+	Preview bool `json:"preview"`
 }
 
 func (s *Server) handleAgentView(w http.ResponseWriter, r *http.Request) {
@@ -352,8 +401,29 @@ func (s *Server) handleAgentView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.filterStore.ClearBodyAll()
-	s.filterStore.SetAgentEnabled(req.Enabled)
-	s.writeJSON(w, s.fullList())
+	s.filterStore.SetAgentPreview(req.Preview)
+	s.writeJSON(w, s.fullList(0, defaultPageSize))
+}
+
+type agentEnabledRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+func (s *Server) handleAgentEnabled(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req agentEnabledRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	s.filterStore.SetAgentGate(req.Enabled)
+	s.writeJSON(w, map[string]bool{
+		"enabled": s.filterStore.AgentGate(),
+		"exposed": s.agentExposed(),
+	})
 }
 
 func (s *Server) handleSaveFilters(w http.ResponseWriter, r *http.Request) {
@@ -367,7 +437,7 @@ func (s *Server) handleSaveFilters(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.filterStore.Set(req.Filters, req.FocusEnabled)
-	s.writeJSON(w, s.fullList())
+	s.writeJSON(w, s.fullList(0, defaultPageSize))
 }
 
 func (s *Server) handleFilterOptions(w http.ResponseWriter, r *http.Request) {

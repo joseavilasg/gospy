@@ -5,11 +5,14 @@ export let filterText = '';
 export let ignoredHosts = [];
 export let focusedHosts = [];
 export let focusEnabled = false;
-export let agentView = false;
+export let agentPreview = false;
+export let agentEnabled = false;
+export let agentExposed = false;
 export let lastTimestamp = '';
 export let signatureCache = {};
 export let criteriaVersion = null;
 export let totalRequests = 0;
+export let visibleCount = 0;
 
 export function setRequests(val) {
     requestsMap.clear();
@@ -36,22 +39,34 @@ export function setFilterText(val) { filterText = val; }
 export function setIgnoredHosts(val) { ignoredHosts = val; }
 export function setFocusedHosts(val) { focusedHosts = val; }
 export function setFocusEnabled(val) { focusEnabled = val; }
-export function setAgentView(val) { agentView = val; }
-export function getAgentView() { return agentView; }
+export function setAgentPreview(val) { agentPreview = val; }
+export function getAgentPreview() { return agentPreview; }
+export function setAgentEnabled(val) { agentEnabled = val; }
+export function setAgentExposed(val) { agentExposed = val; }
 export function setLastTimestamp(val) { lastTimestamp = val; }
 export function setSignatureCache(val) { signatureCache = val; }
 export function setCriteriaVersion(val) { criteriaVersion = val; }
 export function setTotalRequests(val) { totalRequests = val; }
+export function setVisibleCount(val) { visibleCount = val; }
 
 export function applyFullList(data) {
     setRequests(data.entries);
     setTotalRequests(data.total);
+    setVisibleCount(data.visibleCount);
     setCriteriaVersion(data.version);
+}
+export function applyPage(data) {
+    for (const item of data.entries) {
+        requestsMap.set(item.id, item);
+    }
+    requests = Array.from(requestsMap.values());
+    setVisibleCount(data.visibleCount);
 }
 export function applyListDiff(data) {
     upsertRequests(data.upserts);
     removeRequests(data.removed || []);
     setTotalRequests(data.total);
+    setVisibleCount(data.visibleCount);
     setCriteriaVersion(data.version);
 }
 

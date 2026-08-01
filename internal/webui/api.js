@@ -1,10 +1,29 @@
-import { requests, setRequests, upsertRequests, removeRequests, applyFullList, applyListDiff, ignoredHosts, setIgnoredHosts, focusedHosts, setFocusedHosts, lastTimestamp, setLastTimestamp, criteriaVersion, rules, setRules, selectedId } from './state.js';
+import { requests, setRequests, upsertRequests, removeRequests, applyFullList, applyPage, applyListDiff, ignoredHosts, setIgnoredHosts, focusedHosts, setFocusedHosts, lastTimestamp, setLastTimestamp, criteriaVersion, rules, setRules, selectedId } from './state.js';
 import { renderList, renderIgnoredList, renderFocusedList, renderRulesList, invalidateFilterCache } from './render.js';
 import { syncCriteriaFromServer } from './filters.js';
 
 let onSelectedUpdated = () => {};
+let loadingMore = false;
 
 export function setOnSelectedUpdated(cb) { onSelectedUpdated = cb; }
+
+export async function loadMore() {
+    if (loadingMore) return;
+    loadingMore = true;
+    try {
+        const resp = await fetch('/api/requests?offset=' + requests.length + '&limit=1000');
+        const data = await resp.json();
+        if (!data.entries) return;
+        if (data.version !== criteriaVersion) return;
+        applyPage(data);
+        invalidateFilterCache();
+        renderList();
+    } catch (e) {
+        console.error('Failed to load more:', e);
+    } finally {
+        loadingMore = false;
+    }
+}
 
 export async function loadRequests() {
     try {
@@ -31,7 +50,11 @@ export async function loadRequests() {
             if (requests.length > 0) {
                 setLastTimestamp(requests[0].updatedAt || requests[0].timestamp);
             }
-            syncCriteriaFromServer(data.filters, data.focusEnabled, data.agentEnabled);
+            syncCriteriaFromServer(data.filters, data.focusEnabled, {
+                preview: data.agentPreview,
+                enabled: data.agentEnabled,
+                exposed: data.agentExposed,
+            });
             const currSel = selectedId ? requests.find(r => r.id === selectedId) : null;
             if (prevSel && currSel && prevSel.updatedAt !== currSel.updatedAt) onSelectedUpdated(selectedId);
         }

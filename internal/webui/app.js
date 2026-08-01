@@ -1,7 +1,7 @@
-import { setFilterText, setFocusEnabled, setAgentView, applyFullList, setLastTimestamp, selectedId, requests, rules, setRules, setSignatureCache } from './state.js';
-import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch, setOnSelectedUpdated } from './api.js';
-import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, buildResponseTab } from './render.js';
-import { isBodySearching, cancelBodySearch, invalidateCriteriaSave, syncCriteriaFromServer, isAnyFilterActive, restoreBodyFilter, registerFilter, setOnFilterChange, setOnListRefresh, initFilterPopover, openFilterPopover, closeFilterPopover, closeChip, openChip, getFilterChipsData, getMatchMode, setMatchMode, queueCriteriaSave } from './filters.js';
+import { setFilterText, setFocusEnabled, setAgentPreview, setAgentEnabled, setAgentExposed, agentExposed, applyFullList, setLastTimestamp, selectedId, requests, rules, setRules, setSignatureCache, visibleCount } from './state.js';
+import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch, setOnSelectedUpdated, loadMore } from './api.js';
+import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, buildResponseTab, ITEM_HEIGHT } from './render.js';
+import { isBodySearching, cancelBodySearch, invalidateCriteriaSave, syncCriteriaFromServer, restoreBodyFilter, registerFilter, setOnFilterChange, setOnListRefresh, initFilterPopover, openFilterPopover, closeFilterPopover, closeChip, openChip, getFilterChipsData, getMatchMode, setMatchMode, queueCriteriaSave } from './filters.js';
 import { initBodyTypes, editBody, saveBody, cancelBody, setBodyView, copyBody, getActiveEditor, postRenderBody } from './body-types.js';
 
 let _pendingFullscreenTarget = null;
@@ -58,6 +58,7 @@ document.getElementById('rulesBtn').addEventListener('click', toggleRulesPanel);
 
 document.getElementById('refreshBtn').addEventListener('click', () => {
     setLastTimestamp('');
+    document.getElementById('requestList').scrollTop = 0;
     loadRequests();
 });
 
@@ -67,21 +68,43 @@ document.getElementById('focusEnabled').addEventListener('change', (e) => {
     document.getElementById('requestList').scrollTop = 0;
 });
 
-document.getElementById('agentView').addEventListener('change', async (e) => {
+document.getElementById('agentPreview').addEventListener('change', async (e) => {
     const enabled = e.target.checked;
     cancelBodySearch();
     invalidateCriteriaSave();
-    setAgentView(enabled);
+    setAgentPreview(enabled);
     updateAgentBanner();
     try {
         const resp = await fetch('/api/agent/view', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled }),
+            body: JSON.stringify({ preview: enabled }),
         });
         const data = await resp.json();
         applyFullList(data);
-        syncCriteriaFromServer(data.filters, data.focusEnabled, data.agentEnabled);
+        document.getElementById('requestList').scrollTop = 0;
+        syncCriteriaFromServer(data.filters, data.focusEnabled, {
+            preview: data.agentPreview,
+            enabled: data.agentEnabled,
+            exposed: data.agentExposed,
+        });
+    } catch (_) {}
+});
+
+document.getElementById('agentEnabled').addEventListener('change', async (e) => {
+    const enabled = e.target.checked;
+    setAgentEnabled(enabled);
+    updateAgentBanner();
+    try {
+        const resp = await fetch('/api/agent/enabled', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled }),
+        });
+        const data = await resp.json();
+        setAgentEnabled(!!data.enabled);
+        setAgentExposed(!!data.exposed);
+        updateAgentBanner();
     } catch (_) {}
 });
 
@@ -597,8 +620,17 @@ document.getElementById('requestList').addEventListener('scroll', () => {
     scrollRAF = requestAnimationFrame(() => {
         onListScroll();
         scrollRAF = null;
+        maybeLoadMore();
     });
 });
+
+function maybeLoadMore() {
+    if (requests.length >= visibleCount) return;
+    const list = document.getElementById('requestList');
+    if (list.scrollTop + list.clientHeight >= requests.length * ITEM_HEIGHT * 0.5) {
+        loadMore();
+    }
+}
 
 document.getElementById('toggleListBtn').addEventListener('click', () => {
     const container = document.getElementById('container');
@@ -983,8 +1015,7 @@ const filterModeToggle = document.getElementById('filterModeToggle');
 function updateAgentBanner() {
     const banner = document.getElementById('agentBanner');
     if (!banner) return;
-    const on = document.getElementById('agentView').checked;
-    banner.style.display = (on && !isAnyFilterActive()) ? 'block' : 'none';
+    banner.style.display = agentExposed ? 'block' : 'none';
 }
 
 function refreshFilters() {

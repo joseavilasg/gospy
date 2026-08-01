@@ -17,7 +17,11 @@
             <input type="checkbox" id="focusEnabled" title="Enable focus filter">
         </div>
         <label class="agent-view-toggle">
-            <input type="checkbox" id="agentView" title="Agent view: show the scope the agent MCP can see">
+            <input type="checkbox" id="agentEnabled" title="Enable the agent MCP (resets to off on every start)">
+            <span>Agent enabled</span>
+        </label>
+        <label class="agent-view-toggle">
+            <input type="checkbox" id="agentPreview" title="Agent view: preview the scope the agent MCP can see">
             <span>Agent view</span>
         </label>
         <div class="header-sep"></div>
@@ -30,7 +34,7 @@
         <div class="header-sep"></div>
         <button class="btn" id="rulesBtn">Rules <span class="badge" id="rulesCount">0</span></button>
     </header>
-    <div class="agent-banner" id="agentBanner" style="display:none">Agent view: sin filtros activos, el agente verá todo el tráfico.</div>
+    <div class="agent-banner" id="agentBanner" style="display:none">Agent enabled without active filters: the agent will see all traffic</div>
     <div class="container" id="container">
         <div class="list-column">
             <div class="filter-bar" id="filterBar">

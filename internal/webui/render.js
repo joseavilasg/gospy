@@ -1,8 +1,8 @@
-import { requests, selectedId, filterText, ignoredHosts, focusedHosts, focusEnabled, setSelectedId, rules, totalRequests } from './state.js';
+import { requests, selectedId, filterText, ignoredHosts, focusedHosts, focusEnabled, setSelectedId, rules, totalRequests, visibleCount } from './state.js';
 import { isAnyFilterActive } from './filters.js';
 import { detectBodyType, getKebabItems, renderContent, isEditable, getEntryData } from './body-types.js';
 
-const ITEM_HEIGHT = 35;
+export const ITEM_HEIGHT = 35;
 const BUFFER = 5;
 let lastFiltered = [];
 let lastRange = { start: -1, end: -1 };
@@ -59,22 +59,26 @@ export function renderList() {
     const total = totalRequests;
 
     if (filterText || isAnyFilterActive() || (focusEnabled && focusedHosts.length > 0)) {
-        document.getElementById('stats').textContent = filtered.length + ' / ' + total + ' requests';
+        document.getElementById('stats').textContent = visibleCount + ' / ' + total + ' requests';
     } else {
         document.getElementById('stats').textContent = total + ' requests';
     }
 
-    if (requests.length === 0) {
+    if (visibleCount === 0) {
+        list.innerHTML = total === 0
+            ? '<div style="padding:20px;color:#666;text-align:center">Waiting for requests...</div>'
+            : '<div style="padding:20px;color:#666;text-align:center">No matching requests</div>';
+        lastRange = { start: -1, end: -1 };
+        return;
+    }
+
+    if (filtered.length === 0) {
         list.innerHTML = '<div style="padding:20px;color:#666;text-align:center">Waiting for requests...</div>';
         lastRange = { start: -1, end: -1 };
         return;
     }
 
     lastRange = { start: -1, end: -1 };
-    if (filtered.length === 0) {
-        list.innerHTML = '<div style="padding:20px;color:#666;text-align:center">No matching requests</div>';
-        return;
-    }
     renderVisibleItems(list, filtered);
 }
 
@@ -82,11 +86,12 @@ function renderVisibleItems(list, filtered) {
     if (!filtered) filtered = lastFiltered;
     if (!filtered || filtered.length === 0) return;
 
-    const totalHeight = filtered.length * ITEM_HEIGHT;
+    const totalRows = visibleCount;
+    const totalHeight = totalRows * ITEM_HEIGHT;
     const scrollTop = list.scrollTop;
     const viewportHeight = list.clientHeight || 600;
     const start = Math.max(0, Math.floor(scrollTop / ITEM_HEIGHT) - BUFFER);
-    const end = Math.min(filtered.length, Math.ceil((scrollTop + viewportHeight) / ITEM_HEIGHT) + BUFFER);
+    const end = Math.min(totalRows, Math.ceil((scrollTop + viewportHeight) / ITEM_HEIGHT) + BUFFER);
 
     if (start === lastRange.start && end === lastRange.end) return;
     lastRange = { start, end };
@@ -99,7 +104,7 @@ function renderVisibleItems(list, filtered) {
     for (let i = 0; i < visibleItems.length; i++) {
         html += buildItemHtml(visibleItems[i]);
     }
-    if (end < filtered.length) html += `<div style="height:${(filtered.length - end) * ITEM_HEIGHT}px"></div>`;
+    if (end < totalRows) html += `<div style="height:${(totalRows - end) * ITEM_HEIGHT}px"></div>`;
     html += '</div>';
 
     list.innerHTML = html;
