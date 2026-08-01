@@ -172,6 +172,40 @@ func TestStore_GetNotFound(t *testing.T) {
 	}
 }
 
+func TestStore_GetByAgentCallID(t *testing.T) {
+	dir := t.TempDir()
+
+	store, err := New(dir)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	callID := "123e4567-e89b-12d3-a456-426614174000"
+	entry := &Entry{
+		Request: RequestRecord{
+			Method: "POST",
+			URL:    "http://a.com/api",
+			Host:   "a.com",
+		},
+		AgentCallID: callID,
+	}
+	if err := store.Save(entry); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	le, err := store.GetByAgentCallID(callID)
+	if err != nil {
+		t.Fatalf("GetByAgentCallID() error = %v", err)
+	}
+	if le.ID != entry.ID || le.AgentCallID != callID {
+		t.Errorf("lookup = %s/%s, want %s/%s", le.ID, le.AgentCallID, entry.ID, callID)
+	}
+
+	if _, err := store.GetByAgentCallID("missing"); err == nil {
+		t.Error("GetByAgentCallID(missing) = nil, want error")
+	}
+}
+
 func TestStore_Clear(t *testing.T) {
 	dir := t.TempDir()
 

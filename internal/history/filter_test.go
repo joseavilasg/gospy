@@ -333,6 +333,40 @@ func TestFilters_Origin(t *testing.T) {
 	}
 }
 
+func TestFilters_AgentOriginIsFiltered(t *testing.T) {
+	agent := testEntry()
+	agent.Origin = "agent"
+
+	// An agent-origin entry violating the current filter criteria is NOT
+	// visible: the same filter scope that bounds browser traffic bounds the
+	// agent's own traffic (github/sonarqube scenario).
+	f := &Filters{Host: []string{"sonarqube.com"}}
+	if f.Matches(agent, MatchOpts{}) {
+		t.Fatal("expected agent-origin entry filtered out by host criteria")
+	}
+
+	// An agent-origin entry matching the filter IS visible.
+	fMatching := &Filters{Host: []string{"api.example.com"}}
+	if !fMatching.Matches(agent, MatchOpts{}) {
+		t.Fatal("expected agent-origin entry matching the filter to be visible")
+	}
+
+	// The focus gate applies to agent entries exactly like any other.
+	optsFocus := MatchOpts{
+		FocusEnabled: true,
+		Focused:      mockHostMatcher{hosts: map[string]bool{"sonarqube.com": true}},
+	}
+	if fMatching.Matches(agent, optsFocus) {
+		t.Fatal("expected agent-origin entry not bypassing focus")
+	}
+
+	// Ignore stays a hard pre-filter.
+	optsIgnored := MatchOpts{Ignored: mockHostMatcher{hosts: map[string]bool{"api.example.com": true}}}
+	if fMatching.Matches(agent, optsIgnored) {
+		t.Fatal("expected ignored host excluded even for an agent-origin entry")
+	}
+}
+
 func TestOptions_Origin(t *testing.T) {
 	entries := []*ListEntry{
 		func() *ListEntry { le := testEntry(); le.Origin = "agent"; return le }(),

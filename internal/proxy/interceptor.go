@@ -66,9 +66,11 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 	}
 
 	origin := ""
-	if req.Header.Get("X-Gospy-Agent") != "" {
+	agentCallID := ""
+	if v := req.Header.Get("X-Gospy-Agent"); v != "" {
 		req.Header.Del("X-Gospy-Agent")
 		origin = "agent"
+		agentCallID = v
 	}
 
 	body := ""
@@ -145,6 +147,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			ClientPath:        clientPath,
 			ClientDisplayName: clientDisplayName,
 			Origin:            origin,
+			AgentCallID:       agentCallID,
 		}
 		_ = ic.history.Save(entry)
 		ctx.UserData = &entryUserData{entryID: entry.ID}
@@ -164,6 +167,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			ClientPath:        clientPath,
 			ClientDisplayName: clientDisplayName,
 			Origin:            origin,
+			AgentCallID:       agentCallID,
 		}
 		_ = ic.history.Save(entry)
 		LogRequest(entry.ID, req.Method, url)
@@ -194,6 +198,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			ClientPath:        clientPath,
 			ClientDisplayName: clientDisplayName,
 			Origin:            origin,
+			AgentCallID:       agentCallID,
 		}
 		_ = ic.history.Save(entry)
 		LogRequest(entry.ID, req.Method, url)
@@ -242,6 +247,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			ClientPath:        clientPath,
 			ClientDisplayName: clientDisplayName,
 			Origin:            origin,
+			AgentCallID:       agentCallID,
 		}
 		_ = ic.history.Save(entry)
 		ctx.UserData = &entryUserData{entryID: entry.ID}
@@ -260,6 +266,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			ClientPath:        clientPath,
 			ClientDisplayName: clientDisplayName,
 			Origin:            origin,
+			AgentCallID:       agentCallID,
 		}
 		_ = ic.history.Save(entry)
 		LogRequest(entry.ID, req.Method, url)
@@ -277,6 +284,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 		AppliedAction: string(rule.Action),
 		RuleName:      rule.Name,
 		Origin:        origin,
+		AgentCallID:   agentCallID,
 	}
 	_ = ic.history.Save(entry)
 	ctx.UserData = &entryUserData{entryID: entry.ID}
@@ -296,6 +304,24 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 	reqURL := ctx.Req.URL.Scheme + "://" + ctx.Req.Host + ctx.Req.URL.Path
 	if ctx.Req.URL.RawQuery != "" {
 		reqURL += "?" + ctx.Req.URL.RawQuery
+	}
+
+	// Streaming responses (text/event-stream) never finish: buffering the
+	// body would hold the client response open forever. Record status and
+	// headers only and let the stream pass through untouched. Note that a
+	// response-mock rule is bypassed for streaming responses.
+	if isStreamingResponse(resp) {
+		if ud, ok := ctx.UserData.(*entryUserData); ok {
+			if entry, err := ic.history.Get(ud.entryID); err == nil {
+				entry.Response = &history.ResponseRecord{
+					Status:  resp.StatusCode,
+					Headers: resp.Header,
+				}
+				_ = ic.history.Update(entry)
+				LogResponse(entry.ID, ctx.Req.Method, reqURL, resp.StatusCode, resp.Header.Get("Content-Type"))
+			}
+		}
+		return resp
 	}
 
 	var bodyData []byte
@@ -374,6 +400,13 @@ func (ic *Interceptor) HandleConnect(host string, ctx *goproxy.ProxyCtx) *goprox
 	LogConnect(host)
 	LogMITM(host)
 	return goproxy.MitmConnect
+}
+
+// isStreamingResponse reports whether the response is a server-sent event
+// stream whose body never ends (unlike 101 upgrades, which are handled
+// separately by the caller).
+func isStreamingResponse(resp *http.Response) bool {
+	return strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
 }
 
 func applyModifications(req *http.Request, mod *rules.ModifiedRequest) {

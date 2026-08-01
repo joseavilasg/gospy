@@ -654,6 +654,97 @@ func TestListRequests_AgentViewSwitchesActiveProfile(t *testing.T) {
 	}
 }
 
+func TestListRequests_AgentViewFiltersAgentOrigin(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	agent := &history.Entry{
+		Request: history.RequestRecord{
+			Method:  "GET",
+			URL:     "http://api.example.com/agent",
+			Host:    "api.example.com",
+			Headers: map[string][]string{},
+		},
+		Origin: "agent",
+	}
+	if err := s.history.Save(agent); err != nil {
+		t.Fatalf("Save agent: %v", err)
+	}
+	browser := &history.Entry{
+		Request: history.RequestRecord{
+			Method:  "GET",
+			URL:     "http://api.example.com/browser",
+			Host:    "api.example.com",
+			Headers: map[string][]string{},
+		},
+	}
+	if err := s.history.Save(browser); err != nil {
+		t.Fatalf("Save browser: %v", err)
+	}
+
+	// Agent view ON with a host filter that excludes the entries: the agent's
+	// own traffic is bounded by the same filter scope as browser traffic
+	// (github/sonarqube scenario) - there is no origin bypass.
+	req := httptest.NewRequest("PUT", "/api/agent/view", strings.NewReader(`{"preview":true}`))
+	w := httptest.NewRecorder()
+	s.handleAgentView(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("toggle status = %d, want 200", w.Code)
+	}
+
+	body := `{"filters":{"host":["other.com"]},"focusEnabled":false}`
+	req2 := httptest.NewRequest("PUT", "/api/filters", strings.NewReader(body))
+	w2 := httptest.NewRecorder()
+	s.handleSaveFilters(w2, req2)
+	var resp listResponse
+	if err := json.NewDecoder(w2.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Entries) != 0 {
+		t.Fatalf("expected the agent-origin entry filtered out, got %+v", resp.Entries)
+	}
+	if resp.VisibleCount != 0 {
+		t.Errorf("visibleCount = %d, want 0", resp.VisibleCount)
+	}
+
+	// A filter matching the entries' host makes them visible again.
+	bodyMatching := `{"filters":{"host":["api.example.com"]},"focusEnabled":false}`
+	reqMatching := httptest.NewRequest("PUT", "/api/filters", strings.NewReader(bodyMatching))
+	wMatching := httptest.NewRecorder()
+	s.handleSaveFilters(wMatching, reqMatching)
+	var respMatching listResponse
+	if err := json.NewDecoder(wMatching.Body).Decode(&respMatching); err != nil {
+		t.Fatalf("decode matching: %v", err)
+	}
+	if len(respMatching.Entries) != 2 || respMatching.VisibleCount != 2 {
+		t.Fatalf("expected both entries back, got %d entries / %d visible", len(respMatching.Entries), respMatching.VisibleCount)
+	}
+
+	// The focus gate applies to agent-origin entries exactly like any other.
+	s.focusStore.(*mockFocusChecker).Add("other.com")
+	bodyFocus := `{"filters":{"host":["api.example.com"]},"focusEnabled":true}`
+	reqFocus := httptest.NewRequest("PUT", "/api/filters", strings.NewReader(bodyFocus))
+	wFocus := httptest.NewRecorder()
+	s.handleSaveFilters(wFocus, reqFocus)
+	var respFocus listResponse
+	if err := json.NewDecoder(wFocus.Body).Decode(&respFocus); err != nil {
+		t.Fatalf("decode focus: %v", err)
+	}
+	if len(respFocus.Entries) != 0 {
+		t.Fatalf("expected agent-origin entries hidden by focus, got %+v", respFocus.Entries)
+	}
+
+	// Preview OFF restores the normal profile (empty criteria).
+	req4 := httptest.NewRequest("PUT", "/api/agent/view", strings.NewReader(`{"preview":false}`))
+	w4 := httptest.NewRecorder()
+	s.handleAgentView(w4, req4)
+	var resp3 listResponse
+	if err := json.NewDecoder(w4.Body).Decode(&resp3); err != nil {
+		t.Fatalf("decode off: %v", err)
+	}
+	if len(resp3.Entries) != 2 {
+		t.Fatalf("expected both entries back in the normal profile, got %+v", resp3.Entries)
+	}
+}
+
 func TestAgentView_ToggleClearsActiveProfileBody(t *testing.T) {
 	s, _, _ := newTestServer(t)
 	saveTestEntry(t, s, "api.example.com", "GET")

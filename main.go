@@ -3,12 +3,14 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
 
+	"gospy/internal/agent"
 	"gospy/internal/browser"
 	"gospy/internal/ca"
 	"gospy/internal/history"
@@ -150,6 +152,21 @@ func main() {
 	}()
 
 	proxy.LogInfo(fmt.Sprintf("Web UI at http://localhost%s", *uiAddr))
+
+	agentFwd, err := agent.NewForwarder("http://127.0.0.1"+*proxyAddr, caCert.TLSCert())
+	if err != nil {
+		proxy.LogError(fmt.Sprintf("Agent forwarder error: %v", err))
+	} else {
+		mcpServer := agent.NewServer(agent.NewScope(hist, filterStore, ignoreStore, focusStore), hist, agentFwd)
+		mux := http.NewServeMux()
+		mux.Handle("/mcp", mcpServer.Handler())
+		go func() {
+			proxy.LogInfo("Agent MCP at http://127.0.0.1:8090/mcp")
+			if err := http.ListenAndServe("127.0.0.1:8090", mux); err != nil {
+				proxy.LogError(fmt.Sprintf("Agent MCP error: %v", err))
+			}
+		}()
+	}
 
 	var savedProxy *proxy.SavedProxy
 	backupPath := filepath.Join(*dataDir, "proxy_backup.json")

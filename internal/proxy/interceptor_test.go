@@ -7,8 +7,10 @@ import (
 	"compress/zlib"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"gospy/internal/history"
 	"gospy/internal/rules"
@@ -62,6 +64,123 @@ func TestInterceptor_Passthrough_NoRule(t *testing.T) {
 	}
 	if entries[0].RuleName != "" {
 		t.Errorf("RuleName = %q, want empty", entries[0].RuleName)
+	}
+}
+
+func TestInterceptor_AgentCallID(t *testing.T) {
+	ic, store := newTestInterceptor(t, nil)
+	req := newRequest("GET", "http://example.com/api")
+	req.Header.Set("X-Gospy-Agent", "call-42")
+	ctx := newProxyCtx(req)
+
+	returnedReq, resp := ic.HandleRequest(req, ctx)
+
+	if returnedReq != req {
+		t.Error("HandleRequest should return the same request")
+	}
+	if resp != nil {
+		t.Error("HandleRequest should return nil response for passthrough")
+	}
+	if returnedReq.Header.Get("X-Gospy-Agent") != "" {
+		t.Error("X-Gospy-Agent must be stripped from the forwarded request")
+	}
+
+	entries := store.List()
+	if len(entries) != 1 {
+		t.Fatalf("List() = %d entries, want 1", len(entries))
+	}
+	if entries[0].Origin != "agent" {
+		t.Errorf("Origin = %q, want agent", entries[0].Origin)
+	}
+	if entries[0].AgentCallID != "call-42" {
+		t.Errorf("AgentCallID = %q, want call-42", entries[0].AgentCallID)
+	}
+
+	le, err := store.GetByAgentCallID("call-42")
+	if err != nil {
+		t.Fatalf("GetByAgentCallID: %v", err)
+	}
+	if le.ID != entries[0].ID {
+		t.Errorf("lookup resolved %s, want %s", le.ID, entries[0].ID)
+	}
+}
+
+// TestInterceptor_StreamingResponseNotBuffered guards the SSE pass-through:
+// text/event-stream responses never end, so HandleResponse must not buffer the
+// body (it would hold the client response open forever - the MCP Inspector web
+// UI hang). Status and headers are still recorded; the body streams raw.
+func TestInterceptor_StreamingResponseNotBuffered(t *testing.T) {
+	ic, store := newTestInterceptor(t, nil)
+	req := newRequest("GET", "http://example.com/events")
+	ctx := newProxyCtx(req)
+	if _, resp := ic.HandleRequest(req, ctx); resp != nil {
+		t.Fatal("HandleRequest should pass through")
+	}
+
+	// An SSE endpoint that writes one event and then holds the stream open.
+	streamOpen := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		io.WriteString(w, "data: hello\n\n")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-streamOpen
+	}))
+	defer func() {
+		close(streamOpen)
+		srv.Close()
+	}()
+
+	upstream, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("upstream: %v", err)
+	}
+	defer upstream.Body.Close()
+
+	done := make(chan struct{})
+	var out *http.Response
+	go func() {
+		out = ic.HandleResponse(upstream, ctx)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("HandleResponse blocked on the streaming body: the SSE stream must pass through without buffering")
+	}
+	if out == nil || out.Body == nil {
+		t.Fatal("nil response returned")
+	}
+
+	// The body must be the original open stream, not a buffered copy.
+	buf := make([]byte, len("data: hello\n\n"))
+	if _, err := io.ReadFull(out.Body, buf); err != nil {
+		t.Fatalf("read first chunk: %v", err)
+	}
+	if string(buf) != "data: hello\n\n" {
+		t.Errorf("first chunk = %q", buf)
+	}
+
+	// The entry records status + streaming content type, no body capture.
+	ud := ctx.UserData.(*entryUserData)
+	saved, err := store.Get(ud.entryID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if saved.Response == nil || saved.Response.Status != http.StatusOK {
+		t.Fatalf("entry response = %+v, want status 200", saved.Response)
+	}
+	if ct := saved.Response.Headers["Content-Type"][0]; ct != "text/event-stream" {
+		t.Errorf("Content-Type = %q, want text/event-stream", ct)
+	}
+	if saved.Response.BodyFile != "" || saved.Response.Body != "" || saved.Response.RawBody != "" {
+		t.Errorf("streaming body must not be captured: %+v", saved.Response)
 	}
 }
 

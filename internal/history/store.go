@@ -32,6 +32,7 @@ type Entry struct {
 	ClientPath        string          `json:"clientPath,omitempty"`
 	ClientDisplayName string          `json:"clientDisplayName,omitempty"`
 	Origin            string          `json:"origin,omitempty"`
+	AgentCallID       string          `json:"agentCallId,omitempty"`
 }
 
 type ProtobufField struct {
@@ -124,6 +125,7 @@ type ListEntry struct {
 	RequestContentType  string    `json:"requestContentType,omitempty"`
 	ResponseContentType string    `json:"responseContentType,omitempty"`
 	Origin              string    `json:"origin,omitempty"`
+	AgentCallID         string    `json:"agentCallId,omitempty"`
 }
 
 func New(dir string) (*Store, error) {
@@ -242,6 +244,7 @@ func (s *Store) parseEntryFile(path string) *ListEntry {
 		ClientPID         uint32 `json:"clientPid,omitempty"`
 		ClientDisplayName string `json:"clientDisplayName,omitempty"`
 		Origin            string `json:"origin,omitempty"`
+		AgentCallID       string `json:"agentCallId,omitempty"`
 		Request           struct {
 			Method  string          `json:"method"`
 			URL     string          `json:"url"`
@@ -271,6 +274,7 @@ func (s *Store) parseEntryFile(path string) *ListEntry {
 		ClientPID:         raw.ClientPID,
 		ClientDisplayName: raw.ClientDisplayName,
 		Origin:            raw.Origin,
+		AgentCallID:       raw.AgentCallID,
 	}
 
 	if len(raw.Request.Headers) > 0 {
@@ -352,6 +356,7 @@ func (s *Store) Save(entry *Entry) error {
 		ClientProcess:     entry.ClientProcess,
 		ClientDisplayName: entry.ClientDisplayName,
 		Origin:            entry.Origin,
+		AgentCallID:       entry.AgentCallID,
 	}
 	if refs, ok := entry.Request.Headers["Referer"]; ok && len(refs) > 0 {
 		le.Referer = refs[0]
@@ -439,6 +444,21 @@ func (s *Store) Get(id string) (*Entry, error) {
 	}
 
 	return &entry, nil
+}
+
+// GetByAgentCallID returns the ListEntry captured for an agent MCP call, matched
+// by the correlation ID the interceptor stored when it stripped X-Gospy-Agent.
+// The index is populated at Save time, so an entry is always findable here once
+// the proxy has captured it.
+func (s *Store) GetByAgentCallID(callID string) (*ListEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, le := range s.index {
+		if le.AgentCallID == callID {
+			return le, nil
+		}
+	}
+	return nil, fmt.Errorf("no entry with agent call id %s", callID)
 }
 
 func (s *Store) Update(entry *Entry) error {

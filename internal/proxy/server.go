@@ -1,8 +1,11 @@
 package proxy
 
 import (
+	"bufio"
+	"errors"
 	"net"
 	"net/http"
+	"strings"
 
 	"gospy/internal/ca"
 	"gospy/internal/history"
@@ -61,7 +64,51 @@ func NewServer(addr string, uiAddr string, caCert *ca.CA, hist *history.Store, r
 }
 
 func (s *Server) ListenAndServe() error {
-	return http.ListenAndServe(s.addr, s.proxy)
+	return http.ListenAndServe(s.addr, flushStreamingHeaders(s.proxy))
+}
+
+// streamingResponseWriter flushes the response headers immediately after
+// WriteHeader for streaming responses. Without the explicit Flush, goproxy's
+// headers sit in the connection buffer until the first body chunk is written
+// or the handler returns - which never happens for a server-sent event stream
+// waiting for events before emitting any data, so the client hangs without
+// ever receiving the status line.
+type streamingResponseWriter struct {
+	http.ResponseWriter
+}
+
+func (w streamingResponseWriter) WriteHeader(code int) {
+	ct := strings.ToLower(w.Header().Get("Content-Type"))
+	te := strings.ToLower(w.Header().Get("Transfer-Encoding"))
+	w.ResponseWriter.WriteHeader(code)
+	if strings.HasPrefix(ct, "text/event-stream") || strings.Contains(te, "chunked") {
+		if f, ok := w.ResponseWriter.(http.Flusher); ok {
+			f.Flush()
+		}
+	}
+}
+
+func (w streamingResponseWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (w streamingResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := w.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, errors.New("hijacking not supported")
+}
+
+func (w streamingResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+func flushStreamingHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(streamingResponseWriter{ResponseWriter: w}, r)
+	})
 }
 
 func (s *Server) Proxy() *goproxy.ProxyHttpServer {
