@@ -6,6 +6,9 @@ import { initBodyTypes, editBody, saveBody, cancelBody, setBodyView, copyBody, g
 
 let _pendingFullscreenTarget = null;
 let _savedScrollTop = 0;
+let _lastDetailEntry = null;
+let _streamEventSource = null;
+let _streamState = null; // { id, text, truncated, bodySize }
 
 registerFilter({
     type: 'process',
@@ -238,6 +241,7 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
             break;
         case 'tab':
             showTab(btn, btn.dataset.tab);
+            syncStreamView(btn.dataset.tab);
             break;
         case 'set-view':
             setBodyView(btn.dataset.target, btn.dataset.view);
@@ -361,6 +365,16 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
 function updateResponseInPlace(entry) {
     const tab = document.getElementById('tab-response');
     if (!tab) return;
+    if (entry.response && entry.response.stream === true) {
+        // A live stream owns its body through the SSE view: rebuilding the
+        // tab here would reset the viewer, the view toggle, the kebab menus
+        // and the live badge on every checkpoint. Keep the DOM and make sure
+        // the live view is open when the user is already on the Response tab.
+        _lastDetailEntry = entry;
+        const activeTabEl = document.querySelector('.tab.active');
+        syncStreamView(activeTabEl ? activeTabEl.dataset.tab : 'request');
+        return;
+    }
     const wasFullscreen = !!document.querySelector('.section-panel.fullscreen-mode[data-body-target="response"]');
     tab.innerHTML = buildResponseTab(entry);
     renderCurrentContent('response');
@@ -372,11 +386,13 @@ function updateResponseInPlace(entry) {
     }
 }
 
-document.getElementById('detailPanel').addEventListener('detail-rendered', () => {
+document.getElementById('detailPanel').addEventListener('detail-rendered', (e) => {
+    _lastDetailEntry = e.detail?.entry || _lastDetailEntry;
     renderCurrentContent('request');
     renderCurrentContent('response');
     postRenderBody('request');
     postRenderBody('response');
+    syncStreamView(e.detail?.activeTab || 'request');
     if (_pendingFullscreenTarget) {
         const panel = document.querySelector(`.section-panel[data-body-target="${_pendingFullscreenTarget}"]`);
         const btn = panel?.querySelector('[data-action="toggle-fullscreen-body"]');
@@ -384,6 +400,104 @@ document.getElementById('detailPanel').addEventListener('detail-rendered', () =>
         _pendingFullscreenTarget = null;
     }
 });
+
+// syncStreamView keeps the SSE subscription for a live response body aligned
+// with what is actually visible: it only streams while the Response tab is
+// active on a streaming entry, so no traffic flows until the user looks at the
+// response.
+function syncStreamView(tab) {
+    const entry = _lastDetailEntry;
+    const streaming = tab === 'response' && entry && entry.response && entry.response.stream === true && entry.response.bodyFile;
+    if (!streaming) {
+        closeStreamView();
+        return;
+    }
+    if (_streamState && _streamState.id === entry.id && _streamEventSource) return;
+    openStreamView(entry);
+}
+
+function openStreamView(entry) {
+    closeStreamView();
+    _streamState = { id: entry.id, text: '', truncated: false, bodySize: 0, type: '', delta: '', markerAppended: false };
+    _streamEventSource = new EventSource(`/api/streams/${entry.id}/events`);
+    _streamEventSource.onmessage = (e) => {
+        let ev;
+        try { ev = JSON.parse(e.data); } catch { return; }
+        handleStreamEvent(ev);
+    };
+    _streamEventSource.onerror = () => {
+        const id = _streamState ? _streamState.id : null;
+        closeStreamView();
+        if (id && selectedId === id) refreshDetail();
+    };
+}
+
+function closeStreamView() {
+    if (_streamEventSource) {
+        _streamEventSource.close();
+        _streamEventSource = null;
+    }
+    _streamState = null;
+}
+
+function handleStreamEvent(ev) {
+    const st = _streamState;
+    if (!st) return;
+    if (ev.type === 'snapshot') {
+        st.type = 'snapshot';
+        st.delta = '';
+        st.text = ev.preview || '';
+        st.truncated = !!ev.truncated;
+        st.bodySize = ev.bodySize || 0;
+        applyStreamBody();
+    } else if (ev.type === 'update') {
+        st.type = 'update';
+        st.delta = ev.preview || '';
+        st.text += st.delta;
+        st.truncated = !!ev.truncated;
+        st.bodySize = ev.bodySize || 0;
+        applyStreamBody();
+    } else if (ev.type === 'done') {
+        const id = st.id;
+        closeStreamView();
+        if (selectedId === id) refreshDetail();
+    }
+}
+
+function applyStreamBody() {
+    const st = _streamState;
+    if (!st) return;
+    const pre = document.querySelector('pre[data-body-target="response"]');
+    if (!pre || pre.dataset.binary || pre.dataset.multipart) return;
+
+    pre.dataset.decoded = st.text;
+    pre.dataset.raw = st.text;
+
+    // Pretty mode re-renders the whole body (JSON tree rebuild); keep the old
+    // behavior there. Raw text bodies grow incrementally below, so the viewer,
+    // the view toggle, the kebab menus and the live badge keep their state
+    // across deltas and the DOM work stays O(1) per event.
+    if (pre.dataset.viewMode === 'pretty') {
+        renderCurrentContent('response');
+        return;
+    }
+
+    const wasPinned = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 1;
+
+    if (st.type === 'snapshot') {
+        st.markerAppended = false;
+        pre.textContent = st.text;
+    } else if (st.delta) {
+        pre.appendChild(document.createTextNode(st.delta));
+    }
+
+    if (st.truncated && !st.markerAppended) {
+        pre.appendChild(document.createTextNode('\n... [truncated - body too large]'));
+        st.markerAppended = true;
+    }
+
+    if (wasPinned) pre.scrollTop = pre.scrollHeight;
+}
 
 function setContent(target, content) {
     const pre = document.querySelector(`pre[data-body-target="${target}"]`);

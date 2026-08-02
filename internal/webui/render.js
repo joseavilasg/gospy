@@ -49,7 +49,11 @@ function buildItemHtml(r) {
         processBadge = `<span class="process-badge" title="${escapeHtml(r.clientProcess)}">${escapeHtml(badgeText)}</span>`;
     }
 
-    return `<div class="request-item${selected}" title="${escapeHtml(url)}" data-id="${r.id}"><span class="method method-${method}">${method}</span><span class="url">${escapeHtml(url)}</span>${status != null ? `<span class="status ${statusClass}">${status}</span>` : ''}${actionBadge}${replayBadge}${processBadge}<span class="time">${time}</span></div>`;
+    const streamBadge = r.stream
+        ? '<span class="stream-badge" title="Streaming response — live">●</span>'
+        : '';
+
+    return `<div class="request-item${selected}" title="${escapeHtml(url)}" data-id="${r.id}"><span class="method method-${method}">${method}</span><span class="url">${escapeHtml(url)}</span>${status != null ? `<span class="status ${statusClass}">${status}</span>` : ''}${actionBadge}${replayBadge}${streamBadge}${processBadge}<span class="time">${time}</span></div>`;
 }
 
 export function renderList() {
@@ -144,12 +148,13 @@ function buildHeaderRows(headers) {
         : '<div style="color:#666">No headers</div>';
 }
 
-function buildBodyViewer(target, entry, body, rawBody, compression, hasEdited, editedBody, contentType, isModified, modifiedBody, modifiedContentType, isMocked, mockedBody, mockedContentType, canEdit, bodyFile, bodySize, entryId, isBinaryBody) {
+function buildBodyViewer(target, entry, body, rawBody, compression, hasEdited, editedBody, contentType, isModified, modifiedBody, modifiedContentType, isMocked, mockedBody, mockedContentType, canEdit, bodyFile, bodySize, entryId, isBinaryBody, stream) {
     const badges = [];
     if (compression) badges.push(`<span class="body-badge body-badge-compression">${escapeHtml(compression)}</span>`);
     if (hasEdited) badges.push(`<span class="body-badge body-badge-edited">edited</span>`);
     if (isModified) badges.push(`<span class="body-badge body-badge-modified">modified</span>`);
     if (isMocked) badges.push(`<span class="body-badge body-badge-mocked">mocked</span>`);
+    if (stream) badges.push(`<span class="body-badge body-badge-live">live</span>`);
     const badgesHtml = badges.join('');
 
     const bodyType = detectBodyType(contentType, entry, isBinaryBody);
@@ -204,7 +209,7 @@ export function buildResponseTab(req) {
     const isModified = req.appliedAction === 'modify';
     const isDropped = req.appliedAction === 'drop';
     const isMocked = req.appliedAction === 'mock' || req.appliedAction === 'response_mock';
-    const canEdit = !isModified && !isMocked && !isDropped;
+    const canEdit = !isModified && !isMocked && !isDropped && !req?.response?.stream;
 
     const serverRespBody = req.serverResponse ? (req.serverResponse.body || '') : '';
     const serverRespHeaders = req.serverResponse ? (req.serverResponse.headers || {}) : {};
@@ -226,7 +231,7 @@ export function buildResponseTab(req) {
     let respBodyHtml = '';
     if (respBody || respBodyFile) {
         const respHasEdited = req.response && req.response.editedBody && req.response.editedBody !== '';
-        respBodyHtml = buildBodyViewer('response', req.response, respBody, respRawBody, respCompression, respHasEdited && canEdit, req.response.editedBody, respContentType, false, '', '', isMocked, serverRespBody, serverRespContentType, canEdit, respBodyFile, respBodySize, req.id, respIsBinary);
+        respBodyHtml = buildBodyViewer('response', req.response, respBody, respRawBody, respCompression, respHasEdited && canEdit, req.response.editedBody, respContentType, false, '', '', isMocked, serverRespBody, serverRespContentType, canEdit, respBodyFile, respBodySize, req.id, respIsBinary, !!req.response.stream);
     }
 
     return `
@@ -522,7 +527,7 @@ export function renderDetail(req, activeTab = 'request') {
 
         ${replaysHtml}
     `;
-    panel.dispatchEvent(new CustomEvent('detail-rendered'));
+    panel.dispatchEvent(new CustomEvent('detail-rendered', { detail: { entry: req, activeTab } }));
 }
 
 export function showTab(btn, tab) {

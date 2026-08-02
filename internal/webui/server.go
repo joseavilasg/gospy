@@ -94,7 +94,14 @@ type Server struct {
 	totalMu         sync.Mutex
 	nonIgnoredTotal int
 	searchToken     uint64
+
+	streamHub *streamHub
 }
+
+// maxBodyLen caps the body the detail endpoint serves in a single response.
+// Streaming captures store the full body in the body file; the UI preview
+// stops here and the body-bin endpoint serves the complete file.
+const maxBodyLen = 2 * 1024 * 1024
 
 type ProcessResolver interface {
 	Resolve(remoteAddr string) *proxy.ProcessInfo
@@ -120,6 +127,7 @@ func NewServer(addr string, h *history.Store, ignore IgnoreChecker, focus FocusC
 		resolver:    resolver,
 		sigCache:    sigCache,
 		lastVisible: make(map[string]bool),
+		streamHub:   newStreamHub(h, maxBodyLen),
 	}
 	s.recomputeTotal()
 	h.OnSave(func(e *history.Entry) {
@@ -184,6 +192,7 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/api/request-rule", s.handleRequestRule)
 	mux.HandleFunc("/api/process/signature", s.handleProcessSignature)
 	mux.HandleFunc("/api/process/events", s.handleProcessEvents)
+	mux.HandleFunc("/api/streams/", s.handleStreamEvents)
 
 	LogWebUI(s.addr)
 
@@ -883,7 +892,6 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 		entry.ServerResponse.Body = proxy.DecompressBody([]byte(entry.ServerResponse.RawBody), enc).Decoded
 	}
 
-	const maxBodyLen = 2 * 1024 * 1024
 	if len(entry.Request.Body) > maxBodyLen {
 		entry.Request.Body = entry.Request.Body[:maxBodyLen] + "\n... [truncated - body too large]"
 	}
@@ -946,6 +954,11 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 				entry.Response.BodyHex = generateHexDump(data, hexDumpMaxLines)
 			}
 		}
+		if !entry.Response.IsBinaryBody && entry.Response.Body == "" {
+			if preview, ok := readBodyPreview(filepath.Join(binDir, entry.Response.BodyFile), maxBodyLen); ok {
+				entry.Response.Body = preview
+			}
+		}
 	}
 	if entry.ServerResponse != nil && entry.ServerResponse.BodyFile != "" && entry.ServerResponse.IsBinaryBody {
 		if data, err := os.ReadFile(filepath.Join(binDir, entry.ServerResponse.BodyFile)); err == nil {
@@ -984,16 +997,36 @@ func (s *Server) handleGetBodyBin(w http.ResponseWriter, r *http.Request, id str
 	}
 
 	binPath := filepath.Join(s.history.Dir(), "bin", bodyFile)
-	data, err := os.ReadFile(binPath)
+	f, err := os.Open(binPath)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
+	defer f.Close()
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-%s.bin"`, id, target))
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Write(data)
+	io.Copy(w, f)
+}
+
+// readBodyPreview reads up to limit bytes of a body file and appends the
+// truncation marker when the file is larger. Used for text bodies that live
+// only as files (streaming captures), so huge files stay cheap to serve.
+func readBodyPreview(path string, limit int) (string, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, int64(limit)+1))
+	if err != nil {
+		return "", false
+	}
+	if len(data) > limit {
+		return string(data[:limit]) + "\n... [truncated - body too large]", true
+	}
+	return string(data), true
 }
 
 func (s *Server) handleSaveMultipart(w http.ResponseWriter, r *http.Request, id string) {
@@ -1609,6 +1642,254 @@ func generateID() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return fmt.Sprintf("%x", b)
+}
+
+// streamEvent is pushed over SSE to a detail panel subscribed to a live
+// response. snapshot carries the current body, update a delta appended to it,
+// and done finalizes the view (the frontend then refetches the entry for the
+// authoritative final state).
+type streamEvent struct {
+	Type      string `json:"type"`
+	BodySize  int64  `json:"bodySize,omitempty"`
+	Stream    bool   `json:"stream,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
+	Preview   string `json:"preview,omitempty"`
+}
+
+type streamSub struct {
+	entryID  string
+	bodyFile string
+	lastSize int64
+	ch       chan streamEvent
+}
+
+type streamOp struct {
+	kind    string // subscribe | unsubscribe | notify
+	entryID string
+	size    int64
+	done    bool
+	sub     *streamSub
+}
+
+// streamHub fans out body-growth notifications from the interceptor to the SSE
+// subscribers of each entry. A single reactor goroutine serializes
+// subscribe/unsubscribe/notify so delta computation never gaps or overlaps:
+// lastSize only advances on a successful push, and a dropped update is
+// re-sent as part of the next delta (ranges are cumulative).
+type streamHub struct {
+	history    *history.Store
+	maxPreview int64
+	opCh       chan streamOp
+	subs       map[string]map[*streamSub]struct{}
+}
+
+func newStreamHub(h *history.Store, maxPreview int64) *streamHub {
+	hub := &streamHub{
+		history:    h,
+		maxPreview: maxPreview,
+		opCh:       make(chan streamOp, 256),
+		subs:       make(map[string]map[*streamSub]struct{}),
+	}
+	go hub.run()
+	return hub
+}
+
+func (h *streamHub) run() {
+	for op := range h.opCh {
+		switch op.kind {
+		case "subscribe":
+			h.subscribe(op)
+		case "unsubscribe":
+			h.unsubscribe(op)
+		case "notify":
+			h.notify(op)
+		}
+	}
+}
+
+func (h *streamHub) subscribe(op streamOp) {
+	entry, err := h.history.Get(op.entryID)
+	if err != nil || entry.Response == nil || entry.Response.BodyFile == "" {
+		op.sub.ch <- streamEvent{Type: "done", Stream: false}
+		return
+	}
+	op.sub.bodyFile = entry.Response.BodyFile
+	// The finalize notifier fires after the Stream=false update, so a stream
+	// that ends between this check and registration still delivers its done
+	// event through the queued notify op (FIFO ordering).
+	if !entry.Response.Stream {
+		op.sub.ch <- streamEvent{Type: "done", BodySize: entry.Response.BodySize, Stream: false}
+		return
+	}
+	subs := h.subs[op.entryID]
+	if subs == nil {
+		subs = make(map[*streamSub]struct{})
+		h.subs[op.entryID] = subs
+	}
+	subs[op.sub] = struct{}{}
+	size, truncated, preview := h.previewFile(op.sub.bodyFile)
+	op.sub.lastSize = size
+	op.sub.ch <- streamEvent{Type: "snapshot", BodySize: size, Stream: true, Truncated: truncated, Preview: preview}
+}
+
+func (h *streamHub) unsubscribe(op streamOp) {
+	subs := h.subs[op.entryID]
+	if subs == nil {
+		return
+	}
+	delete(subs, op.sub)
+	if len(subs) == 0 {
+		delete(h.subs, op.entryID)
+	}
+}
+
+func (h *streamHub) notify(op streamOp) {
+	subs := h.subs[op.entryID]
+	if len(subs) == 0 {
+		return
+	}
+	if op.done {
+		for sub := range subs {
+			if sub.lastSize < op.size && sub.lastSize < h.maxPreview {
+				end := op.size
+				if end > h.maxPreview {
+					end = h.maxPreview
+				}
+				delta := h.readRange(sub.bodyFile, sub.lastSize, end)
+				select {
+				case sub.ch <- streamEvent{Type: "update", BodySize: op.size, Stream: true, Truncated: op.size > h.maxPreview, Preview: delta}:
+				default:
+				}
+			}
+			// The final done event is best-effort: a stalled subscriber must
+			// not stall the whole hub, and the frontend has an onerror
+			// fallback that refetches the detail when the stream goes quiet.
+			select {
+			case sub.ch <- streamEvent{Type: "done", BodySize: op.size, Stream: false}:
+			default:
+			}
+		}
+		delete(h.subs, op.entryID)
+		return
+	}
+	for sub := range subs {
+		if op.size <= sub.lastSize {
+			continue
+		}
+		if sub.lastSize >= h.maxPreview {
+			sub.lastSize = op.size
+			continue
+		}
+		ev := streamEvent{Type: "update", BodySize: op.size, Stream: true}
+		if op.size <= h.maxPreview {
+			ev.Preview = h.readRange(sub.bodyFile, sub.lastSize, op.size)
+		} else {
+			ev.Truncated = true
+			ev.Preview = h.readRange(sub.bodyFile, sub.lastSize, h.maxPreview)
+		}
+		select {
+		case sub.ch <- ev:
+			sub.lastSize = op.size
+		default:
+		}
+	}
+}
+
+func (h *streamHub) previewFile(bodyFile string) (size int64, truncated bool, preview string) {
+	f, err := os.Open(filepath.Join(h.history.Dir(), "bin", bodyFile))
+	if err != nil {
+		return 0, false, ""
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return 0, false, ""
+	}
+	size = fi.Size()
+	// Read only up to the preview cap: the full capture can grow far beyond
+	// the view limit and must never be loaded into memory whole.
+	data, err := io.ReadAll(io.LimitReader(f, h.maxPreview))
+	if err != nil {
+		return 0, false, ""
+	}
+	return size, size > h.maxPreview, string(data)
+}
+
+func (h *streamHub) readRange(bodyFile string, start, end int64) string {
+	f, err := os.Open(filepath.Join(h.history.Dir(), "bin", bodyFile))
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	if _, err := f.Seek(start, io.SeekStart); err != nil {
+		return ""
+	}
+	data, err := io.ReadAll(io.LimitReader(f, end-start))
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// StreamNotifier returns the callback the interceptor invokes as live SSE
+// response bodies grow. It feeds the stream hub, which pushes incremental
+// updates to subscribed detail panels. The send is blocking: the reactor
+// never blocks (all per-subscriber pushes are guarded), so a dropped finalize
+// must never be lost.
+func (s *Server) StreamNotifier() func(entryID string, size int64, done bool) {
+	return func(entryID string, size int64, done bool) {
+		s.streamHub.opCh <- streamOp{kind: "notify", entryID: entryID, size: size, done: done}
+	}
+}
+
+func (s *Server) handleStreamEvents(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/streams/")
+	parts := strings.SplitN(path, "/", 2)
+	id := parts[0]
+	if id == "" || len(parts) < 2 || parts[1] != "events" {
+		http.NotFound(w, r)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	entry, err := s.history.Get(id)
+	if err != nil || entry.Response == nil || !entry.Response.Stream {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	sub := &streamSub{entryID: id, ch: make(chan streamEvent, 64)}
+	s.streamHub.opCh <- streamOp{kind: "subscribe", entryID: id, sub: sub}
+	defer func() {
+		// Best-effort unsubscribe: a blocked send would leak the handler
+		// goroutine when the reactor is saturated.
+		select {
+		case s.streamHub.opCh <- streamOp{kind: "unsubscribe", entryID: id, sub: sub}:
+		default:
+		}
+	}()
+
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev := <-sub.ch:
+			data, _ := json.Marshal(ev)
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+	}
 }
 
 func (s *Server) handleProcessSignature(w http.ResponseWriter, r *http.Request) {

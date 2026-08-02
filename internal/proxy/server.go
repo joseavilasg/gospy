@@ -67,6 +67,13 @@ func (s *Server) ListenAndServe() error {
 	return http.ListenAndServe(s.addr, flushStreamingHeaders(s.proxy))
 }
 
+// SetStreamNotifier wires the interceptor's stream-growth callback (used to
+// push live SSE response bodies to the webui). Nil-safe: without it the
+// capture still checkpoints entries, just no live UI updates are pushed.
+func (s *Server) SetStreamNotifier(fn func(entryID string, size int64, done bool)) {
+	s.interceptor.StreamNotifier = fn
+}
+
 // streamingResponseWriter flushes the response headers immediately after
 // WriteHeader for streaming responses. Without the explicit Flush, goproxy's
 // headers sit in the connection buffer until the first body chunk is written

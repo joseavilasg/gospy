@@ -10,7 +10,10 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"gospy/internal/history"
 	"gospy/internal/rules"
@@ -36,6 +39,15 @@ type Interceptor struct {
 	skipPorts   map[string]bool
 	resolver    *ClientResolver
 	sigCache    *SignatureCache
+
+	// StreamNotifier is invoked (throttled) as a live SSE response body grows,
+	// and once more with done=true when it ends. Wired by main to the webui
+	// stream hub so an open detail panel can render the body incrementally.
+	StreamNotifier func(entryID string, size int64, done bool)
+
+	streamCheckpointInterval time.Duration
+	streamCheckpointBytes    int64
+	streamNotifyInterval     time.Duration
 }
 
 func NewInterceptor(h *history.Store, ignore *IgnoreStore, engine *rules.Engine, skipPorts []string, resolver *ClientResolver, sigCache *SignatureCache) *Interceptor {
@@ -43,7 +55,17 @@ func NewInterceptor(h *history.Store, ignore *IgnoreStore, engine *rules.Engine,
 	for _, p := range skipPorts {
 		skip[p] = true
 	}
-	return &Interceptor{history: h, ignoreStore: ignore, engine: engine, skipPorts: skip, resolver: resolver, sigCache: sigCache}
+	return &Interceptor{
+		history:                  h,
+		ignoreStore:              ignore,
+		engine:                   engine,
+		skipPorts:                skip,
+		resolver:                 resolver,
+		sigCache:                 sigCache,
+		streamCheckpointInterval: 2 * time.Second,
+		streamCheckpointBytes:    64 * 1024,
+		streamNotifyInterval:     250 * time.Millisecond,
+	}
 }
 
 func (ic *Interceptor) isSelfRequest(host string) bool {
@@ -308,17 +330,26 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 
 	// Streaming responses (text/event-stream) never finish: buffering the
 	// body would hold the client response open forever. Record status and
-	// headers only and let the stream pass through untouched. Note that a
-	// response-mock rule is bypassed for streaming responses.
+	// headers, then capture the stream incrementally to a body file so the
+	// full response is kept without buffering it in memory. The entry
+	// references the file before any bytes arrive, so a killed process never
+	// loses captured data. A response-mock rule is bypassed for streaming.
 	if isStreamingResponse(resp) {
 		if ud, ok := ctx.UserData.(*entryUserData); ok {
-			if entry, err := ic.history.Get(ud.entryID); err == nil {
+			entryID := ud.entryID
+			if entry, err := ic.history.Get(entryID); err == nil {
 				entry.Response = &history.ResponseRecord{
-					Status:  resp.StatusCode,
-					Headers: resp.Header,
+					Status:   resp.StatusCode,
+					Headers:  resp.Header,
+					BodyFile: entryID + "-stream.bin",
+					Stream:   true,
 				}
 				_ = ic.history.Update(entry)
 				LogResponse(entry.ID, ctx.Req.Method, reqURL, resp.StatusCode, resp.Header.Get("Content-Type"))
+
+				if resp.Body != nil {
+					resp.Body = newStreamCapture(ic, entryID, resp.Body)
+				}
 			}
 		}
 		return resp
@@ -407,6 +438,175 @@ func (ic *Interceptor) HandleConnect(host string, ctx *goproxy.ProxyCtx) *goprox
 // separately by the caller).
 func isStreamingResponse(resp *http.Response) bool {
 	return strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
+}
+
+// streamCaptureReader passes a live SSE response through to the client while
+// appending every chunk to the entry's body file, so an unbounded stream is
+// captured in full without buffering it in memory. It checkpoints the entry
+// (BodySize/Stream + fsync) for durability and notifies the webui hub so an
+// open detail panel can render the body incrementally as it arrives.
+type streamCaptureReader struct {
+	ic      *Interceptor
+	entryID string
+	r       io.Reader
+
+	mu             sync.Mutex
+	file           *os.File
+	size           int64
+	finalized      bool
+	lastCheckpoint int64
+
+	stopCh chan struct{}
+	once   sync.Once
+}
+
+func newStreamCapture(ic *Interceptor, entryID string, r io.Reader) io.ReadCloser {
+	sc := &streamCaptureReader{
+		ic:      ic,
+		entryID: entryID,
+		r:       r,
+		stopCh:  make(chan struct{}),
+	}
+	go sc.run()
+	return sc
+}
+
+func (sc *streamCaptureReader) Read(p []byte) (int, error) {
+	n, err := sc.r.Read(p)
+	if n > 0 {
+		sc.append(p[:n])
+	}
+	if err == io.EOF {
+		sc.finish()
+	}
+	return n, err
+}
+
+func (sc *streamCaptureReader) Close() error {
+	sc.finish()
+	if rc, ok := sc.r.(io.Closer); ok {
+		return rc.Close()
+	}
+	return nil
+}
+
+func (sc *streamCaptureReader) append(chunk []byte) {
+	sc.mu.Lock()
+	if sc.finalized {
+		sc.mu.Unlock()
+		return
+	}
+	if sc.file == nil {
+		if _, f, err := sc.ic.history.CreateStreamBody(sc.entryID); err == nil {
+			sc.file = f
+		}
+	}
+	if sc.file != nil {
+		if _, err := sc.file.Write(chunk); err == nil {
+			sc.size += int64(len(chunk))
+		}
+	}
+	needCheckpoint := sc.ic.streamCheckpointBytes > 0 &&
+		sc.size-sc.lastCheckpoint >= sc.ic.streamCheckpointBytes
+	sc.mu.Unlock()
+
+	if needCheckpoint {
+		sc.checkpoint()
+	}
+}
+
+func (sc *streamCaptureReader) run() {
+	notifyTicker := time.NewTicker(sc.ic.streamNotifyInterval)
+	defer notifyTicker.Stop()
+	cpTicker := time.NewTicker(sc.ic.streamCheckpointInterval)
+	defer cpTicker.Stop()
+	for {
+		select {
+		case <-sc.stopCh:
+			return
+		case <-notifyTicker.C:
+			sc.notify()
+		case <-cpTicker.C:
+			sc.checkpoint()
+		}
+	}
+}
+
+func (sc *streamCaptureReader) checkpoint() {
+	sc.mu.Lock()
+	if sc.finalized {
+		sc.mu.Unlock()
+		return
+	}
+	size := sc.size
+	if size == sc.lastCheckpoint {
+		sc.mu.Unlock()
+		return
+	}
+	sc.lastCheckpoint = size
+	sc.mu.Unlock()
+
+	if entry, err := sc.ic.history.Get(sc.entryID); err == nil {
+		if entry.Response != nil {
+			entry.Response.BodySize = size
+			entry.Response.Stream = true
+			_ = sc.ic.history.Update(entry)
+		}
+	}
+	sc.syncFile()
+}
+
+func (sc *streamCaptureReader) notify() {
+	sc.mu.Lock()
+	if sc.finalized {
+		sc.mu.Unlock()
+		return
+	}
+	size := sc.size
+	sc.mu.Unlock()
+
+	if sc.ic.StreamNotifier != nil && size > 0 {
+		sc.ic.StreamNotifier(sc.entryID, size, false)
+	}
+}
+
+func (sc *streamCaptureReader) finish() {
+	sc.once.Do(func() {
+		close(sc.stopCh)
+
+		sc.mu.Lock()
+		sc.finalized = true
+		size := sc.size
+		file := sc.file
+		sc.file = nil
+		sc.mu.Unlock()
+
+		if file != nil {
+			_ = file.Sync()
+			_ = file.Close()
+		}
+
+		if entry, err := sc.ic.history.Get(sc.entryID); err == nil {
+			if entry.Response != nil {
+				entry.Response.BodySize = size
+				entry.Response.Stream = false
+				_ = sc.ic.history.Update(entry)
+			}
+		}
+
+		if sc.ic.StreamNotifier != nil {
+			sc.ic.StreamNotifier(sc.entryID, size, true)
+		}
+	})
+}
+
+func (sc *streamCaptureReader) syncFile() {
+	sc.mu.Lock()
+	file := sc.file
+	sc.mu.Unlock()
+	if file != nil {
+		_ = file.Sync()
+	}
 }
 
 func applyModifications(req *http.Request, mod *rules.ModifiedRequest) {

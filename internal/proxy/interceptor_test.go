@@ -8,7 +8,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -108,7 +111,9 @@ func TestInterceptor_AgentCallID(t *testing.T) {
 // TestInterceptor_StreamingResponseNotBuffered guards the SSE pass-through:
 // text/event-stream responses never end, so HandleResponse must not buffer the
 // body (it would hold the client response open forever - the MCP Inspector web
-// UI hang). Status and headers are still recorded; the body streams raw.
+// UI hang). Status and headers are recorded, the body streams raw to the
+// client, and the capture (BodyFile reference + growing file) is set up so the
+// entry is live while the stream is open.
 func TestInterceptor_StreamingResponseNotBuffered(t *testing.T) {
 	ic, store := newTestInterceptor(t, nil)
 	req := newRequest("GET", "http://example.com/events")
@@ -167,7 +172,7 @@ func TestInterceptor_StreamingResponseNotBuffered(t *testing.T) {
 		t.Errorf("first chunk = %q", buf)
 	}
 
-	// The entry records status + streaming content type, no body capture.
+	// The entry records status + streaming content type + the capture reference.
 	ud := ctx.UserData.(*entryUserData)
 	saved, err := store.Get(ud.entryID)
 	if err != nil {
@@ -179,8 +184,276 @@ func TestInterceptor_StreamingResponseNotBuffered(t *testing.T) {
 	if ct := saved.Response.Headers["Content-Type"][0]; ct != "text/event-stream" {
 		t.Errorf("Content-Type = %q, want text/event-stream", ct)
 	}
-	if saved.Response.BodyFile != "" || saved.Response.Body != "" || saved.Response.RawBody != "" {
-		t.Errorf("streaming body must not be captured: %+v", saved.Response)
+	if saved.Response.BodyFile != ud.entryID+"-stream.bin" {
+		t.Errorf("BodyFile = %q, want %q", saved.Response.BodyFile, ud.entryID+"-stream.bin")
+	}
+	if !saved.Response.Stream {
+		t.Error("Stream must be true while the stream is open")
+	}
+
+	// The chunk that was read through to the client must be captured to the file.
+	data, err := os.ReadFile(filepath.Join(store.Dir(), "bin", saved.Response.BodyFile))
+	if err != nil {
+		t.Fatalf("read stream body file: %v", err)
+	}
+	if string(data) != "data: hello\n\n" {
+		t.Errorf("captured body = %q", data)
+	}
+
+	// Close finalizes the capture and releases the file handle so the temp
+	// dir cleanup can remove the body file.
+	_ = out.Body.Close()
+}
+
+// TestInterceptor_StreamCaptureComplete verifies a finite SSE stream: reading
+// to EOF finalizes the entry (Stream=false) with the full body captured.
+func TestInterceptor_StreamCaptureComplete(t *testing.T) {
+	ic, store := newTestInterceptor(t, nil)
+	req := newRequest("GET", "http://example.com/events")
+	ctx := newProxyCtx(req)
+	if _, resp := ic.HandleRequest(req, ctx); resp != nil {
+		t.Fatal("HandleRequest should pass through")
+	}
+
+	const payload = "data: one\n\ndata: two\n\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		io.WriteString(w, payload)
+	}))
+	defer srv.Close()
+
+	upstream, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("upstream: %v", err)
+	}
+	defer upstream.Body.Close()
+
+	out := ic.HandleResponse(upstream, ctx)
+	if out == nil || out.Body == nil {
+		t.Fatal("nil response returned")
+	}
+	body, err := io.ReadAll(out.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if string(body) != payload {
+		t.Errorf("body = %q, want %q", body, payload)
+	}
+	_ = out.Body.Close()
+
+	ud := ctx.UserData.(*entryUserData)
+	saved, err := store.Get(ud.entryID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if saved.Response == nil || saved.Response.Stream {
+		t.Fatalf("Stream = %v, want false after EOF", saved.Response == nil || saved.Response.Stream)
+	}
+	if saved.Response.BodySize != int64(len(payload)) {
+		t.Errorf("BodySize = %d, want %d", saved.Response.BodySize, len(payload))
+	}
+	data, err := os.ReadFile(filepath.Join(store.Dir(), "bin", saved.Response.BodyFile))
+	if err != nil {
+		t.Fatalf("read stream body file: %v", err)
+	}
+	if string(data) != payload {
+		t.Errorf("captured body = %q, want %q", data, payload)
+	}
+}
+
+// TestInterceptor_StreamCaptureLiveCheckpoints verifies the entry stays live
+// while the stream is open: checkpoints publish BodySize/Stream, the notifier
+// fires throttled live updates, and closing finalizes the entry.
+func TestInterceptor_StreamCaptureLiveCheckpoints(t *testing.T) {
+	ic, store := newTestInterceptor(t, nil)
+	ic.streamCheckpointInterval = 10 * time.Millisecond
+	ic.streamCheckpointBytes = 1
+	ic.streamNotifyInterval = 10 * time.Millisecond
+
+	var mu sync.Mutex
+	var notified []struct {
+		size int64
+		done bool
+	}
+	ic.StreamNotifier = func(entryID string, size int64, done bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		notified = append(notified, struct {
+			size int64
+			done bool
+		}{size, done})
+	}
+
+	req := newRequest("GET", "http://example.com/events")
+	ctx := newProxyCtx(req)
+	if _, resp := ic.HandleRequest(req, ctx); resp != nil {
+		t.Fatal("HandleRequest should pass through")
+	}
+
+	keepOpen := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		io.WriteString(w, "data: live\n\n")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-keepOpen
+	}))
+	defer func() {
+		close(keepOpen)
+		srv.Close()
+	}()
+
+	upstream, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("upstream: %v", err)
+	}
+	defer upstream.Body.Close()
+
+	out := ic.HandleResponse(upstream, ctx)
+	buf := make([]byte, len("data: live\n\n"))
+	if _, err := io.ReadFull(out.Body, buf); err != nil {
+		t.Fatalf("read chunk: %v", err)
+	}
+
+	// The checkpoint must publish the growing body state.
+	ud := ctx.UserData.(*entryUserData)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		saved, err := store.Get(ud.entryID)
+		if err == nil && saved.Response != nil && saved.Response.Stream && saved.Response.BodySize == int64(len("data: live\n\n")) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("checkpoint never published BodySize/Stream")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// The notifier must have fired with a live (non-done) size.
+	deadline = time.Now().Add(2 * time.Second)
+	live := false
+	for {
+		mu.Lock()
+		got := append([]struct {
+			size int64
+			done bool
+		}{}, notified...)
+		mu.Unlock()
+		for _, n := range got {
+			if !n.done && n.size > 0 {
+				live = true
+			}
+		}
+		if live || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !live {
+		t.Errorf("expected a live notification, got %+v", notified)
+	}
+
+	// Closing the body finalizes the entry.
+	_ = out.Body.Close()
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		saved, err := store.Get(ud.entryID)
+		if err == nil && saved.Response != nil && !saved.Response.Stream {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("finalize never set Stream=false")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// And the notifier must have received the final done.
+	mu.Lock()
+	got := append([]struct {
+		size int64
+		done bool
+	}{}, notified...)
+	mu.Unlock()
+	found := false
+	for _, n := range got {
+		if n.done {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a done notification, got %+v", got)
+	}
+}
+
+func TestInterceptor_StreamCaptureIdleNoUpdates(t *testing.T) {
+	ic, store := newTestInterceptor(t, nil)
+	ic.streamCheckpointInterval = 10 * time.Millisecond
+	ic.streamCheckpointBytes = 64 * 1024
+
+	req := newRequest("GET", "http://example.com/events")
+	ctx := newProxyCtx(req)
+	if _, resp := ic.HandleRequest(req, ctx); resp != nil {
+		t.Fatal("HandleRequest should pass through")
+	}
+
+	keepOpen := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-keepOpen
+	}))
+	defer func() {
+		close(keepOpen)
+		srv.Close()
+	}()
+
+	upstream, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("upstream: %v", err)
+	}
+	defer upstream.Body.Close()
+
+	out := ic.HandleResponse(upstream, ctx)
+	defer out.Body.Close()
+
+	ud := ctx.UserData.(*entryUserData)
+	path := filepath.Join(store.Dir(), ud.entryID+".json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read entry before: %v", err)
+	}
+
+	// An idle stream must not touch the store: no bytes arrived, so the
+	// periodic checkpoint has nothing new to persist and must not rewrite the
+	// entry (that Update bumps UpdatedAt and drives UI diff churn forever).
+	time.Sleep(50 * time.Millisecond)
+
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read entry after: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("idle stream rewrote the entry file (checkpoint fired without data)")
+	}
+
+	saved, err := store.Get(ud.entryID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if saved.Response == nil || !saved.Response.Stream {
+		t.Fatalf("idle stream lost the live flag: %+v", saved.Response)
 	}
 }
 

@@ -911,3 +911,148 @@ func TestStore_AppliedActionPersistence(t *testing.T) {
 		t.Fatalf("ListSummary() after re-open = %d, want %d", len(reloaded), len(actions))
 	}
 }
+
+func TestStore_CreateStreamBody(t *testing.T) {
+	dir := t.TempDir()
+	store, err := New(dir)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	filename, f, err := store.CreateStreamBody("abc")
+	if err != nil {
+		t.Fatalf("CreateStreamBody() error = %v", err)
+	}
+	if filename != "abc-stream.bin" {
+		t.Errorf("filename = %q, want abc-stream.bin", filename)
+	}
+	if f == nil {
+		t.Fatal("CreateStreamBody returned nil file")
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString("data: hello\n\n"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = f.Sync()
+
+	data, err := os.ReadFile(filepath.Join(dir, "bin", filename))
+	if err != nil {
+		t.Fatalf("read stream body: %v", err)
+	}
+	if string(data) != "data: hello\n\n" {
+		t.Errorf("body = %q", data)
+	}
+}
+
+func TestStore_StreamFlagRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	store, err := New(dir)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	entry := &Entry{
+		Request: RequestRecord{Method: "GET", URL: "http://a.com/events", Host: "a.com"},
+		Response: &ResponseRecord{
+			Status:   200,
+			Headers:  map[string][]string{"Content-Type": {"text/event-stream"}},
+			BodyFile: "abc-stream.bin",
+			Stream:   true,
+		},
+	}
+	if err := store.Save(entry); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	if le := store.ListSummary()[0]; le.ID != entry.ID || !le.Stream {
+		t.Errorf("ListSummary() entry Stream = %v, want true", le.Stream)
+	}
+
+	entry.Response.Stream = false
+	entry.Response.BodySize = 32
+	if err := store.Update(entry); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+
+	if le := store.ListSummary()[0]; le.Stream {
+		t.Error("ListSummary() entry Stream still true after Update")
+	}
+	if le := store.ListSummary()[0]; le.Status == nil || *le.Status != 200 {
+		t.Errorf("ListSummary() Status = %v, want 200", le.Status)
+	}
+}
+
+func TestStore_LoadNormalizesInterruptedStreams(t *testing.T) {
+	dir := t.TempDir()
+	store, err := New(dir)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	const bodyFile = "abc-stream.bin"
+	if _, f, err := store.CreateStreamBody("abc"); err != nil {
+		t.Fatalf("CreateStreamBody() error = %v", err)
+	} else {
+		_, _ = f.WriteString("data: partial\n\n")
+		_ = f.Sync()
+		_ = f.Close()
+	}
+
+	entry := &Entry{
+		ID:      "abc",
+		Request: RequestRecord{Method: "GET", URL: "http://a.com/events", Host: "a.com"},
+		Response: &ResponseRecord{
+			Status:   200,
+			Headers:  map[string][]string{"Content-Type": {"text/event-stream"}},
+			BodyFile: bodyFile,
+			BodySize: 15,
+			Stream:   true,
+		},
+	}
+	if err := store.Save(entry); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	// Re-open on the same dir (simulates a process restart after a kill): the
+	// interrupted stream must normalize to Stream=false yet keep its data.
+	reopened, err := New(dir)
+	if err != nil {
+		t.Fatalf("re-open error = %v", err)
+	}
+
+	got, err := reopened.Get("abc")
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.Response == nil || got.Response.Stream {
+		t.Fatalf("Response.Stream = %v, want false after restart", got.Response == nil || got.Response.Stream)
+	}
+	if got.Response.BodyFile != bodyFile {
+		t.Errorf("BodyFile = %q, want %q", got.Response.BodyFile, bodyFile)
+	}
+	if got.Response.BodySize != 15 {
+		t.Errorf("BodySize = %d, want 15", got.Response.BodySize)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "bin", bodyFile))
+	if err != nil {
+		t.Fatalf("read stream body: %v", err)
+	}
+	if string(data) != "data: partial\n\n" {
+		t.Errorf("captured body = %q", data)
+	}
+
+	// The normalization must be persisted: a second restart stays normalized.
+	reopened2, err := New(dir)
+	if err != nil {
+		t.Fatalf("second re-open error = %v", err)
+	}
+	got2, err := reopened2.Get("abc")
+	if err != nil {
+		t.Fatalf("second Get() error = %v", err)
+	}
+	if got2.Response.Stream {
+		t.Error("Response.Stream true after second restart")
+	}
+}

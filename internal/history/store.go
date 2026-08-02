@@ -85,6 +85,7 @@ type ResponseRecord struct {
 	BodySize       int64               `json:"bodySize,omitempty"`
 	BodyHex        string              `json:"bodyHex,omitempty"`
 	IsBinaryBody   bool                `json:"isBinaryBody,omitempty"`
+	Stream         bool                `json:"stream,omitempty"`
 	ParsedProtobuf []ProtobufField     `json:"parsedProtobuf,omitempty"`
 }
 
@@ -126,6 +127,7 @@ type ListEntry struct {
 	ResponseContentType string    `json:"responseContentType,omitempty"`
 	Origin              string    `json:"origin,omitempty"`
 	AgentCallID         string    `json:"agentCallId,omitempty"`
+	Stream              bool      `json:"stream,omitempty"`
 }
 
 func New(dir string) (*Store, error) {
@@ -160,7 +162,7 @@ func (s *Store) loadIndex() error {
 			}
 			runtime.GC()
 			debug.FreeOSMemory()
-			return nil
+			return s.normalizeInterruptedStreams()
 		}
 		return fmt.Errorf("read index: %w", err)
 	}
@@ -173,11 +175,41 @@ func (s *Store) loadIndex() error {
 		}
 		runtime.GC()
 		debug.FreeOSMemory()
-		return nil
+		return s.normalizeInterruptedStreams()
 	}
 
 	s.index = index
-	return nil
+	return s.normalizeInterruptedStreams()
+}
+
+// normalizeInterruptedStreams flips any Stream=true entry to false at startup:
+// the proxy has just started, so nothing can still be live. A stream killed by
+// process death keeps its captured body file (referenced via Response.BodyFile)
+// but must not show the live badge forever. Persists both the index and the
+// affected entry files.
+func (s *Store) normalizeInterruptedStreams() error {
+	changed := false
+	for _, le := range s.index {
+		if !le.Stream {
+			continue
+		}
+		le.Stream = false
+		changed = true
+		if entry, err := s.Get(le.ID); err == nil && entry.Response != nil && entry.Response.Stream {
+			entry.Response.Stream = false
+			data, err := json.MarshalIndent(entry, "", "  ")
+			if err != nil {
+				continue
+			}
+			if err := os.WriteFile(filepath.Join(s.dir, le.ID+".json"), data, 0644); err != nil {
+				continue
+			}
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return s.persistIndex()
 }
 
 func (s *Store) buildIndex() error {
@@ -254,6 +286,7 @@ func (s *Store) parseEntryFile(path string) *ListEntry {
 		Response *struct {
 			Status  int             `json:"status"`
 			Headers json.RawMessage `json:"headers"`
+			Stream  bool            `json:"stream,omitempty"`
 		} `json:"response,omitempty"`
 	}
 
@@ -298,6 +331,7 @@ func (s *Store) parseEntryFile(path string) *ListEntry {
 
 	if raw.Response != nil {
 		le.Status = &raw.Response.Status
+		le.Stream = raw.Response.Stream
 		if len(raw.Response.Headers) > 0 {
 			var respHeaderFields struct {
 				ContentType []string `json:"Content-Type"`
@@ -366,6 +400,7 @@ func (s *Store) Save(entry *Entry) error {
 	}
 	if entry.Response != nil {
 		le.Status = &entry.Response.Status
+		le.Stream = entry.Response.Stream
 	}
 
 	s.mu.Lock()
@@ -483,6 +518,7 @@ func (s *Store) Update(entry *Entry) error {
 		if le.ID == entry.ID {
 			if entry.Response != nil {
 				le.Status = &entry.Response.Status
+				le.Stream = entry.Response.Stream
 				if cts, ok := entry.Response.Headers["Content-Type"]; ok && len(cts) > 0 {
 					le.ResponseContentType = parseMediaType(cts[0])
 				}
@@ -621,6 +657,24 @@ func (s *Store) SaveBinaryBody(entryID, suffix string, data []byte) (string, err
 		return "", fmt.Errorf("write binary body: %w", err)
 	}
 	return filename, nil
+}
+
+// CreateStreamBody creates the body file a live SSE response is captured into.
+// The entry's Response.BodyFile references it before any bytes are written, so
+// a killed process never loses captured data — the file is reachable by the
+// entry on restart. Returns the filename and an O_APPEND handle for writing.
+func (s *Store) CreateStreamBody(entryID string) (string, *os.File, error) {
+	binDir := filepath.Join(s.dir, "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		return "", nil, fmt.Errorf("create bin dir: %w", err)
+	}
+	filename := entryID + "-stream.bin"
+	path := filepath.Join(binDir, filename)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
+	if err != nil {
+		return "", nil, fmt.Errorf("create stream body: %w", err)
+	}
+	return filename, f, nil
 }
 
 func parseMediaType(ct string) string {

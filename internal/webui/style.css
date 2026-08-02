@@ -1365,6 +1365,18 @@ pre.body-content {
     flex-shrink: 0;
 }
 
+.stream-badge {
+    color: var(--green-signal);
+    font-size: var(--fs-sm);
+    flex-shrink: 0;
+    animation: stream-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes stream-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+}
+
 .action-badge {
     font-size: var(--fs-sm);
     flex-shrink: 0;
@@ -1438,6 +1450,11 @@ pre.body-content {
 .body-badge-mocked {
     border-color: var(--badge-mocked-border);
     color: var(--action-mock);
+}
+.body-badge-live {
+    border-color: var(--green-signal);
+    color: var(--green-signal);
+    animation: stream-pulse 1.6s ease-in-out infinite;
 }
 
 .replayed-from {
