@@ -1,7 +1,7 @@
 import { setFilterText, setFocusEnabled, setAgentPreview, setAgentEnabled, setAgentExposed, agentExposed, applyFullList, setLastTimestamp, selectedId, requests, rules, setRules, setSignatureCache, visibleCount } from './state.js';
 import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch, setOnSelectedUpdated, loadMore } from './api.js';
 import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, buildResponseTab, ITEM_HEIGHT } from './render.js';
-import { isBodySearching, cancelBodySearch, invalidateCriteriaSave, syncCriteriaFromServer, restoreBodyFilter, registerFilter, setOnFilterChange, setOnListRefresh, initFilterPopover, openFilterPopover, closeFilterPopover, closeChip, openChip, getFilterChipsData, getMatchMode, setMatchMode, queueCriteriaSave } from './filters.js';
+import { isBodySearching, cancelBodySearch, invalidateCriteriaSave, syncCriteriaFromServer, restoreBodyFilter, setOnFilterChange, setOnListRefresh, initFilterPopover, openFilterPopover, closeFilterPopover, closeChip, openChip, getFilterChipsData, getMatchMode, setMatchMode, queueCriteriaSave } from './filters.js';
 import { initBodyTypes, editBody, saveBody, cancelBody, setBodyView, copyBody, getActiveEditor, postRenderBody } from './body-types.js';
 
 let _pendingFullscreenTarget = null;
@@ -9,44 +9,6 @@ let _savedScrollTop = 0;
 let _lastDetailEntry = null;
 let _streamEventSource = null;
 let _streamState = null; // { id, text, truncated, bodySize }
-
-registerFilter({
-    type: 'process',
-    label: 'Process',
-    searchPlaceholder: 'Search processes...',
-});
-
-registerFilter({
-    type: 'referer',
-    label: 'Referer',
-    searchPlaceholder: 'Search referers...',
-});
-
-registerFilter({
-    type: 'host',
-    label: 'Host',
-    searchPlaceholder: 'Search hosts...',
-});
-
-registerFilter({
-    type: 'requestContentType',
-    label: 'Request Content-Type',
-    chipLabel: 'Req CT',
-    searchPlaceholder: 'Search request content types...',
-});
-
-registerFilter({
-    type: 'responseContentType',
-    label: 'Response Content-Type',
-    chipLabel: 'Resp CT',
-    searchPlaceholder: 'Search response content types...',
-});
-
-registerFilter({
-    type: 'origin',
-    label: 'Origin',
-    searchPlaceholder: 'Search origins...',
-});
 
 document.getElementById('filterInput').addEventListener('input', (e) => {
     setFilterText(e.target.value.trim());

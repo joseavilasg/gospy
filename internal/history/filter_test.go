@@ -378,3 +378,91 @@ func TestOptions_Origin(t *testing.T) {
 		t.Fatalf("expected only agent origin with count 2, got %+v", opts)
 	}
 }
+
+func TestFilters_MethodPathStatus(t *testing.T) {
+	entries := []*ListEntry{
+		testEntry(), // GET https://api.example.com/v1/users, 200
+		func() *ListEntry {
+			le := testEntry()
+			le.ID = "e2"
+			le.Method = "POST"
+			le.URL = "https://api.example.com/v1/users?action=create"
+			return le
+		}(),
+		func() *ListEntry {
+			le := testEntry()
+			le.ID = "e3"
+			le.Status = nil
+			le.URL = "https://other.example.com/v2/files"
+			return le
+		}(),
+	}
+	opts := MatchOpts{}
+
+	// Method: case-insensitive exact, never substring.
+	f := Filters{Method: []string{"get"}, MatchMode: "all"}
+	if !f.Matches(entries[0], opts) || f.Matches(entries[1], opts) {
+		t.Error("method filter must be case-insensitive and exact")
+	}
+	// Method multi-value ORs within the field.
+	f = Filters{Method: []string{"POST", "PATCH"}, MatchMode: "all"}
+	if !f.Matches(entries[1], opts) || f.Matches(entries[0], opts) {
+		t.Error("method multi-value must OR within the field")
+	}
+
+	// Path: case-insensitive substring over path+query.
+	f = Filters{Path: []string{"/v1/USERS"}, MatchMode: "all"}
+	if !f.Matches(entries[0], opts) || !f.Matches(entries[1], opts) {
+		t.Error("path filter must substring-match path+query, case-insensitive")
+	}
+	if f.Matches(entries[2], opts) {
+		t.Error("path filter must not match an unrelated URL")
+	}
+	// Path falls back to the raw URL when it does not parse.
+	weird := &ListEntry{Method: "GET", URL: "not a url: /v1/users", Host: "x"}
+	pathWeird := Filters{Path: []string{"/v1/users"}, MatchMode: "all"}
+	if !pathWeird.Matches(weird, opts) {
+		t.Error("path filter must fall back to the raw URL when unparseable")
+	}
+
+	// Status: exact; nil status never matches.
+	f = Filters{Status: []string{"200"}, MatchMode: "all"}
+	if !f.Matches(entries[0], opts) || f.Matches(entries[2], opts) {
+		t.Error("status filter must match exactly and never match nil status")
+	}
+	// Status multi-value ORs within the field.
+	f = Filters{Status: []string{"200", "404"}, MatchMode: "all"}
+	if !f.Matches(entries[0], opts) || f.Matches(entries[2], opts) {
+		t.Error("status multi-value must OR within the field")
+	}
+
+	// Empty must include the new fields.
+	for name, f := range map[string]Filters{
+		"method": {Method: []string{"GET"}},
+		"path":   {Path: []string{"/api/"}},
+		"status": {Status: []string{"200"}},
+	} {
+		if f.Empty() {
+			t.Errorf("Empty must report active %s", name)
+		}
+	}
+	emptyAll := Filters{}
+	if !emptyAll.Empty() {
+		t.Error("fully empty Filters must be Empty")
+	}
+}
+
+func TestOptions_Method(t *testing.T) {
+	entries := []*ListEntry{
+		testEntry(),
+		func() *ListEntry { le := testEntry(); le.ID = "e2"; le.Method = "POST"; return le }(),
+		func() *ListEntry { le := testEntry(); le.ID = "e3"; le.Method = "GET"; return le }(),
+	}
+	opts := Options(entries, "method", nil)
+	if len(opts) != 2 || opts[0].Value != "GET" || opts[0].Count != 2 || opts[1].Value != "POST" || opts[1].Count != 1 {
+		t.Fatalf("Options(method) = %+v, want GET x2, POST x1", opts)
+	}
+	if Options(entries, "bogus", nil) != nil {
+		t.Error("unknown type must return nil")
+	}
+}

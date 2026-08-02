@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+
+	"gospy/internal/history"
 )
 
 // Server exposes the agent scope as an MCP server with 4 synchronous tools over
@@ -27,9 +30,19 @@ func NewServer(scope *Scope, hist HistoryStore, fwd *Forwarder) *Server {
 	ms := server.NewMCPServer("gospy-agent", "1.0.0", server.WithToolCapabilities(true), server.WithInputSchemaValidation())
 
 	ms.AddTool(mcp.NewTool("list_entries",
-		mcp.WithDescription("Lists the entries currently visible to the agent: the agent gate must be enabled and the agent filter profile applies. Pagination is mandatory (max 200 entries per page)."),
+		mcp.WithDescription("Lists the entries currently visible to the agent: the agent gate must be enabled and the agent filter profile applies. Optional criteria narrow the visible set - they combine with AND and can never expand the profile scope. Fields that require exact values (host, referer, process, origin, requestContentType, responseContentType, method) accept comma-separated lists (OR) and should be discovered with list_filter_values; path and text are free text; status is an exact HTTP status code. Pagination is mandatory (max 200 entries per page)."),
 		mcp.WithNumber("offset", mcp.DefaultNumber(0), mcp.Min(0)),
 		mcp.WithNumber("limit", mcp.DefaultNumber(50), mcp.Min(1), mcp.Max(200)),
+		mcp.WithString("host", mcp.Description("Exact host match. Discover valid values with list_filter_values('host'). Comma-separated for multiple (OR).")),
+		mcp.WithString("path", mcp.Description("Free text: case-insensitive substring over the URL path+query, e.g. '/api/issues/'.")),
+		mcp.WithString("method", mcp.Description("Exact HTTP method (GET, POST, ...). Discover valid values with list_filter_values('method'). Comma-separated for multiple (OR).")),
+		mcp.WithString("status", mcp.Description("Exact HTTP response status, e.g. '200' or '404'. Comma-separated for multiple (OR).")),
+		mcp.WithString("referer", mcp.Description("Exact referer host match. Discover valid values with list_filter_values('referer'). Comma-separated for multiple (OR).")),
+		mcp.WithString("process", mcp.Description("Exact client process name match. Discover valid values with list_filter_values('process'). Comma-separated for multiple (OR).")),
+		mcp.WithString("origin", mcp.Description("Exact origin match ('browser' or 'agent'). Comma-separated for multiple (OR).")),
+		mcp.WithString("requestContentType", mcp.Description("Exact request Content-Type match. Discover valid values with list_filter_values('requestContentType'). Comma-separated for multiple (OR).")),
+		mcp.WithString("responseContentType", mcp.Description("Exact response Content-Type match. Discover valid values with list_filter_values('responseContentType'). Comma-separated for multiple (OR).")),
+		mcp.WithString("text", mcp.Description("Free text: matches the URL, method, status, client process and entry id.")),
 	), s.handleListEntries)
 
 	ms.AddTool(mcp.NewTool("get_entry",
@@ -48,8 +61,13 @@ func NewServer(scope *Scope, hist HistoryStore, fwd *Forwarder) *Server {
 	), s.handleSendRequest)
 
 	ms.AddTool(mcp.NewTool("list_visible_hosts",
-		mcp.WithDescription("Lists the distinct hosts currently in the agent-visible set, sorted."),
+		mcp.WithDescription("Lists the distinct hosts currently in the agent-visible set (your scope: what you can see), sorted."),
 	), s.handleListVisibleHosts)
+
+	ms.AddTool(mcp.NewTool("list_filter_values",
+		mcp.WithDescription("Lists the exact values available for a list-type filter field (host, referer, process, origin, requestContentType, responseContentType, method), scoped to the agent's visible set. Use the returned values verbatim in list_entries - these fields require exact matches, not free text. This answers 'what can I filter by', while list_visible_hosts answers 'what is my scope'."),
+		mcp.WithString("type", mcp.Required(), mcp.Description("Filter field to enumerate: host, referer, process, origin, requestContentType, responseContentType or method.")),
+	), s.handleListFilterValues)
 
 	s.mcp = ms
 	return s
@@ -65,8 +83,63 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) handleListEntries(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	page := s.scope.ListEntries(req.GetInt("offset", 0), req.GetInt("limit", 50))
+	query := history.Filters{
+		Host:                parseListArg(req.GetString("host", "")),
+		Path:                parseListArg(req.GetString("path", "")),
+		Method:              parseListArg(req.GetString("method", "")),
+		Status:              parseListArg(req.GetString("status", "")),
+		Referer:             parseListArg(req.GetString("referer", "")),
+		Process:             parseListArg(req.GetString("process", "")),
+		Origin:              parseListArg(req.GetString("origin", "")),
+		RequestContentType:  parseListArg(req.GetString("requestContentType", "")),
+		ResponseContentType: parseListArg(req.GetString("responseContentType", "")),
+		Text:                req.GetString("text", ""),
+	}
+	for _, v := range query.Status {
+		if _, err := strconv.Atoi(v); err != nil {
+			return mcp.NewToolResultErrorf("status values must be integer HTTP status codes, got %q", v), nil
+		}
+	}
+	page := s.scope.ListEntries(query, req.GetInt("offset", 0), req.GetInt("limit", 50))
 	return mcp.NewToolResultJSON(page)
+}
+
+// parseListArg splits a comma-separated MCP argument into the engine's list of
+// exact-match values (within-field OR), mirroring the UI multi-select. Empty
+// input yields nil so the field stays unconstrained.
+func parseListArg(v string) []string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return nil
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+var filterValueTypes = map[string]bool{
+	"host": true, "referer": true, "process": true, "origin": true,
+	"requestContentType": true, "responseContentType": true, "method": true,
+}
+
+func (s *Server) handleListFilterValues(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	typ := req.GetString("type", "")
+	if !filterValueTypes[typ] {
+		return mcp.NewToolResultErrorf("unknown filter type %q; valid: host, referer, process, origin, requestContentType, responseContentType, method", typ), nil
+	}
+	values := s.scope.FilterValues(typ)
+	if values == nil {
+		values = []history.OptionCount{}
+	}
+	return mcp.NewToolResultJSON(map[string]interface{}{
+		"type":   typ,
+		"values": values,
+	})
 }
 
 func (s *Server) handleGetEntry(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

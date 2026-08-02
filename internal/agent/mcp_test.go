@@ -575,3 +575,96 @@ func TestParseHeadersArg(t *testing.T) {
 		t.Error("non-string value accepted")
 	}
 }
+
+func TestMCP_ListEntriesFilterArgs(t *testing.T) {
+	fs := &mockFilterStore{gate: true, filters: history.Filters{Host: []string{"sonarcloud.io"}, MatchMode: "all"}}
+	h, hist := newTestMCPServer(t, fs)
+	saveTestEntryFull(t, hist, "GET", "sonarcloud.io", "/api/issues/search", 200)
+	saveTestEntryFull(t, hist, "GET", "sonarcloud.io", "/api/rules/show", 200)
+	saveTestEntryFull(t, hist, "POST", "sonarcloud.io", "/api/projects/create", 500)
+	saveTestEntryFull(t, hist, "GET", "github.com", "/api/pulls", 200)
+
+	decode := func(resp rpcResponse) ListPage {
+		t.Helper()
+		var page ListPage
+		if err := json.Unmarshal([]byte(resultText(t, resp)), &page); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		return page
+	}
+
+	// Free-text path substring + exact method narrow within the profile.
+	page := decode(callTool(t, h, "list_entries", map[string]any{"path": "/api/issues/", "method": "GET", "limit": 50}))
+	if len(page.Entries) != 1 || page.Entries[0].Host != "sonarcloud.io" {
+		t.Fatalf("expected the sonarcloud.io /api/issues/ entry, got %+v", page.Entries)
+	}
+
+	// Comma-separated exact values OR within the field.
+	page = decode(callTool(t, h, "list_entries", map[string]any{"method": "GET,POST", "limit": 50}))
+	if len(page.Entries) != 3 {
+		t.Fatalf("GET,POST OR expected 3 entries, got %+v", page.Entries)
+	}
+
+	// Status narrows to the 500 entry.
+	page = decode(callTool(t, h, "list_entries", map[string]any{"status": "500", "limit": 50}))
+	if len(page.Entries) != 1 || page.Entries[0].Status == nil || *page.Entries[0].Status != 500 {
+		t.Fatalf("status 500 filter expected the POST entry, got %+v", page.Entries)
+	}
+
+	// A host outside the profile must never widen the scope.
+	page = decode(callTool(t, h, "list_entries", map[string]any{"host": "github.com", "limit": 50}))
+	if len(page.Entries) != 0 {
+		t.Fatalf("host outside profile leaked: %+v", page.Entries)
+	}
+}
+
+func TestMCP_ListEntriesInvalidStatus(t *testing.T) {
+	fs := &mockFilterStore{gate: true}
+	h, _ := newTestMCPServer(t, fs)
+	resp := callTool(t, h, "list_entries", map[string]any{"status": "abc"})
+	msg := isErrorText(t, resp)
+	if !strings.Contains(msg, "status values must be integer") {
+		t.Fatalf("expected a status validation error, got %q", msg)
+	}
+}
+
+func TestMCP_ListFilterValues(t *testing.T) {
+	fs := &mockFilterStore{gate: true, filters: history.Filters{Host: []string{"sonarcloud.io"}, MatchMode: "all"}}
+	h, hist := newTestMCPServer(t, fs)
+	saveTestEntryFull(t, hist, "GET", "sonarcloud.io", "/api/issues", 200)
+	saveTestEntryFull(t, hist, "POST", "sonarcloud.io", "/api/projects", 500)
+	saveTestEntryFull(t, hist, "GET", "github.com", "/api/pulls", 200)
+
+	var payload struct {
+		Type   string                `json:"type"`
+		Values []history.OptionCount `json:"values"`
+	}
+	unmarshal := func(resp rpcResponse) {
+		t.Helper()
+		if err := json.Unmarshal([]byte(resultText(t, resp)), &payload); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+	}
+
+	// Scoped to the visible set: github.com must not leak.
+	unmarshal(callTool(t, h, "list_filter_values", map[string]any{"type": "method"}))
+	if payload.Type != "method" || len(payload.Values) != 2 {
+		t.Fatalf("list_filter_values(method) = %+v, want 2 scoped values", payload)
+	}
+	if payload.Values[0].Value != "GET" || payload.Values[0].Count != 1 || payload.Values[1].Value != "POST" || payload.Values[1].Count != 1 {
+		t.Fatalf("unexpected method values: %+v", payload.Values)
+	}
+
+	// Unknown type is a clear error.
+	msg := isErrorText(t, callTool(t, h, "list_filter_values", map[string]any{"type": "bogus"}))
+	if !strings.Contains(msg, "unknown filter type") {
+		t.Fatalf("expected an unknown-type error, got %q", msg)
+	}
+
+	// Gate off: no values leak.
+	fs.gate = false
+	unmarshal(callTool(t, h, "list_filter_values", map[string]any{"type": "host"}))
+	if len(payload.Values) != 0 {
+		t.Fatalf("gate off must leak no values, got %+v", payload.Values)
+	}
+}

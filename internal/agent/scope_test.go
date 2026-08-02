@@ -63,7 +63,7 @@ func TestScope_GateOffIsEmpty(t *testing.T) {
 	saveTestEntry(t, hist, "a.com", "", 200)
 	sc := NewScope(hist, &mockFilterStore{gate: false}, nil, nil)
 
-	page := sc.ListEntries(0, 10)
+	page := sc.ListEntries(history.Filters{}, 0, 10)
 	if len(page.Entries) != 0 || page.VisibleCount != 0 {
 		t.Fatalf("gate off must expose nothing, got %+v", page)
 	}
@@ -85,7 +85,7 @@ func TestScope_CriteriaFilter(t *testing.T) {
 	fs := &mockFilterStore{gate: true, filters: history.Filters{Host: []string{"a.com"}, MatchMode: "all"}}
 	sc := NewScope(hist, fs, nil, nil)
 
-	page := sc.ListEntries(0, 10)
+	page := sc.ListEntries(history.Filters{}, 0, 10)
 	if len(page.Entries) != 1 || page.Entries[0].Host != "a.com" {
 		t.Fatalf("expected only a.com, got %+v", page.Entries)
 	}
@@ -105,7 +105,7 @@ func TestScope_AgentOriginFiltered(t *testing.T) {
 	fs := &mockFilterStore{gate: true, filters: history.Filters{Host: []string{"b.com"}, MatchMode: "all"}}
 	sc := NewScope(hist, fs, nil, nil)
 
-	page := sc.ListEntries(0, 10)
+	page := sc.ListEntries(history.Filters{}, 0, 10)
 	if len(page.Entries) != 1 || page.Entries[0].Host != "b.com" {
 		t.Fatalf("expected only b.com: the agent-origin a.com entry must be filtered like any other, got %+v", page.Entries)
 	}
@@ -125,7 +125,7 @@ func TestScope_IgnoreStaysHardPrefilter(t *testing.T) {
 	if sc.IsVisible(e.ID) {
 		t.Error("an ignored host must stay invisible regardless of origin")
 	}
-	if page := sc.ListEntries(0, 10); len(page.Entries) != 0 {
+	if page := sc.ListEntries(history.Filters{}, 0, 10); len(page.Entries) != 0 {
 		t.Errorf("ignored entry leaked into the page: %+v", page.Entries)
 	}
 }
@@ -137,16 +137,16 @@ func TestScope_Pagination(t *testing.T) {
 	}
 	sc := NewScope(hist, &mockFilterStore{gate: true}, nil, nil)
 
-	first := sc.ListEntries(0, 2)
+	first := sc.ListEntries(history.Filters{}, 0, 2)
 	if len(first.Entries) != 2 || !first.HasMore || first.VisibleCount != 3 {
 		t.Fatalf("first page = %+v", first)
 	}
-	second := sc.ListEntries(2, 2)
+	second := sc.ListEntries(history.Filters{}, 2, 2)
 	if len(second.Entries) != 1 || second.HasMore {
 		t.Fatalf("second page = %+v", second)
 	}
 	// Offsets past the end return an empty, non-nil slice.
-	past := sc.ListEntries(99, 2)
+	past := sc.ListEntries(history.Filters{}, 99, 2)
 	if len(past.Entries) != 0 || past.Entries == nil {
 		t.Fatalf("offset past end = %+v", past.Entries)
 	}
@@ -186,5 +186,81 @@ func TestScope_IsVisibleAndHosts(t *testing.T) {
 	hosts := sc.VisibleHosts()
 	if len(hosts) != 1 || hosts[0] != "a.com" {
 		t.Errorf("VisibleHosts = %v, want [a.com]", hosts)
+	}
+}
+
+func saveTestEntryFull(t *testing.T, hist *history.Store, method, host, path string, status int) *history.Entry {
+	t.Helper()
+	e := &history.Entry{
+		Request: history.RequestRecord{
+			Method:  method,
+			URL:     "http://" + host + path,
+			Host:    host,
+			Headers: map[string][]string{},
+		},
+		Response: &history.ResponseRecord{Status: status},
+	}
+	if err := hist.Save(e); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	return e
+}
+
+func TestScope_QueryNarrowsProfile(t *testing.T) {
+	hist := newTestHistory(t)
+	saveTestEntryFull(t, hist, "GET", "sonarcloud.io", "/api/issues/search", 200)
+	saveTestEntryFull(t, hist, "GET", "sonarcloud.io", "/api/rules/show", 200)
+	saveTestEntryFull(t, hist, "GET", "sonarcloud.io", "/api/issues/search", 500)
+	fs := &mockFilterStore{gate: true, filters: history.Filters{Host: []string{"sonarcloud.io"}, MatchMode: "all"}}
+	sc := NewScope(hist, fs, nil, nil)
+
+	page := sc.ListEntries(history.Filters{Path: []string{"/api/issues/"}, Status: []string{"200"}}, 0, 10)
+	if len(page.Entries) != 1 {
+		t.Fatalf("expected 1 sonarcloud.io /api/issues/ 200 entry, got %+v", page.Entries)
+	}
+	if page.Entries[0].Host != "sonarcloud.io" || page.Entries[0].Method != "GET" {
+		t.Fatalf("wrong entry: %+v", page.Entries[0])
+	}
+	if page.VisibleCount != 1 {
+		t.Errorf("visibleCount = %d, want 1", page.VisibleCount)
+	}
+}
+
+func TestScope_QueryCannotWidenProfile(t *testing.T) {
+	hist := newTestHistory(t)
+	saveTestEntry(t, hist, "a.com", "", 200)
+	fs := &mockFilterStore{gate: true, filters: history.Filters{Host: []string{"a.com"}, MatchMode: "all"}}
+	sc := NewScope(hist, fs, nil, nil)
+
+	page := sc.ListEntries(history.Filters{Host: []string{"github.com"}}, 0, 10)
+	if len(page.Entries) != 0 || page.VisibleCount != 0 {
+		t.Fatalf("query host outside the profile must yield nothing, got %+v", page)
+	}
+}
+
+func TestScope_FilterValuesScoped(t *testing.T) {
+	hist := newTestHistory(t)
+	saveTestEntryFull(t, hist, "GET", "a.com", "/x", 200)
+	saveTestEntryFull(t, hist, "POST", "b.com", "/y", 500)
+	saveTestEntryFull(t, hist, "GET", "b.com", "/z", 200)
+	fs := &mockFilterStore{gate: true, filters: history.Filters{Host: []string{"b.com"}, MatchMode: "all"}}
+	sc := NewScope(hist, fs, nil, nil)
+
+	hosts := sc.FilterValues("host")
+	if len(hosts) != 1 || hosts[0].Value != "b.com" || hosts[0].Count != 2 {
+		t.Fatalf("FilterValues(host) = %+v, want [b.com x2]", hosts)
+	}
+	methods := sc.FilterValues("method")
+	if len(methods) != 2 || methods[0].Value != "GET" || methods[0].Count != 1 || methods[1].Value != "POST" || methods[1].Count != 1 {
+		t.Fatalf("FilterValues(method) = %+v, want [GET x1, POST x1]", methods)
+	}
+}
+
+func TestScope_FilterValuesGateOff(t *testing.T) {
+	hist := newTestHistory(t)
+	saveTestEntry(t, hist, "a.com", "", 200)
+	sc := NewScope(hist, &mockFilterStore{gate: false}, nil, nil)
+	if v := sc.FilterValues("host"); len(v) != 0 {
+		t.Fatalf("FilterValues with gate off = %+v, want empty", v)
 	}
 }

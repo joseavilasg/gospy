@@ -71,15 +71,24 @@ func (sc *Scope) base() (all []*history.ListEntry, filters history.Filters, opts
 
 // ListEntries returns page [offset, offset+limit) of the agent-visible set.
 // The gate is a hard stop: when off, nothing is exposed.
-func (sc *Scope) ListEntries(offset, limit int) ListPage {
+func (sc *Scope) ListEntries(query history.Filters, offset, limit int) ListPage {
 	if !sc.filter.AgentGate() {
 		return ListPage{Entries: make([]*AgentEntry, 0)}
 	}
 	all, filters, opts := sc.base()
 	offset, limit = pageLimits(offset, limit)
+	matches := func(le *history.ListEntry) bool {
+		if !filters.Matches(le, opts) {
+			return false
+		}
+		if query.Empty() {
+			return true
+		}
+		return query.Matches(le, opts)
+	}
 	page, total, visibleCount := history.PageVisibleSet(all,
 		func(host string) bool { return sc.ignored != nil && sc.ignored.Matches(host) },
-		func(le *history.ListEntry) bool { return filters.Matches(le, opts) },
+		matches,
 		nil, offset, limit)
 	out := make([]*AgentEntry, 0, len(page))
 	for _, le := range page {
@@ -92,6 +101,24 @@ func (sc *Scope) ListEntries(offset, limit int) ListPage {
 		Offset:       offset,
 		HasMore:      offset+len(page) < visibleCount,
 	}
+}
+
+// FilterValues returns the distinct option values for a list-type filter field
+// (host, referer, process, origin, content types, method), computed over the
+// agent-visible set only. This mirrors the UI dropdown (history.Options) so the
+// agent discovers exact filter values within its scope, never outside it.
+func (sc *Scope) FilterValues(typ string) []history.OptionCount {
+	if !sc.filter.AgentGate() {
+		return []history.OptionCount{}
+	}
+	all, filters, opts := sc.base()
+	visible := make([]*history.ListEntry, 0, len(all))
+	for _, le := range all {
+		if filters.Matches(le, opts) {
+			visible = append(visible, le)
+		}
+	}
+	return history.Options(visible, typ, sc.ignored)
 }
 
 // IsVisible gates get_entry: only entries in the agent-visible set can be read.

@@ -212,7 +212,7 @@ export function initFilterPopover() {
     });
 
     modalFilterContent.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && activeType && activeType.popoverType === 'search') {
+        if (e.key === 'Enter' && activeType && (activeType.popoverType === 'search' || activeType.popoverType === 'value')) {
             filterConfirmBtn.click();
         }
     });
@@ -287,6 +287,16 @@ function showStep2(config) {
         filterClearBtn.style.display = 'none';
         filterConfirmBtn.textContent = 'Search';
         modalFilterContent.querySelector('input').focus();
+        return;
+    }
+
+    if (config.popoverType === 'value') {
+        const current = (filterState[config.type] || [])[0] || '';
+        modalFilterContent.innerHTML = `<input type="${config.inputType || 'text'}" placeholder="${escapeHtml(config.searchPlaceholder || 'Type a value...')}" id="modalFilterInput" class="modal-filter-input" value="${escapeHtml(current)}" autofocus>`;
+        filterMatchCount.style.display = 'none';
+        filterClearBtn.style.display = 'none';
+        modalFilterInput = modalFilterContent.querySelector('#modalFilterInput');
+        modalFilterInput.focus();
         return;
     }
 
@@ -419,6 +429,50 @@ async function handleSearchStream(resp) {
 }
 
 registerFilter({
+    type: 'process',
+    label: 'Process',
+    searchPlaceholder: 'Search processes...',
+});
+
+registerFilter({
+    type: 'referer',
+    label: 'Referer',
+    searchPlaceholder: 'Search referers...',
+});
+
+registerFilter({
+    type: 'host',
+    label: 'Host',
+    searchPlaceholder: 'Search hosts...',
+});
+
+registerFilter({
+    type: 'requestContentType',
+    label: 'Request Content-Type',
+    chipLabel: 'Req CT',
+    searchPlaceholder: 'Search request content types...',
+});
+
+registerFilter({
+    type: 'responseContentType',
+    label: 'Response Content-Type',
+    chipLabel: 'Resp CT',
+    searchPlaceholder: 'Search response content types...',
+});
+
+registerFilter({
+    type: 'origin',
+    label: 'Origin',
+    searchPlaceholder: 'Search origins...',
+});
+
+registerFilter({
+    type: 'method',
+    label: 'Method',
+    searchPlaceholder: 'Search methods...',
+});
+
+registerFilter({
     type: 'body',
     label: 'Body contains',
     isAdvanced: true,
@@ -482,6 +536,37 @@ registerFilter({
     },
 });
 
+registerFilter({
+    type: 'path',
+    label: 'Path',
+    popoverType: 'value',
+    searchPlaceholder: 'Path substring, e.g. /api/issues/',
+
+    onStep2Apply() {
+        const trimmed = (modalFilterInput.value || '').trim();
+        setFilter('path', trimmed ? [trimmed] : []);
+    },
+});
+
+registerFilter({
+    type: 'status',
+    label: 'Status',
+    popoverType: 'value',
+    inputType: 'number',
+    searchPlaceholder: 'HTTP status, e.g. 200',
+
+    onStep2Apply() {
+        const raw = (modalFilterInput.value || '').trim();
+        if (raw && !/^\d+$/.test(raw)) {
+            modalFilterInput.style.borderColor = 'var(--error)';
+            return;
+        }
+        modalFilterInput.style.borderColor = '';
+        setFilter('status', raw ? [raw] : []);
+    },
+});
+
+
 export function restoreBodyFilter() {
     const saved = JSON.parse(localStorage.getItem(bodyFilterKey()) || '[]');
     if (saved.length > 0 && typeof saved[0] === 'string' && saved[0].length >= 3 && !bodySearchState.scanning) {
@@ -489,3 +574,4 @@ export function restoreBodyFilter() {
         if (config) config.onSearch(saved[0]);
     }
 }
+

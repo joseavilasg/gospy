@@ -17,6 +17,9 @@ type Filters struct {
 	RequestContentType  []string `json:"requestContentType,omitempty"`
 	ResponseContentType []string `json:"responseContentType,omitempty"`
 	Origin              []string `json:"origin,omitempty"`
+	Method              []string `json:"method,omitempty"`
+	Path                []string `json:"path,omitempty"`
+	Status              []string `json:"status,omitempty"`
 	Text                string   `json:"text,omitempty"`
 	MatchMode           string   `json:"matchMode,omitempty"`
 
@@ -64,50 +67,79 @@ func (f *Filters) Empty() bool {
 	}
 	return len(f.Process) == 0 && len(f.Referer) == 0 && len(f.Host) == 0 &&
 		len(f.RequestContentType) == 0 && len(f.ResponseContentType) == 0 &&
-		len(f.Origin) == 0
+		len(f.Origin) == 0 && len(f.Method) == 0 && len(f.Path) == 0 &&
+		len(f.Status) == 0
 }
 
 type typeCheck struct {
 	values []string
 	value  string
+	fold   bool // case-insensitive exact equality (e.g. HTTP methods)
+	substr bool // case-insensitive substring (e.g. URL path patterns)
+}
+
+func (c typeCheck) match() bool {
+	for _, v := range c.values {
+		if c.substr {
+			if strings.Contains(strings.ToLower(c.value), strings.ToLower(v)) {
+				return true
+			}
+		} else if c.fold {
+			if strings.EqualFold(v, c.value) {
+				return true
+			}
+		} else if v == c.value {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *Filters) matchesFilters(le *ListEntry) bool {
 	checks := make([]typeCheck, 0, 7)
 	if len(f.Process) > 0 {
-		checks = append(checks, typeCheck{f.Process, processName(le)})
+		checks = append(checks, typeCheck{values: f.Process, value: processName(le)})
 	}
 	if len(f.Referer) > 0 {
-		checks = append(checks, typeCheck{f.Referer, RefererOrigin(le.Referer)})
+		checks = append(checks, typeCheck{values: f.Referer, value: RefererOrigin(le.Referer)})
 	}
 	if len(f.Host) > 0 {
-		checks = append(checks, typeCheck{f.Host, le.Host})
+		checks = append(checks, typeCheck{values: f.Host, value: le.Host})
 	}
 	if len(f.RequestContentType) > 0 {
-		checks = append(checks, typeCheck{f.RequestContentType, le.RequestContentType})
+		checks = append(checks, typeCheck{values: f.RequestContentType, value: le.RequestContentType})
 	}
 	if len(f.ResponseContentType) > 0 {
-		checks = append(checks, typeCheck{f.ResponseContentType, le.ResponseContentType})
+		checks = append(checks, typeCheck{values: f.ResponseContentType, value: le.ResponseContentType})
 	}
 	if len(f.Origin) > 0 {
-		checks = append(checks, typeCheck{f.Origin, le.Origin})
+		checks = append(checks, typeCheck{values: f.Origin, value: le.Origin})
+	}
+	if len(f.Method) > 0 {
+		checks = append(checks, typeCheck{values: f.Method, value: le.Method, fold: true})
+	}
+	if len(f.Path) > 0 {
+		checks = append(checks, typeCheck{values: f.Path, value: urlPath(le), substr: true})
+	}
+	if len(f.Status) > 0 {
+		checks = append(checks, typeCheck{values: f.Status, value: statusString(le)})
 	}
 	if len(f.Body) > 0 {
-		checks = append(checks, typeCheck{f.Body, le.ID})
+		checks = append(checks, typeCheck{values: f.Body, value: le.ID})
 	}
 	if len(checks) == 0 {
 		return true
 	}
 	if f.MatchMode == "any" {
 		for _, c := range checks {
-			if containsString(c.values, c.value) {
+			if c.match() {
 				return true
 			}
 		}
 		return false
 	}
 	for _, c := range checks {
-		if !containsString(c.values, c.value) {
+		if !c.match() {
 			return false
 		}
 	}
@@ -218,6 +250,8 @@ func Options(entries []*ListEntry, typ string, ignored HostMatcher) []OptionCoun
 			val = le.ResponseContentType
 		case "origin":
 			val = le.Origin
+		case "method":
+			val = le.Method
 		default:
 			return nil
 		}
@@ -238,11 +272,28 @@ func Options(entries []*ListEntry, typ string, ignored HostMatcher) []OptionCoun
 	return out
 }
 
-func containsString(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
+// urlPath returns the entry URL's path portion (path + query when present); the
+// Path filter matches it by case-insensitive substring. Falls back to the raw
+// URL when it does not parse.
+func urlPath(le *ListEntry) string {
+	if le.URL == "" {
+		return le.Host
 	}
-	return false
+	u, err := url.Parse(le.URL)
+	if err != nil || u.Path == "" {
+		return le.URL
+	}
+	if u.RawQuery != "" {
+		return u.Path + "?" + u.RawQuery
+	}
+	return u.Path
+}
+
+// statusString renders the entry's HTTP status as a string; entries without a
+// status (still pending or streaming) never match a Status filter.
+func statusString(le *ListEntry) string {
+	if le.Status == nil {
+		return ""
+	}
+	return strconv.Itoa(*le.Status)
 }
