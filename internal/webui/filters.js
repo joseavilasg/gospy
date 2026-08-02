@@ -212,7 +212,7 @@ export function initFilterPopover() {
     });
 
     modalFilterContent.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && activeType && (activeType.popoverType === 'search' || activeType.popoverType === 'value')) {
+        if (e.key === 'Enter' && activeType?.onStep2Apply) {
             filterConfirmBtn.click();
         }
     });
@@ -270,43 +270,48 @@ export function closeFilterPopover() {
     filterStep2.style.display = 'none';
 }
 
+const STEP2_RENDERERS = {
+    list(config) {
+        modalFilterContent.innerHTML = `<input type="text" placeholder="${escapeHtml(config.searchPlaceholder || 'Search...')}" id="modalFilterInput" class="modal-filter-input">
+            <div class="filter-option-list" id="modalFilterOptions"></div>`;
+        modalFilterInput = modalFilterContent.querySelector('#modalFilterInput');
+        modalSelection = [...(filterState[config.type] || [])];
+        currentOptions = [];
+        loadOptions(config.type);
+        modalFilterInput.focus();
+    },
+
+    value(config) {
+        const current = (filterState[config.type] || [])[0] || '';
+        modalFilterContent.innerHTML = `<input type="${config.inputType || 'text'}" placeholder="${escapeHtml(config.searchPlaceholder || 'Type a value...')}" id="modalFilterInput" class="modal-filter-input" value="${escapeHtml(current)}" autofocus>`;
+        modalFilterInput = modalFilterContent.querySelector('#modalFilterInput');
+        modalFilterInput.focus();
+    },
+
+    search() {
+        modalFilterContent.innerHTML = `<input class="body-search-input" placeholder="Search text in bodies..." value="${escapeHtml(bodySearchState.q || '')}" autofocus>`;
+        modalFilterContent.querySelector('input').focus();
+    },
+};
+
 function showStep2(config) {
     activeType = config;
     filterStep1.style.display = 'none';
     filterStep2.style.display = '';
     filterStep2Title.textContent = config.label;
 
-    filterConfirmBtn.textContent = 'Apply';
-    filterMatchCount.style.display = '';
-    filterClearBtn.style.display = '';
+    filterConfirmBtn.textContent = config.confirmLabel || 'Apply';
+    const simple = !!config.onStep2Apply;
+    filterMatchCount.style.display = simple ? 'none' : '';
+    filterClearBtn.style.display = simple ? 'none' : '';
     modalFilterContent.style.display = '';
 
-    if (config.popoverType === 'search') {
-        modalFilterContent.innerHTML = `<input class="body-search-input" placeholder="Search text in bodies..." value="${escapeHtml(bodySearchState.q || '')}" autofocus>`;
-        filterMatchCount.style.display = 'none';
-        filterClearBtn.style.display = 'none';
-        filterConfirmBtn.textContent = 'Search';
-        modalFilterContent.querySelector('input').focus();
+    if (config.renderStep2) {
+        config.renderStep2();
         return;
     }
-
-    if (config.popoverType === 'value') {
-        const current = (filterState[config.type] || [])[0] || '';
-        modalFilterContent.innerHTML = `<input type="${config.inputType || 'text'}" placeholder="${escapeHtml(config.searchPlaceholder || 'Type a value...')}" id="modalFilterInput" class="modal-filter-input" value="${escapeHtml(current)}" autofocus>`;
-        filterMatchCount.style.display = 'none';
-        filterClearBtn.style.display = 'none';
-        modalFilterInput = modalFilterContent.querySelector('#modalFilterInput');
-        modalFilterInput.focus();
-        return;
-    }
-
-    modalFilterContent.innerHTML = `<input type="text" placeholder="${escapeHtml(config.searchPlaceholder || 'Search...')}" id="modalFilterInput" class="modal-filter-input">
-        <div class="filter-option-list" id="modalFilterOptions"></div>`;
-    modalFilterInput = modalFilterContent.querySelector('#modalFilterInput');
-    modalSelection = [...(filterState[config.type] || [])];
-    currentOptions = [];
-    loadOptions(config.type);
-    modalFilterInput.focus();
+    const render = STEP2_RENDERERS[config.popoverType || 'list'];
+    (render || STEP2_RENDERERS.list)(config);
 }
 
 function goBackToStep1() {
@@ -477,6 +482,7 @@ registerFilter({
     label: 'Body contains',
     isAdvanced: true,
     popoverType: 'search',
+    confirmLabel: 'Search',
     customChip: true,
 
     getIsActive() {
