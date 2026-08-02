@@ -332,10 +332,10 @@ header .stats {
     font-size: var(--fs-md);
 }
 .filter-chip:hover { border-color: var(--accent); }
-.filter-chip-label { color: var(--accent); opacity: 0.75; line-height: 1; white-space: nowrap; }
+.filter-chip-label { color: var(--accent); opacity: 0.75; line-height: normal; white-space: nowrap; }
 .filter-chip-value {
     color: var(--accent);
-    line-height: 1;
+    line-height: normal;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -343,7 +343,7 @@ header .stats {
 }
 .filter-chip-extra {
     color: var(--accent);
-    line-height: 1;
+    line-height: normal;
     flex-shrink: 0;
     white-space: nowrap;
     margin-left: auto;
