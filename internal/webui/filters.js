@@ -48,9 +48,12 @@ export function saveCriteria() {
         focusEnabled: focusEnabled,
     };
     for (const config of filterTypes) {
-        if (config.type === 'body') continue;
+        if (config.type === 'body' || config.type === 'date') continue;
         payload.filters[config.type] = filterState[config.type] || [];
     }
+    const dateRange = filterState.date || [];
+    if (dateRange[0]) payload.filters.from = dateRange[0];
+    if (dateRange[1]) payload.filters.to = dateRange[1];
     payload.filters.text = filterText;
     payload.filters.matchMode = matchMode;
 
@@ -84,9 +87,10 @@ export function syncCriteriaFromServer(filters, focusEnabledVal, agentState) {
     if (criteriaDirty) return;
     matchMode = filters.matchMode || 'all';
     for (const config of filterTypes) {
-        if (config.type === 'body') continue;
+        if (config.type === 'body' || config.type === 'date') continue;
         filterState[config.type] = filters[config.type] || [];
     }
+    filterState.date = [filters.from || '', filters.to || ''];
     setFilterText(filters.text || '');
     setFocusEnabled(focusEnabledVal);
     if (agentState) {
@@ -286,6 +290,19 @@ const STEP2_RENDERERS = {
         modalFilterContent.innerHTML = `<input type="${config.inputType || 'text'}" placeholder="${escapeHtml(config.searchPlaceholder || 'Type a value...')}" id="modalFilterInput" class="modal-filter-input" value="${escapeHtml(current)}" autofocus>`;
         modalFilterInput = modalFilterContent.querySelector('#modalFilterInput');
         modalFilterInput.focus();
+    },
+
+    range(config) {
+        const current = filterState[config.type] || [];
+        modalFilterContent.innerHTML = `<div class="filter-range-row">
+                <label>From</label>
+                <input type="datetime-local" id="modalFilterFrom" class="modal-filter-input" value="${escapeHtml(current[0] || '')}">
+            </div>
+            <div class="filter-range-row">
+                <label>To</label>
+                <input type="datetime-local" id="modalFilterTo" class="modal-filter-input" value="${escapeHtml(current[1] || '')}">
+            </div>`;
+        modalFilterContent.querySelector('#modalFilterFrom').focus();
     },
 
     search() {
@@ -569,6 +586,38 @@ registerFilter({
         }
         modalFilterInput.style.borderColor = '';
         setFilter('status', raw ? [raw] : []);
+    },
+});
+
+registerFilter({
+    type: 'date',
+    label: 'Date range',
+    popoverType: 'range',
+    customChip: true,
+
+    getIsActive() {
+        return (filterState.date || []).some(v => !!v);
+    },
+
+    renderChip() {
+        const [from, to] = filterState.date || [];
+        if (!from && !to) return '';
+        const fmt = v => {
+            if (!v) return '∞';
+            const d = new Date(v);
+            return isNaN(d) ? v : d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        };
+        return `<span class="filter-chip grouped" data-type="date">
+            <span class="filter-chip-label">Time:</span>
+            <span class="filter-chip-value">${escapeHtml(fmt(from))} → ${escapeHtml(fmt(to))}</span>
+            <span class="filter-chip-close" data-type="date">${closeSVG}</span>
+        </span>`;
+    },
+
+    onStep2Apply() {
+        const from = (modalFilterContent.querySelector('#modalFilterFrom').value || '').trim();
+        const to = (modalFilterContent.querySelector('#modalFilterTo').value || '').trim();
+        setFilter('date', from || to ? [from, to] : []);
     },
 });
 

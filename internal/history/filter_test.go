@@ -2,6 +2,7 @@ package history
 
 import (
 	"testing"
+	"time"
 )
 
 func strPtr(s int) *int { return &s }
@@ -465,4 +466,84 @@ func TestOptions_Method(t *testing.T) {
 	if Options(entries, "bogus", nil) != nil {
 		t.Error("unknown type must return nil")
 	}
+}
+
+func TestParseFilterTime(t *testing.T) {
+	if _, err := ParseFilterTime("2026-08-02T14:30"); err != nil {
+		t.Errorf("local wall-clock format: %v", err)
+	}
+	if _, err := ParseFilterTime("2026-08-02T14:30:00Z"); err != nil {
+		t.Errorf("RFC3339 format: %v", err)
+	}
+	if _, err := ParseFilterTime("2026-08-02T14:30:00-03:00"); err != nil {
+		t.Errorf("RFC3339 with offset: %v", err)
+	}
+	if _, err := ParseFilterTime("bogus"); err == nil {
+		t.Error("malformed input must error")
+	}
+}
+
+func TestFilters_TimeRange(t *testing.T) {
+	base := time.Date(2026, 8, 2, 12, 0, 0, 0, time.Local)
+	entries := []*ListEntry{
+		{ID: "before", Timestamp: base.Add(-2 * time.Hour)},
+		{ID: "at-from", Timestamp: base},
+		{ID: "inside", Timestamp: base.Add(2 * time.Hour)},
+		{ID: "at-to", Timestamp: base.Add(4 * time.Hour)},
+		{ID: "after", Timestamp: base.Add(6 * time.Hour)},
+	}
+	all := []string{"before", "at-from", "inside", "at-to", "after"}
+
+	cases := []struct {
+		name string
+		from string
+		to   string
+		want []string
+	}{
+		{"no-range", "", "", all},
+		{"rfc3339-inclusive", base.Format(time.RFC3339), base.Add(4 * time.Hour).Format(time.RFC3339), []string{"at-from", "inside", "at-to"}},
+		{"rfc3339-from-only", base.Format(time.RFC3339), "", []string{"at-from", "inside", "at-to", "after"}},
+		{"rfc3339-to-only", "", base.Add(4 * time.Hour).Format(time.RFC3339), []string{"before", "at-from", "inside", "at-to"}},
+		{"utc-instant", base.Add(-2 * time.Hour).UTC().Format(time.RFC3339), "", all},
+		{"local-wallclock", base.Format("2006-01-02T15:04"), base.Add(4 * time.Hour).Format("2006-01-02T15:04"), []string{"at-from", "inside", "at-to"}},
+		{"unparseable-ignored", "garbage", "", all},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := Filters{From: c.from, To: c.to}
+			var got []string
+			for _, le := range entries {
+				if f.Matches(le, MatchOpts{}) {
+					got = append(got, le.ID)
+				}
+			}
+			if !slicesEqual(got, c.want) {
+				t.Fatalf("From=%q To=%q matched %v, want %v", c.from, c.to, got, c.want)
+			}
+		})
+	}
+}
+
+func TestFilters_EmptyWithTimeRange(t *testing.T) {
+	f := Filters{From: "2026-08-02T10:00"}
+	if f.Empty() {
+		t.Error("a filter with only From must not be Empty")
+	}
+	var empty Filters
+	if !empty.Empty() {
+		t.Error("a fully empty filter must be Empty")
+	}
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

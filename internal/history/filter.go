@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Filters is the server-side filter criteria applied to the request list.
@@ -22,6 +23,12 @@ type Filters struct {
 	Status              []string `json:"status,omitempty"`
 	Text                string   `json:"text,omitempty"`
 	MatchMode           string   `json:"matchMode,omitempty"`
+
+	// From and To bound the entry timestamp. Each accepts an RFC3339 instant
+	// (any zone, compared as an absolute time) or a local wall-clock
+	// "2006-01-02T15:04" interpreted in the system time zone. Empty = unbounded.
+	From string `json:"from,omitempty"`
+	To   string `json:"to,omitempty"`
 
 	// Body holds entry IDs produced by an on-demand deep search. It is volatile:
 	// never persisted, only valid for the current process session.
@@ -56,13 +63,47 @@ func (f *Filters) Matches(le *ListEntry, opts MatchOpts) bool {
 	if f.Text != "" && !matchesText(le, f.Text) {
 		return false
 	}
+	if !f.inTimeRange(le.Timestamp) {
+		return false
+	}
 	return true
+}
+
+// inTimeRange reports whether ts falls within the From/To bounds (inclusive).
+// A bound that fails to parse is treated as unbounded - defensive only, the
+// WebUI and agent validation both reject malformed values upstream.
+func (f *Filters) inTimeRange(ts time.Time) bool {
+	if f.From == "" && f.To == "" {
+		return true
+	}
+	if f.From != "" {
+		if from, err := ParseFilterTime(f.From); err == nil && ts.Before(from) {
+			return false
+		}
+	}
+	if f.To != "" {
+		if to, err := ParseFilterTime(f.To); err == nil && ts.After(to) {
+			return false
+		}
+	}
+	return true
+}
+
+// ParseFilterTime parses a filter time bound. It accepts an RFC3339 instant
+// (any zone, e.g. what an agent sends) and falls back to a local wall-clock
+// "2006-01-02T15:04" (what the WebUI's datetime-local inputs send) interpreted
+// in the system time zone.
+func ParseFilterTime(s string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+	return time.ParseInLocation("2006-01-02T15:04", s, time.Local)
 }
 
 // Empty reports whether no filter criteria are active (used for the agent
 // exposure warning).
 func (f *Filters) Empty() bool {
-	if f.Text != "" || len(f.Body) > 0 {
+	if f.Text != "" || len(f.Body) > 0 || f.From != "" || f.To != "" {
 		return false
 	}
 	return len(f.Process) == 0 && len(f.Referer) == 0 && len(f.Host) == 0 &&

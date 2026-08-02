@@ -466,6 +466,14 @@ header .stats {
 .filter-type-back:hover { color: var(--accent); }
 .filter-popover-content { padding: var(--sp-8); }
 .filter-popover-content .modal-filter-input { margin-bottom: var(--sp-8); }
+.filter-range-row { display: flex; flex-direction: column; gap: var(--sp-4); }
+.filter-range-row label {
+    color: var(--accent);
+    opacity: 0.75;
+    font-size: var(--fs-sm);
+}
+.filter-range-row .modal-filter-input { margin-bottom: 0; }
+.filter-range-row + .filter-range-row { margin-top: var(--sp-8); }
 .filter-option-list { max-height: var(--popover-list-max-h); overflow-y: auto; }
 .filter-popover-item {
     display: flex;

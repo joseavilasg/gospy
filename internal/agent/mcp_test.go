@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"gospy/internal/history"
 )
@@ -666,5 +667,68 @@ func TestMCP_ListFilterValues(t *testing.T) {
 	unmarshal(callTool(t, h, "list_filter_values", map[string]any{"type": "host"}))
 	if len(payload.Values) != 0 {
 		t.Fatalf("gate off must leak no values, got %+v", payload.Values)
+	}
+}
+
+func TestMCP_ListEntriesTimeRange(t *testing.T) {
+	fs := &mockFilterStore{gate: true, filters: history.Filters{Host: []string{"sonarcloud.io"}, MatchMode: "all"}}
+	h, hist := newTestMCPServer(t, fs)
+
+	now := time.Now()
+	saveAt := func(path string, ts time.Time) {
+		t.Helper()
+		e := &history.Entry{
+			Request: history.RequestRecord{
+				Method:  "GET",
+				URL:     "http://sonarcloud.io" + path,
+				Host:    "sonarcloud.io",
+				Headers: map[string][]string{},
+			},
+			Response:  &history.ResponseRecord{Status: 200},
+			Timestamp: ts,
+		}
+		if err := hist.Save(e); err != nil {
+			t.Fatalf("save: %v", err)
+		}
+	}
+	saveAt("/old", now.Add(-2*time.Hour))
+	saveAt("/recent", now)
+	saveAt("/future", now.Add(2*time.Hour))
+
+	decode := func(resp rpcResponse) ListPage {
+		t.Helper()
+		var page ListPage
+		if err := json.Unmarshal([]byte(resultText(t, resp)), &page); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		return page
+	}
+
+	// From narrows: the old entry drops out.
+	page := decode(callTool(t, h, "list_entries", map[string]any{"from": now.Add(-1 * time.Hour).Format(time.RFC3339), "limit": 50}))
+	if len(page.Entries) != 2 {
+		t.Fatalf("from bound expected 2 entries, got %+v", page.Entries)
+	}
+
+	// To narrows: the future entry drops out.
+	page = decode(callTool(t, h, "list_entries", map[string]any{"to": now.Add(1 * time.Hour).Format(time.RFC3339), "limit": 50}))
+	if len(page.Entries) != 2 {
+		t.Fatalf("to bound expected 2 entries, got %+v", page.Entries)
+	}
+
+	// Combined window keeps only the recent entry.
+	page = decode(callTool(t, h, "list_entries", map[string]any{"from": now.Add(-1 * time.Hour).Format(time.RFC3339), "to": now.Add(1 * time.Hour).Format(time.RFC3339), "limit": 50}))
+	if len(page.Entries) != 1 {
+		t.Fatalf("window expected 1 entry, got %+v", page.Entries)
+	}
+}
+
+func TestMCP_ListEntriesInvalidTimeBound(t *testing.T) {
+	fs := &mockFilterStore{gate: true}
+	h, _ := newTestMCPServer(t, fs)
+	resp := callTool(t, h, "list_entries", map[string]any{"from": "not-a-time"})
+	msg := isErrorText(t, resp)
+	if !strings.Contains(msg, "must be an RFC3339 instant or a local wall-clock") {
+		t.Fatalf("expected a time validation error, got %q", msg)
 	}
 }

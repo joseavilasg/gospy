@@ -30,7 +30,7 @@ func NewServer(scope *Scope, hist HistoryStore, fwd *Forwarder) *Server {
 	ms := server.NewMCPServer("gospy-agent", "1.0.0", server.WithToolCapabilities(true), server.WithInputSchemaValidation())
 
 	ms.AddTool(mcp.NewTool("list_entries",
-		mcp.WithDescription("Lists the entries currently visible to the agent: the agent gate must be enabled and the agent filter profile applies. Optional criteria narrow the visible set - they combine with AND and can never expand the profile scope. Fields that require exact values (host, referer, process, origin, requestContentType, responseContentType, method) accept comma-separated lists (OR) and should be discovered with list_filter_values; path and text are free text; status is an exact HTTP status code. Pagination is mandatory (max 200 entries per page)."),
+		mcp.WithDescription("Lists the entries currently visible to the agent: the agent gate must be enabled and the agent filter profile applies. Optional criteria narrow the visible set - they combine with AND and can never expand the profile scope. Fields that require exact values (host, referer, process, origin, requestContentType, responseContentType, method) accept comma-separated lists (OR) and should be discovered with list_filter_values; path and text are free text; status is an exact HTTP status code; from/to bound the entry timestamp (inclusive). Pagination is mandatory (max 200 entries per page)."),
 		mcp.WithNumber("offset", mcp.DefaultNumber(0), mcp.Min(0)),
 		mcp.WithNumber("limit", mcp.DefaultNumber(50), mcp.Min(1), mcp.Max(200)),
 		mcp.WithString("host", mcp.Description("Exact host match. Discover valid values with list_filter_values('host'). Comma-separated for multiple (OR).")),
@@ -43,6 +43,8 @@ func NewServer(scope *Scope, hist HistoryStore, fwd *Forwarder) *Server {
 		mcp.WithString("requestContentType", mcp.Description("Exact request Content-Type match. Discover valid values with list_filter_values('requestContentType'). Comma-separated for multiple (OR).")),
 		mcp.WithString("responseContentType", mcp.Description("Exact response Content-Type match. Discover valid values with list_filter_values('responseContentType'). Comma-separated for multiple (OR).")),
 		mcp.WithString("text", mcp.Description("Free text: matches the URL, method, status, client process and entry id.")),
+		mcp.WithString("from", mcp.Description("Inclusive lower bound on the entry timestamp. Format: RFC3339 instant ('2026-08-02T14:30:00Z') or local wall-clock ('2026-08-02T14:30', system time zone).")),
+		mcp.WithString("to", mcp.Description("Inclusive upper bound on the entry timestamp. Same formats as 'from'.")),
 	), s.handleListEntries)
 
 	ms.AddTool(mcp.NewTool("get_entry",
@@ -94,10 +96,19 @@ func (s *Server) handleListEntries(ctx context.Context, req mcp.CallToolRequest)
 		RequestContentType:  parseListArg(req.GetString("requestContentType", "")),
 		ResponseContentType: parseListArg(req.GetString("responseContentType", "")),
 		Text:                req.GetString("text", ""),
+		From:                req.GetString("from", ""),
+		To:                  req.GetString("to", ""),
 	}
 	for _, v := range query.Status {
 		if _, err := strconv.Atoi(v); err != nil {
 			return mcp.NewToolResultErrorf("status values must be integer HTTP status codes, got %q", v), nil
+		}
+	}
+	for name, v := range map[string]string{"from": query.From, "to": query.To} {
+		if v != "" {
+			if _, err := history.ParseFilterTime(v); err != nil {
+				return mcp.NewToolResultErrorf("%s must be an RFC3339 instant or a local wall-clock 'YYYY-MM-DDTHH:MM', got %q", name, v), nil
+			}
 		}
 	}
 	page := s.scope.ListEntries(query, req.GetInt("offset", 0), req.GetInt("limit", 50))
