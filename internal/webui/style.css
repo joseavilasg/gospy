@@ -1365,6 +1365,13 @@ pre.body-content {
     flex-shrink: 0;
 }
 
+.agent-badge {
+    color: var(--orange);
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+}
+
 .stream-badge {
     color: var(--green-signal);
     font-size: var(--fs-sm);

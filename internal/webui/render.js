@@ -11,6 +11,7 @@ export const SVG_EDIT = '<svg width="14" height="14" viewBox="0 0 16 16"><path d
 export const SVG_REVERT = '<svg width="14" height="14" viewBox="0 0 16 16"><path d="M3 7h7a3 3 0 010 6H8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><polyline points="6,4 3,7 6,10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 export const SVG_MAXIMIZE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>';
 export const SVG_MINIMIZE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></svg>';
+export const SVG_AGENT = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>';
 
 export function escapeHtml(str) {
     if (!str) return '';
@@ -34,6 +35,10 @@ function buildItemHtml(r) {
         ? '<span class="replay-badge" title="Replayed request">↻</span>'
         : '';
 
+    const agentBadge = r.origin === 'agent'
+        ? `<span class="agent-badge" title="Made by the agent">${SVG_AGENT}</span>`
+        : '';
+
     let actionBadge = '';
     if (r.appliedAction === 'mock' || r.appliedAction === 'response_mock') {
         actionBadge = '<span class="action-badge action-badge-mock" title="Mocked by rule">◉</span>';
@@ -53,7 +58,7 @@ function buildItemHtml(r) {
         ? '<span class="stream-badge" title="Streaming response — live">●</span>'
         : '';
 
-    return `<div class="request-item${selected}" title="${escapeHtml(url)}" data-id="${r.id}"><span class="method method-${method}">${method}</span><span class="url">${escapeHtml(url)}</span>${status != null ? `<span class="status ${statusClass}">${status}</span>` : ''}${actionBadge}${replayBadge}${streamBadge}${processBadge}<span class="time">${time}</span></div>`;
+    return `<div class="request-item${selected}" title="${escapeHtml(url)}" data-id="${r.id}"><span class="method method-${method}">${method}</span><span class="url">${escapeHtml(url)}</span>${status != null ? `<span class="status ${statusClass}">${status}</span>` : ''}${actionBadge}${replayBadge}${agentBadge}${streamBadge}${processBadge}<span class="time">${time}</span></div>`;
 }
 
 export function renderList() {
@@ -494,6 +499,12 @@ export function renderDetail(req, activeTab = 'request') {
                     Replayed by GoSpy - no client process
                 </div>
             </div>
+            ` : req.origin === 'agent' ? `
+            <div class="section-panel">
+                <div class="content-block" style="padding: var(--sp-10); text-align: center; color: var(--text-muted);">
+                    Made by the agent - no client process
+                </div>
+            </div>
             ` : `
             <div class="section-panel">
                 <div class="section-header">
@@ -516,7 +527,7 @@ export function renderDetail(req, activeTab = 'request') {
                         <div class="origin-row">
                             <span class="origin-label">Signed:</span>
                             <span class="origin-value" id="originSigned">
-                                <span class="origin-status analyzing">Analyzing...</span>
+                                ${req.clientPath ? '<span class="origin-status analyzing">Analyzing...</span>' : 'N/A'}
                             </span>
                         </div>
                     </div>
