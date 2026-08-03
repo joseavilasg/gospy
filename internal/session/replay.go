@@ -55,36 +55,39 @@ func (rs *ReplayServer) handleRequest(req *http.Request, ctx *goproxy.ProxyCtx) 
 		url += "?" + req.URL.RawQuery
 	}
 
-	entry, exhausted := rs.session.Match(req.Method, url, rs.cfg)
-	if entry == nil {
-		msg := "no recording for " + req.Method + " " + url
-		if exhausted {
-			LogReplayExhausted(req.Method, url)
-			msg = "recording exhausted for " + req.Method + " " + url
-		} else {
+	entry, result := rs.session.Match(req.Method, url, rs.cfg)
+	switch result {
+	case ResultHit:
+		resp, err := buildResponse(entry, req, rs.session.Dir())
+		if err != nil {
 			LogReplayMiss(req.Method, url)
+			return nil, &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("replay error: " + err.Error())),
+				Request:    req,
+			}
 		}
-		return nil, &http.Response{
-			StatusCode: http.StatusNotFound,
-			Header:     make(http.Header),
-			Body:       io.NopCloser(strings.NewReader(msg)),
-			Request:    req,
-		}
-	}
-
-	resp, err := buildResponse(entry, req, rs.session.Dir())
-	if err != nil {
+		resp.Header.Set("X-Gospy-Replay", "hit")
+		LogReplayHit(req.Method, url, entry.Response.Status)
+		return nil, resp
+	case ResultMiss:
 		LogReplayMiss(req.Method, url)
 		return nil, &http.Response{
-			StatusCode: http.StatusInternalServerError,
-			Header:     make(http.Header),
-			Body:       io.NopCloser(strings.NewReader("replay error: " + err.Error())),
+			StatusCode: http.StatusNotFound,
+			Header:     http.Header{"X-Gospy-Replay": {"miss"}},
+			Body:       io.NopCloser(strings.NewReader("no recording for " + req.Method + " " + url)),
+			Request:    req,
+		}
+	default:
+		LogReplayExhausted(req.Method, url)
+		return nil, &http.Response{
+			StatusCode: http.StatusGone,
+			Header:     http.Header{"X-Gospy-Replay": {"exhausted"}},
+			Body:       io.NopCloser(strings.NewReader("replay exhausted: all recorded requests have been served")),
 			Request:    req,
 		}
 	}
-
-	LogReplayHit(req.Method, url, entry.Response.Status)
-	return nil, resp
 }
 
 func buildResponse(entry *history.Entry, req *http.Request, sessionDir string) (*http.Response, error) {

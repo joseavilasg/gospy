@@ -9,16 +9,45 @@ import (
 	"gospy/internal/history"
 )
 
+// MatchResult describes the outcome of a replay Match.
+type MatchResult int
+
+const (
+	// ResultMiss: no recorded entry matches this request but the session still
+	// has unconsumed entries.
+	ResultMiss MatchResult = iota
+	// ResultHit: a recorded entry matched and was consumed.
+	ResultHit
+	// ResultExhausted: every recorded entry has already been consumed.
+	ResultExhausted
+)
+
+func (r MatchResult) String() string {
+	switch r {
+	case ResultMiss:
+		return "miss"
+	case ResultHit:
+		return "hit"
+	case ResultExhausted:
+		return "exhausted"
+	default:
+		return "unknown"
+	}
+}
+
 // ReplayStore serves recorded responses from a history-format session
-// directory. It keeps per-URL groups with consumption cursors so repeated
-// requests (e.g. live manifest polls) are served in recorded order.
+// directory. It keeps a single global queue of recorded entries in recorded
+// order; each Match scans the queue and consumes the first unconsumed entry
+// that matches, so repeated requests (e.g. live manifest polls) are served in
+// recorded order and the session is exhausted only when the whole queue is
+// consumed.
 type ReplayStore struct {
-	h            *history.Store
-	mu           sync.Mutex
-	groups       map[string][]*history.ListEntry
-	cursors      map[string]int
-	groupsCfg    *MatchConfig
-	groupsIdxLen int
+	h          *history.Store
+	mu         sync.Mutex
+	queue      []*history.ListEntry
+	consumed   []bool
+	queueCfg   *MatchConfig
+	queueIdxLn int
 }
 
 func NewReplayStore(h *history.Store) *ReplayStore {
@@ -27,54 +56,56 @@ func NewReplayStore(h *history.Store) *ReplayStore {
 
 func (r *ReplayStore) Dir() string { return r.h.Dir() }
 
-func (r *ReplayStore) Match(method, rawURL string, cfg *MatchConfig) (*history.Entry, bool) {
+func (r *ReplayStore) Match(method, rawURL string, cfg *MatchConfig) (*history.Entry, MatchResult) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.ensureGroups(cfg)
-	key := matchGroupKey(method, rawURL, cfg)
-	group := r.groups[key]
-	if len(group) == 0 {
-		return nil, false
+	r.ensureQueue(cfg)
+	key := matchKey(method, rawURL, cfg)
+	unconsumed := false
+	for i, le := range r.queue {
+		if r.consumed[i] {
+			continue
+		}
+		unconsumed = true
+		if matchKey(le.Method, le.URL, cfg) == key {
+			r.consumed[i] = true
+			entry, err := r.h.Get(le.ID)
+			if err != nil {
+				return nil, ResultMiss
+			}
+			return entry, ResultHit
+		}
 	}
-	idx := r.cursors[key]
-	if idx >= len(group) {
-		return nil, true
+	if unconsumed {
+		return nil, ResultMiss
 	}
-	le := group[idx]
-	r.cursors[key] = idx + 1
-	entry, err := r.h.Get(le.ID)
-	if err != nil {
-		return nil, false
-	}
-	return entry, false
+	return nil, ResultExhausted
 }
 
-func matchGroupKey(method, rawURL string, cfg *MatchConfig) string {
+func matchKey(method, rawURL string, cfg *MatchConfig) string {
 	return strings.ToLower(method) + "\x00" + normalizeURL(rawURL, cfg)
 }
 
-func (r *ReplayStore) ensureGroups(cfg *MatchConfig) {
+func (r *ReplayStore) ensureQueue(cfg *MatchConfig) {
 	entries := r.h.ListSummary()
-	if r.groups != nil && r.groupsCfg == cfg && r.groupsIdxLen == len(entries) {
+	if r.queue != nil && r.queueCfg == cfg && r.queueIdxLn == len(entries) {
 		return
 	}
-	r.groups = make(map[string][]*history.ListEntry)
+	queue := make([]*history.ListEntry, 0, len(entries))
 	for _, le := range entries {
 		if le.Status == nil || *le.Status == 0 {
 			continue
 		}
-		key := matchGroupKey(le.Method, le.URL, cfg)
-		r.groups[key] = append(r.groups[key], le)
+		queue = append(queue, le)
 	}
-	for key := range r.groups {
-		sort.Slice(r.groups[key], func(i, j int) bool {
-			return r.groups[key][i].Timestamp.Before(r.groups[key][j].Timestamp)
-		})
-	}
-	r.cursors = make(map[string]int)
-	r.groupsCfg = cfg
-	r.groupsIdxLen = len(entries)
+	sort.SliceStable(queue, func(i, j int) bool {
+		return queue[i].Timestamp.Before(queue[j].Timestamp)
+	})
+	r.queue = queue
+	r.consumed = make([]bool, len(queue))
+	r.queueCfg = cfg
+	r.queueIdxLn = len(entries)
 }
 
 func normalizeURL(rawURL string, cfg *MatchConfig) string {

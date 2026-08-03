@@ -45,10 +45,11 @@ func TestMatch(t *testing.T) {
 	rs, h := newReplay(t)
 	base := time.Now()
 	saveTestEntry(t, h, "test-1", "GET", "https://example.com/api/v1/data", 200, base)
+	saveTestEntry(t, h, "test-2", "GET", "https://example.com/api/v2/data", 200, base.Add(time.Second))
 
-	matched, exhausted := rs.Match("GET", "https://example.com/api/v1/data", nil)
-	if exhausted {
-		t.Fatal("unexpected exhausted")
+	matched, result := rs.Match("GET", "https://example.com/api/v1/data", nil)
+	if result != ResultHit {
+		t.Fatalf("expected hit, got %v", result)
 	}
 	if matched == nil {
 		t.Fatal("expected match, got nil")
@@ -60,9 +61,9 @@ func TestMatch(t *testing.T) {
 		t.Fatalf("expected status 200, got %d", matched.Response.Status)
 	}
 
-	miss, _ := rs.Match("POST", "https://example.com/api/v1/data", nil)
-	if miss != nil {
-		t.Fatalf("expected no match for POST, got entry %s", miss.ID)
+	miss, result := rs.Match("POST", "https://example.com/api/v1/data", nil)
+	if miss != nil || result != ResultMiss {
+		t.Fatalf("expected miss for POST, got entry=%v result=%v", miss, result)
 	}
 }
 
@@ -79,37 +80,38 @@ func TestReloadFromDisk(t *testing.T) {
 		t.Fatalf("reload history: %v", err)
 	}
 	rs := NewReplayStore(h2)
-	matched, _ := rs.Match("GET", "https://example.com/api/v1/data", nil)
-	if matched == nil || matched.ID != "test-1" {
-		t.Fatalf("expected match after reload, got %+v", matched)
+	matched, result := rs.Match("GET", "https://example.com/api/v1/data", nil)
+	if matched == nil || matched.ID != "test-1" || result != ResultHit {
+		t.Fatalf("expected hit after reload, got entry=%+v result=%v", matched, result)
 	}
 }
 
 func TestMatchWithIgnoreQueryParams(t *testing.T) {
 	rs, h := newReplay(t)
 	saveTestEntry(t, h, "t1", "GET", "https://api.example.com/endpoint?token=abc&id=123", 200, time.Now())
+	saveTestEntry(t, h, "t2", "GET", "https://api.example.com/endpoint?token=def&id=999", 200, time.Now().Add(time.Second))
 
 	cfg := &MatchConfig{IgnoreQueryParams: []string{"token"}}
 
-	matched, _ := rs.Match("GET", "https://api.example.com/endpoint?token=xyz&id=123", cfg)
-	if matched == nil {
-		t.Fatal("expected match with ignored token param")
+	matched, result := rs.Match("GET", "https://api.example.com/endpoint?token=xyz&id=123", cfg)
+	if matched == nil || result != ResultHit {
+		t.Fatalf("expected hit with ignored token param, got entry=%v result=%v", matched, result)
 	}
 
-	miss, _ := rs.Match("GET", "https://api.example.com/endpoint?token=abc&id=456", cfg)
-	if miss != nil {
-		t.Fatal("expected no match when non-ignored param differs")
+	miss, result := rs.Match("GET", "https://api.example.com/endpoint?token=abc&id=456", cfg)
+	if miss != nil || result != ResultMiss {
+		t.Fatalf("expected miss when non-ignored param differs, got entry=%v result=%v", miss, result)
 	}
 }
 
 func TestEmptyMatch(t *testing.T) {
 	rs, _ := newReplay(t)
-	matched, exhausted := rs.Match("GET", "http://example.com/", nil)
+	matched, result := rs.Match("GET", "http://example.com/", nil)
 	if matched != nil {
 		t.Fatal("expected nil for empty session")
 	}
-	if exhausted {
-		t.Fatal("empty session should not report exhausted")
+	if result != ResultExhausted {
+		t.Fatalf("empty session should be exhausted, got %v", result)
 	}
 }
 
@@ -120,42 +122,72 @@ func TestMatchSequentialRepeatedURL(t *testing.T) {
 		saveTestEntry(t, h, fmt.Sprintf("r%d", i), "GET", "https://live.example.com/master.m3u8", 200, base.Add(time.Duration(i)*time.Second))
 	}
 	for i := 1; i <= 3; i++ {
-		e, exhausted := rs.Match("GET", "https://live.example.com/master.m3u8", nil)
-		if exhausted {
-			t.Fatalf("poll %d: unexpected exhausted", i)
+		e, result := rs.Match("GET", "https://live.example.com/master.m3u8", nil)
+		if result != ResultHit {
+			t.Fatalf("poll %d: expected hit, got %v", i, result)
 		}
 		if e == nil || e.ID != fmt.Sprintf("r%d", i) {
 			t.Fatalf("poll %d: expected entry r%d, got %+v", i, i, e)
 		}
 	}
-	e, exhausted := rs.Match("GET", "https://live.example.com/master.m3u8", nil)
-	if e != nil || !exhausted {
-		t.Fatalf("expected exhausted after consuming all, got entry=%v exhausted=%v", e, exhausted)
+	e, result := rs.Match("GET", "https://live.example.com/master.m3u8", nil)
+	if e != nil || result != ResultExhausted {
+		t.Fatalf("expected exhausted after consuming all, got entry=%v result=%v", e, result)
 	}
 }
 
-func TestMatchSequentialMixed(t *testing.T) {
+func TestMatchGlobalOrder(t *testing.T) {
 	rs, h := newReplay(t)
 	base := time.Now()
-	saveTestEntry(t, h, "seg1", "GET", "https://live.example.com/seg-1.ts", 200, base)
-	saveTestEntry(t, h, "m1", "GET", "https://live.example.com/master.m3u8", 200, base.Add(time.Second))
-	saveTestEntry(t, h, "m2", "GET", "https://live.example.com/master.m3u8", 200, base.Add(2*time.Second))
+	saveTestEntry(t, h, "a1", "GET", "https://live.example.com/master.m3u8", 200, base)
+	saveTestEntry(t, h, "b1", "GET", "https://live.example.com/seg-1.ts", 200, base.Add(time.Second))
+	saveTestEntry(t, h, "a2", "GET", "https://live.example.com/master.m3u8", 200, base.Add(2*time.Second))
+	saveTestEntry(t, h, "b2", "GET", "https://live.example.com/seg-1.ts", 200, base.Add(3*time.Second))
 
-	seg, _ := rs.Match("GET", "https://live.example.com/seg-1.ts", nil)
-	if seg == nil || seg.ID != "seg1" {
-		t.Fatalf("expected seg1, got %+v", seg)
+	expected := []struct {
+		url string
+		id  string
+	}{
+		{"https://live.example.com/master.m3u8", "a1"},
+		{"https://live.example.com/seg-1.ts", "b1"},
+		{"https://live.example.com/master.m3u8", "a2"},
+		{"https://live.example.com/seg-1.ts", "b2"},
 	}
-	seg2, ex := rs.Match("GET", "https://live.example.com/seg-1.ts", nil)
-	if seg2 != nil || !ex {
-		t.Fatalf("unique segment should be exhausted on second request, got entry=%v exhausted=%v", seg2, ex)
+	for _, want := range expected {
+		e, result := rs.Match("GET", want.url, nil)
+		if result != ResultHit {
+			t.Fatalf("expected hit for %s, got %v", want.url, result)
+		}
+		if e == nil || e.ID != want.id {
+			t.Fatalf("expected %s for %s, got %+v", want.id, want.url, e)
+		}
 	}
-	m, _ := rs.Match("GET", "https://live.example.com/master.m3u8", nil)
-	if m == nil || m.ID != "m1" {
-		t.Fatalf("expected m1, got %+v", m)
+
+	_, result := rs.Match("GET", "https://live.example.com/master.m3u8", nil)
+	if result != ResultExhausted {
+		t.Fatalf("expected exhausted after full session, got %v", result)
 	}
-	m2, _ := rs.Match("GET", "https://live.example.com/master.m3u8", nil)
-	if m2 == nil || m2.ID != "m2" {
-		t.Fatalf("expected m2, got %+v", m2)
+}
+
+func TestMatchNotExhaustedWhileUnconsumedRemain(t *testing.T) {
+	rs, h := newReplay(t)
+	base := time.Now()
+	saveTestEntry(t, h, "a1", "GET", "https://live.example.com/master.m3u8", 200, base)
+	saveTestEntry(t, h, "b1", "GET", "https://live.example.com/seg-1.ts", 200, base.Add(time.Second))
+
+	if _, result := rs.Match("GET", "https://live.example.com/master.m3u8", nil); result != ResultHit {
+		t.Fatalf("expected hit for a1, got %v", result)
+	}
+	e, result := rs.Match("GET", "https://live.example.com/master.m3u8", nil)
+	if e != nil || result != ResultMiss {
+		t.Fatalf("exhaustion must be global: b1 remains, got entry=%v result=%v", e, result)
+	}
+	if _, result := rs.Match("GET", "https://live.example.com/seg-1.ts", nil); result != ResultHit {
+		t.Fatalf("expected hit for b1, got %v", result)
+	}
+	_, result = rs.Match("GET", "https://live.example.com/seg-1.ts", nil)
+	if result != ResultExhausted {
+		t.Fatalf("expected exhausted after whole session consumed, got %v", result)
 	}
 }
 
@@ -165,13 +197,13 @@ func TestMatchRetrySequential(t *testing.T) {
 	saveTestEntry(t, h, "e403", "GET", "https://s.example.com/stream", 403, base)
 	saveTestEntry(t, h, "e200", "GET", "https://s.example.com/stream", 200, base.Add(time.Second))
 
-	first, _ := rs.Match("GET", "https://s.example.com/stream", nil)
-	if first == nil || first.Response.Status != 403 {
-		t.Fatalf("first attempt should get the recorded 403, got %+v", first)
+	first, result := rs.Match("GET", "https://s.example.com/stream", nil)
+	if result != ResultHit || first.Response.Status != 403 {
+		t.Fatalf("first attempt should get the recorded 403, got result=%v entry=%+v", result, first)
 	}
-	retry, _ := rs.Match("GET", "https://s.example.com/stream", nil)
-	if retry == nil || retry.Response.Status != 200 {
-		t.Fatalf("retry should get the recorded 200, got %+v", retry)
+	retry, result := rs.Match("GET", "https://s.example.com/stream", nil)
+	if result != ResultHit || retry.Response.Status != 200 {
+		t.Fatalf("retry should get the recorded 200, got result=%v entry=%+v", result, retry)
 	}
 }
 
@@ -181,35 +213,35 @@ func TestMatchSkipsNoStatus(t *testing.T) {
 	saveTestEntry(t, h, "nos", "GET", "https://s.example.com/x", 0, base)
 	saveTestEntry(t, h, "ok", "GET", "https://s.example.com/x", 200, base.Add(time.Second))
 
-	e, _ := rs.Match("GET", "https://s.example.com/x", nil)
-	if e == nil || e.ID != "ok" {
-		t.Fatalf("expected the 200 entry, got %+v", e)
+	e, result := rs.Match("GET", "https://s.example.com/x", nil)
+	if result != ResultHit || e.ID != "ok" {
+		t.Fatalf("expected the 200 entry, got result=%v entry=%+v", result, e)
 	}
-	_, ex := rs.Match("GET", "https://s.example.com/x", nil)
-	if !ex {
-		t.Fatal("after serving the 200, group should be exhausted (Status 0 must not consume a slot)")
+	_, result = rs.Match("GET", "https://s.example.com/x", nil)
+	if result != ResultExhausted {
+		t.Fatalf("Status 0 entry must not consume a slot; after the 200 the session is exhausted, got %v", result)
 	}
 }
 
 func TestMatchRebuildAfterSave(t *testing.T) {
 	rs, h := newReplay(t)
 
-	e, _ := rs.Match("GET", "https://s.example.com/x", nil)
-	if e != nil {
-		t.Fatal("expected nil on empty store")
+	e, result := rs.Match("GET", "https://s.example.com/x", nil)
+	if e != nil || result != ResultExhausted {
+		t.Fatalf("expected exhausted on empty store, got entry=%v result=%v", e, result)
 	}
 	saveTestEntry(t, h, "a1", "GET", "https://s.example.com/x", 200, time.Now())
-	e, ex := rs.Match("GET", "https://s.example.com/x", nil)
-	if e == nil || ex {
-		t.Fatalf("expected match after Save, got entry=%v exhausted=%v", e, ex)
+	e, result = rs.Match("GET", "https://s.example.com/x", nil)
+	if e == nil || result != ResultHit {
+		t.Fatalf("expected hit after Save, got entry=%v result=%v", e, result)
 	}
 }
 
 func TestMatchMethodCaseInsensitive(t *testing.T) {
 	rs, h := newReplay(t)
 	saveTestEntry(t, h, "g1", "get", "https://s.example.com/x", 200, time.Now())
-	e, _ := rs.Match("GET", "https://s.example.com/x", nil)
-	if e == nil || e.ID != "g1" {
+	e, result := rs.Match("GET", "https://s.example.com/x", nil)
+	if e == nil || e.ID != "g1" || result != ResultHit {
 		t.Fatal("method matching should be case-insensitive")
 	}
 }
