@@ -38,11 +38,14 @@ func main() {
 	uiAddr := flag.String("ui", ":8081", "Web UI listen address")
 	dataDir := flag.String("dir", ".gospy", "Data directory")
 	noSystemProxy := flag.Bool("no-system-proxy", false, "Don't auto-configure Windows system proxy")
+	systemProxy := flag.Bool("system-proxy", false, "Enable Windows system proxy even in record mode")
 	resetProxy := flag.Bool("reset-proxy", false, "Restore system proxy to original settings (after crash)")
 	ignoreHosts := flag.String("ignore", "", "Comma-separated hosts to ignore (e.g. \"host1.com,host2.com\")")
 	focusHosts := flag.String("focus", "", "Comma-separated hosts to focus on (e.g. \"host1.com,host2.com\")")
 	sessionDir := flag.String("session", "", "Session directory for recording/replay")
 	matchConfig := flag.String("match-config", "", "Match configuration file for replay")
+	bindIface := flag.String("bind-iface", "", "Bind proxy outbound connections to a network interface (SO_BINDTODEVICE, Linux)")
+	dnsServer := flag.String("dns", "", "Custom DNS server for proxy outbound; auto-detected from --bind-iface when empty")
 	flag.Parse()
 
 	fmt.Println(`
@@ -135,13 +138,20 @@ func main() {
 		rec.Subscribe(hist)
 		proxy.LogInfo(fmt.Sprintf("Recording session to %s", *sessionDir))
 	}
+	if mode == "record" && !*systemProxy {
+		*noSystemProxy = true
+	}
 
 	filterStore := webui.NewFilterStore(*dataDir + "/filters.json")
 	if err := filterStore.Load(); err != nil {
 		proxy.LogError(fmt.Sprintf("Failed to load filters: %v", err))
 	}
 
-	srv := proxy.NewServer(*proxyAddr, *uiAddr, caCert, hist, ruleEngine, ignoreStore, *dataDir)
+	srv, err := proxy.NewServer(*proxyAddr, *uiAddr, caCert, hist, ruleEngine, ignoreStore, *dataDir, *bindIface, *dnsServer)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error starting proxy: %v\n", err)
+		os.Exit(1)
+	}
 
 	proxy.LogInfo(fmt.Sprintf("Proxy listening on %s", *proxyAddr))
 

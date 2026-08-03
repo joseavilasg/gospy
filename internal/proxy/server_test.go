@@ -4,11 +4,57 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/elazarl/goproxy"
+
+	"gospy/internal/ca"
+	"gospy/internal/history"
+	"gospy/internal/rules"
 )
+
+// TestNewServer_InvalidBindIface verifies that a bad --bind-iface fails startup
+// with a clear error instead of silently falling back to unbound dials.
+func TestNewServer_InvalidBindIface(t *testing.T) {
+	dir := t.TempDir()
+	caCert, err := ca.New(filepath.Join(dir, "ca"))
+	if err != nil {
+		t.Fatalf("ca.New: %v", err)
+	}
+	hist, err := history.New(filepath.Join(dir, "history"))
+	if err != nil {
+		t.Fatalf("history.New: %v", err)
+	}
+
+	_, err = NewServer(":0", ":0", caCert, hist, rules.NewEngine(), NewIgnoreStore(filepath.Join(dir, "ignore.json")), dir, "gospy-no-such-interface", "")
+	if err == nil {
+		t.Fatal("NewServer with invalid bind iface = nil error, want error")
+	}
+}
+
+// TestNewServer_CustomDNS verifies the flags reach the outbound transport:
+// a custom DNS server alone (no iface) must succeed on any platform.
+func TestNewServer_CustomDNS(t *testing.T) {
+	dir := t.TempDir()
+	caCert, err := ca.New(filepath.Join(dir, "ca"))
+	if err != nil {
+		t.Fatalf("ca.New: %v", err)
+	}
+	hist, err := history.New(filepath.Join(dir, "history"))
+	if err != nil {
+		t.Fatalf("history.New: %v", err)
+	}
+
+	srv, err := NewServer(":0", ":0", caCert, hist, rules.NewEngine(), NewIgnoreStore(filepath.Join(dir, "ignore.json")), dir, "", "8.8.8.8")
+	if err != nil {
+		t.Fatalf("NewServer with custom DNS error: %v", err)
+	}
+	if srv == nil {
+		t.Fatal("NewServer with custom DNS = nil server")
+	}
+}
 
 // TestStreamingHeadersFlushedImmediately reproduces the SSE failure seen with
 // the MCP Inspector: an upstream stream that sends headers but holds the body

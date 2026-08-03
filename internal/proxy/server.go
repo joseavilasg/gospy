@@ -9,6 +9,8 @@ import (
 
 	"gospy/internal/ca"
 	"gospy/internal/history"
+	"gospy/internal/logging"
+	"gospy/internal/netbind"
 	"gospy/internal/rules"
 
 	"github.com/elazarl/goproxy"
@@ -23,9 +25,27 @@ type Server struct {
 	sigCache    *SignatureCache
 }
 
-func NewServer(addr string, uiAddr string, caCert *ca.CA, hist *history.Store, ruleEngine *rules.Engine, ignoreStore *IgnoreStore, dataDir string) *Server {
+func NewServer(addr string, uiAddr string, caCert *ca.CA, hist *history.Store, ruleEngine *rules.Engine, ignoreStore *IgnoreStore, dataDir string, bindIface string, dns string) (*Server, error) {
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.Verbose = false
+
+	if bindIface != "" || dns != "" {
+		d, err := netbind.BuildDialer(bindIface, dns, logging.Log)
+		if err != nil {
+			return nil, err
+		}
+		if d != nil {
+			// Mirror goproxy's default outbound transport (v1.8.4:
+			// TLSClientConfig=skipVerify, Proxy=ProxyFromEnvironment) with the
+			// bound DialContext swapped in. Constructed explicitly instead of
+			// copying http.Transport (contains a sync.Mutex; vet-clean).
+			proxy.Tr = &http.Transport{
+				TLSClientConfig: proxy.Tr.TLSClientConfig,
+				Proxy:           proxy.Tr.Proxy,
+				DialContext:     d.DialContext,
+			}
+		}
+	}
 
 	caTLSCert := caCert.TLSCert()
 	goproxy.MitmConnect = &goproxy.ConnectAction{
@@ -60,7 +80,7 @@ func NewServer(addr string, uiAddr string, caCert *ca.CA, hist *history.Store, r
 		addr:        addr,
 		resolver:    resolver,
 		sigCache:    sigCache,
-	}
+	}, nil
 }
 
 func (s *Server) ListenAndServe() error {
