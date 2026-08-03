@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -39,7 +40,7 @@ func TestSaveAndMatch(t *testing.T) {
 		t.Fatalf("NewOrLoad second: %v", err)
 	}
 
-	matched := s2.Match("GET", "https://example.com/api/v1/data", nil)
+	matched, _ := s2.Match("GET", "https://example.com/api/v1/data", nil)
 	if matched == nil {
 		t.Fatal("expected match, got nil")
 	}
@@ -50,7 +51,7 @@ func TestSaveAndMatch(t *testing.T) {
 		t.Fatalf("expected status 200, got %d", matched.Response.Status)
 	}
 
-	miss := s2.Match("POST", "https://example.com/api/v1/data", nil)
+	miss, _ := s2.Match("POST", "https://example.com/api/v1/data", nil)
 	if miss != nil {
 		t.Fatalf("expected no match for POST, got entry %s", miss.ID)
 	}
@@ -73,12 +74,12 @@ func TestMatchWithIgnoreQueryParams(t *testing.T) {
 
 	cfg := &MatchConfig{IgnoreQueryParams: []string{"token"}}
 
-	matched := s.Match("GET", "https://api.example.com/endpoint?token=xyz&id=123", cfg)
+	matched, _ := s.Match("GET", "https://api.example.com/endpoint?token=xyz&id=123", cfg)
 	if matched == nil {
 		t.Fatal("expected match with ignored token param")
 	}
 
-	miss := s.Match("GET", "https://api.example.com/endpoint?token=abc&id=456", cfg)
+	miss, _ := s.Match("GET", "https://api.example.com/endpoint?token=abc&id=456", cfg)
 	if miss != nil {
 		t.Fatal("expected no match when non-ignored param differs")
 	}
@@ -110,9 +111,125 @@ func TestEmptyMatch(t *testing.T) {
 	dir := t.TempDir()
 
 	s, _ := NewOrLoad(dir)
-	matched := s.Match("GET", "http://example.com/", nil)
+	matched, _ := s.Match("GET", "http://example.com/", nil)
 	if matched != nil {
 		t.Fatal("expected nil for empty session")
+	}
+}
+
+func TestMatchSequentialRepeatedURL(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := NewOrLoad(dir)
+	base := time.Now()
+	for i := 1; i <= 3; i++ {
+		s.SaveEntry(&Entry{
+			ID:        fmt.Sprintf("r%d", i),
+			Timestamp: base.Add(time.Duration(i) * time.Second),
+			Request: ReqRecord{
+				Method: "GET",
+				URL:    "https://live.example.com/master.m3u8",
+				Host:   "live.example.com",
+			},
+			Response: RespRecord{Status: 200},
+		})
+	}
+	for i := 1; i <= 3; i++ {
+		e, exhausted := s.Match("GET", "https://live.example.com/master.m3u8", nil)
+		if exhausted {
+			t.Fatalf("poll %d: unexpected exhausted", i)
+		}
+		if e == nil || e.ID != fmt.Sprintf("r%d", i) {
+			t.Fatalf("poll %d: expected entry r%d, got %+v", i, i, e)
+		}
+	}
+	e, exhausted := s.Match("GET", "https://live.example.com/master.m3u8", nil)
+	if e != nil || !exhausted {
+		t.Fatalf("expected exhausted after consuming all, got entry=%v exhausted=%v", e, exhausted)
+	}
+}
+
+func TestMatchSequentialMixed(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := NewOrLoad(dir)
+	base := time.Now()
+	s.SaveEntry(&Entry{ID: "seg1", Timestamp: base, Request: ReqRecord{Method: "GET", URL: "https://live.example.com/seg-1.ts", Host: "live.example.com"}, Response: RespRecord{Status: 200}})
+	s.SaveEntry(&Entry{ID: "m1", Timestamp: base.Add(time.Second), Request: ReqRecord{Method: "GET", URL: "https://live.example.com/master.m3u8", Host: "live.example.com"}, Response: RespRecord{Status: 200}})
+	s.SaveEntry(&Entry{ID: "m2", Timestamp: base.Add(2 * time.Second), Request: ReqRecord{Method: "GET", URL: "https://live.example.com/master.m3u8", Host: "live.example.com"}, Response: RespRecord{Status: 200}})
+
+	seg, _ := s.Match("GET", "https://live.example.com/seg-1.ts", nil)
+	if seg == nil || seg.ID != "seg1" {
+		t.Fatalf("expected seg1, got %+v", seg)
+	}
+	seg2, ex := s.Match("GET", "https://live.example.com/seg-1.ts", nil)
+	if seg2 != nil || !ex {
+		t.Fatalf("unique segment should be exhausted on second request, got entry=%v exhausted=%v", seg2, ex)
+	}
+	m, _ := s.Match("GET", "https://live.example.com/master.m3u8", nil)
+	if m == nil || m.ID != "m1" {
+		t.Fatalf("expected m1, got %+v", m)
+	}
+	m2, _ := s.Match("GET", "https://live.example.com/master.m3u8", nil)
+	if m2 == nil || m2.ID != "m2" {
+		t.Fatalf("expected m2, got %+v", m2)
+	}
+}
+
+func TestMatchRetrySequential(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := NewOrLoad(dir)
+	base := time.Now()
+	s.SaveEntry(&Entry{ID: "e403", Timestamp: base, Request: ReqRecord{Method: "GET", URL: "https://s.example.com/stream", Host: "s.example.com"}, Response: RespRecord{Status: 403}})
+	s.SaveEntry(&Entry{ID: "e200", Timestamp: base.Add(time.Second), Request: ReqRecord{Method: "GET", URL: "https://s.example.com/stream", Host: "s.example.com"}, Response: RespRecord{Status: 200}})
+
+	first, _ := s.Match("GET", "https://s.example.com/stream", nil)
+	if first == nil || first.Response.Status != 403 {
+		t.Fatalf("first attempt should get the recorded 403, got %+v", first)
+	}
+	retry, _ := s.Match("GET", "https://s.example.com/stream", nil)
+	if retry == nil || retry.Response.Status != 200 {
+		t.Fatalf("retry should get the recorded 200, got %+v", retry)
+	}
+}
+
+func TestMatchSkipsNoStatus(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := NewOrLoad(dir)
+	base := time.Now()
+	s.SaveEntry(&Entry{ID: "nos", Timestamp: base, Request: ReqRecord{Method: "GET", URL: "https://s.example.com/x", Host: "s.example.com"}, Response: RespRecord{}})
+	s.SaveEntry(&Entry{ID: "ok", Timestamp: base.Add(time.Second), Request: ReqRecord{Method: "GET", URL: "https://s.example.com/x", Host: "s.example.com"}, Response: RespRecord{Status: 200}})
+
+	e, _ := s.Match("GET", "https://s.example.com/x", nil)
+	if e == nil || e.ID != "ok" {
+		t.Fatalf("expected the 200 entry, got %+v", e)
+	}
+	_, ex := s.Match("GET", "https://s.example.com/x", nil)
+	if !ex {
+		t.Fatal("after serving the 200, group should be exhausted (Status 0 must not consume a slot)")
+	}
+}
+
+func TestMatchRebuildAfterSave(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := NewOrLoad(dir)
+
+	e, _ := s.Match("GET", "https://s.example.com/x", nil)
+	if e != nil {
+		t.Fatal("expected nil on empty store")
+	}
+	s.SaveEntry(&Entry{ID: "a1", Timestamp: time.Now(), Request: ReqRecord{Method: "GET", URL: "https://s.example.com/x", Host: "s.example.com"}, Response: RespRecord{Status: 200}})
+	e, ex := s.Match("GET", "https://s.example.com/x", nil)
+	if e == nil || ex {
+		t.Fatalf("expected match after SaveEntry, got entry=%v exhausted=%v", e, ex)
+	}
+}
+
+func TestMatchMethodCaseInsensitive(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := NewOrLoad(dir)
+	s.SaveEntry(&Entry{ID: "g1", Timestamp: time.Now(), Request: ReqRecord{Method: "get", URL: "https://s.example.com/x", Host: "s.example.com"}, Response: RespRecord{Status: 200}})
+	e, _ := s.Match("GET", "https://s.example.com/x", nil)
+	if e == nil || e.ID != "g1" {
+		t.Fatal("method matching should be case-insensitive")
 	}
 }
 

@@ -54,13 +54,19 @@ func (rs *ReplayServer) handleRequest(req *http.Request, ctx *goproxy.ProxyCtx) 
 		url += "?" + req.URL.RawQuery
 	}
 
-	entry := rs.session.Match(req.Method, url, rs.cfg)
+	entry, exhausted := rs.session.Match(req.Method, url, rs.cfg)
 	if entry == nil {
-		LogReplayMiss(req.Method, url)
+		msg := "no recording for " + req.Method + " " + url
+		if exhausted {
+			LogReplayExhausted(req.Method, url)
+			msg = "recording exhausted for " + req.Method + " " + url
+		} else {
+			LogReplayMiss(req.Method, url)
+		}
 		return nil, &http.Response{
 			StatusCode: http.StatusNotFound,
 			Header:     make(http.Header),
-			Body:       io.NopCloser(strings.NewReader("no recording for " + req.Method + " " + url)),
+			Body:       io.NopCloser(strings.NewReader(msg)),
 			Request:    req,
 		}
 	}
@@ -119,4 +125,8 @@ func LogReplayHit(method, url string, status int) {
 
 func LogReplayMiss(method, url string) {
 	fmt.Printf("[REPLAY] MISS %s %s\n", method, url)
+}
+
+func LogReplayExhausted(method, url string) {
+	fmt.Printf("[REPLAY] EXHAUSTED %s %s\n", method, url)
 }

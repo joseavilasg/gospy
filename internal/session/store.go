@@ -22,10 +22,14 @@ type IndexEntry struct {
 }
 
 type Store struct {
-	dir  string
-	mu   sync.RWMutex
-	idx  []*IndexEntry
-	byID map[string]*Entry
+	dir          string
+	mu           sync.RWMutex
+	idx          []*IndexEntry
+	byID         map[string]*Entry
+	groups       map[string][]*IndexEntry
+	cursors      map[string]int
+	groupsCfg    *MatchConfig
+	groupsIdxLen int
 }
 
 func NewOrLoad(dir string) (*Store, error) {
@@ -121,28 +125,52 @@ func (s *Store) SaveEntry(e *Entry) error {
 	return s.persistIndex()
 }
 
-func (s *Store) Match(method, rawURL string, cfg *MatchConfig) *Entry {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+func (s *Store) Match(method, rawURL string, cfg *MatchConfig) (*Entry, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	normalizedURL := normalizeURL(rawURL, cfg)
+	s.ensureGroups(cfg)
+	key := matchGroupKey(method, rawURL, cfg)
+	group := s.groups[key]
+	if len(group) == 0 {
+		return nil, false
+	}
+	idx := s.cursors[key]
+	if idx >= len(group) {
+		return nil, true
+	}
+	ie := group[idx]
+	s.cursors[key] = idx + 1
+	if e, ok := s.byID[ie.ID]; ok {
+		return e, false
+	}
+	return nil, false
+}
 
+func matchGroupKey(method, rawURL string, cfg *MatchConfig) string {
+	return strings.ToLower(method) + "\x00" + normalizeURL(rawURL, cfg)
+}
+
+func (s *Store) ensureGroups(cfg *MatchConfig) {
+	if s.groups != nil && s.groupsCfg == cfg && s.groupsIdxLen == len(s.idx) {
+		return
+	}
+	s.groups = make(map[string][]*IndexEntry)
 	for _, ie := range s.idx {
-		if ie.Method != "" && !strings.EqualFold(ie.Method, method) {
-			continue
-		}
 		if ie.Status == 0 {
 			continue
 		}
-		candURL := normalizeURL(ie.URL, cfg)
-		if candURL != normalizedURL {
-			continue
-		}
-		if e, ok := s.byID[ie.ID]; ok {
-			return e
-		}
+		key := matchGroupKey(ie.Method, ie.URL, cfg)
+		s.groups[key] = append(s.groups[key], ie)
 	}
-	return nil
+	for key := range s.groups {
+		sort.Slice(s.groups[key], func(i, j int) bool {
+			return s.groups[key][i].Timestamp.Before(s.groups[key][j].Timestamp)
+		})
+	}
+	s.cursors = make(map[string]int)
+	s.groupsCfg = cfg
+	s.groupsIdxLen = len(s.idx)
 }
 
 func (s *Store) GetEntry(id string) *Entry {
