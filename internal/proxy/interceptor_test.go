@@ -855,3 +855,26 @@ func flatten(data []byte) ([]byte, error) {
 	}
 	return buf.Bytes(), nil
 }
+
+func TestInterceptor_SetHistoryStore(t *testing.T) {
+	ic, store1 := newTestInterceptor(t, nil)
+	store2, err := history.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("history.New: %v", err)
+	}
+	ic.SetHistoryStore(store2)
+
+	req := newRequest("GET", "http://example.com/api")
+	ctx := newProxyCtx(req)
+	returnedReq, resp := ic.HandleRequest(req, ctx)
+	if returnedReq != req || resp != nil {
+		t.Fatal("HandleRequest must passthrough a request with no matching rule")
+	}
+
+	if got := store1.ListSummary(); len(got) != 0 {
+		t.Errorf("pre-rotation store captured %d entries, want 0", len(got))
+	}
+	if got := store2.ListSummary(); len(got) != 1 {
+		t.Errorf("rotated store captured %d entries, want 1", len(got))
+	}
+}

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"sort"
+	"sync/atomic"
 
 	"gospy/internal/history"
 )
@@ -24,14 +25,27 @@ type FilterStore interface {
 // profile applies. Agent-origin entries are filtered exactly like any other
 // entry - there is no origin bypass.
 type Scope struct {
-	hist    HistoryStore
+	histVal atomic.Value // HistoryStore
 	filter  FilterStore
 	ignored history.HostMatcher
 	focused history.HostMatcher
 }
 
 func NewScope(hist HistoryStore, filter FilterStore, ignored, focused history.HostMatcher) *Scope {
-	return &Scope{hist: hist, filter: filter, ignored: ignored, focused: focused}
+	sc := &Scope{filter: filter, ignored: ignored, focused: focused}
+	sc.histVal.Store(hist)
+	return sc
+}
+
+// hist returns the current history store. Swapped atomically on session
+// rotation so the MCP always serves the active session.
+func (sc *Scope) hist() HistoryStore {
+	return sc.histVal.Load().(HistoryStore)
+}
+
+// SetHistoryStore rotates the session store the MCP scope reads.
+func (sc *Scope) SetHistoryStore(h HistoryStore) {
+	sc.histVal.Store(h)
 }
 
 // MCP pagination bounds: default page size 50, hard cap 200 (non-bypassable).
@@ -59,7 +73,7 @@ func (sc *Scope) GateEnabled() bool {
 }
 
 func (sc *Scope) base() (all []*history.ListEntry, filters history.Filters, opts history.MatchOpts) {
-	all = sc.hist.ListSummary()
+	all = sc.hist().ListSummary()
 	filters, focusEnabled, _ := sc.filter.SnapshotAgent()
 	opts = history.MatchOpts{
 		Ignored:      sc.ignored,

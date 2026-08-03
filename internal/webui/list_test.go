@@ -24,7 +24,7 @@ func saveTestEntry(t *testing.T, s *Server, host, method string) *history.Entry 
 			Headers: map[string][]string{},
 		},
 	}
-	if err := s.history.Save(entry); err != nil {
+	if err := s.hist().Save(entry); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	return entry
@@ -58,7 +58,7 @@ func TestListRequests_Pagination(t *testing.T) {
 			},
 			Timestamp: time.Unix(0, int64(i+1)), // i=14 is the newest
 		}
-		if err := s.history.Save(entry); err != nil {
+		if err := s.hist().Save(entry); err != nil {
 			t.Fatalf("Save %d: %v", i, err)
 		}
 	}
@@ -306,7 +306,7 @@ func TestListRequests_DiffRemovedOnContentTypeChange(t *testing.T) {
 		Status:  200,
 		Headers: map[string][]string{"Content-Type": {"text/html; charset=utf-8"}},
 	}
-	if err := s.history.Update(e); err != nil {
+	if err := s.hist().Update(e); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	diff1 := getListResponse(t, s, "/api/requests?since="+time.Now().Add(-time.Hour).Format(time.RFC3339Nano)+"&version="+strconv.Itoa(baseVersion))
@@ -319,7 +319,7 @@ func TestListRequests_DiffRemovedOnContentTypeChange(t *testing.T) {
 		Status:  200,
 		Headers: map[string][]string{"Content-Type": {"application/json"}},
 	}
-	if err := s.history.Update(e); err != nil {
+	if err := s.hist().Update(e); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	diff2 := getListResponse(t, s, "/api/requests?since="+time.Now().Add(-time.Hour).Format(time.RFC3339Nano)+"&version="+strconv.Itoa(baseVersion))
@@ -397,7 +397,7 @@ func TestListRequests_DiffUpsertsAlwaysPresent(t *testing.T) {
 		Status:  200,
 		Headers: map[string][]string{"Content-Type": {"text/html"}},
 	}
-	if err := s.history.Update(e); err != nil {
+	if err := s.hist().Update(e); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	getListResponse(t, s, "/api/requests?since=2000-01-01T00:00:00Z&version="+strconv.Itoa(baseVersion))
@@ -410,7 +410,7 @@ func TestListRequests_DiffUpsertsAlwaysPresent(t *testing.T) {
 		Status:  200,
 		Headers: map[string][]string{"Content-Type": {"application/json"}},
 	}
-	if err := s.history.Update(e); err != nil {
+	if err := s.hist().Update(e); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	w2 := httptest.NewRecorder()
@@ -484,7 +484,7 @@ func TestSearchCommitsBodyIDs(t *testing.T) {
 				Body:    respBody,
 			},
 		}
-		if err := s.history.Save(e); err != nil {
+		if err := s.hist().Save(e); err != nil {
 			t.Fatalf("Save: %v", err)
 		}
 		return e
@@ -570,7 +570,7 @@ func TestListRequests_AgentViewSwitchesActiveProfile(t *testing.T) {
 		},
 		Origin: "agent",
 	}
-	if err := s.history.Save(agent); err != nil {
+	if err := s.hist().Save(agent); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	saveTestEntry(t, s, "other.com", "POST")
@@ -665,7 +665,7 @@ func TestListRequests_AgentViewFiltersAgentOrigin(t *testing.T) {
 		},
 		Origin: "agent",
 	}
-	if err := s.history.Save(agent); err != nil {
+	if err := s.hist().Save(agent); err != nil {
 		t.Fatalf("Save agent: %v", err)
 	}
 	browser := &history.Entry{
@@ -676,7 +676,7 @@ func TestListRequests_AgentViewFiltersAgentOrigin(t *testing.T) {
 			Headers: map[string][]string{},
 		},
 	}
-	if err := s.history.Save(browser); err != nil {
+	if err := s.hist().Save(browser); err != nil {
 		t.Fatalf("Save browser: %v", err)
 	}
 

@@ -89,15 +89,30 @@ func main() {
 	fmt.Println(caCert.InstallInstructions())
 
 	recordSessionDir := ""
-	histDir := *dataDir + "/history"
-	if mode == "record" && *sessionDir != "" {
-		recordSessionDir = session.ResolveDir(*sessionDir, *dataDir)
-		histDir = recordSessionDir
-	}
-	hist, err := history.New(histDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error initializing history: %v\n", err)
-		os.Exit(1)
+	autoSession := mode == "record" && *sessionDir == ""
+	var hist *history.Store
+	if autoSession {
+		pendingDir := filepath.Join(*dataDir, "sessions", "_pending")
+		if err := os.RemoveAll(pendingDir); err != nil {
+			fmt.Fprintf(os.Stderr, "Error clearing pending sessions: %v\n", err)
+			os.Exit(1)
+		}
+		hist, err = history.New(pendingDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error initializing history: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		histDir := *dataDir + "/history"
+		if mode == "record" {
+			recordSessionDir = session.ResolveDir(*sessionDir, *dataDir)
+			histDir = recordSessionDir
+		}
+		hist, err = history.New(histDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error initializing history: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	rulesStore := rules.NewStore(*dataDir + "/rules.json")
@@ -142,6 +157,9 @@ func main() {
 	if mode == "record" && recordSessionDir != "" {
 		proxy.LogInfo(fmt.Sprintf("Recording session to %s", recordSessionDir))
 	}
+	if autoSession {
+		proxy.LogInfo("Waiting for session start: POST http://localhost:8081/api/session/start")
+	}
 	if mode == "record" && !*systemProxy {
 		*noSystemProxy = true
 	}
@@ -159,9 +177,28 @@ func main() {
 
 	proxy.LogInfo(fmt.Sprintf("Proxy listening on %s", *proxyAddr))
 
+	webSrv := webui.NewServer(*uiAddr, hist, ignoreStore, focusStore, rulesStore, ruleEngine, *proxyAddr, srv.Resolver(), srv.SigCache(), filterStore)
+	srv.SetStreamNotifier(webSrv.StreamNotifier())
+
+	var mcpServer *agent.Server
+	if autoSession {
+		sessionMgr := session.NewManager(filepath.Join(*dataDir, "sessions"))
+		webSrv.SetSessionStarter(func(name string) (string, string, error) {
+			dir, store, err := sessionMgr.Start(name)
+			if err != nil {
+				return "", "", err
+			}
+			srv.SetHistoryStore(store)
+			webSrv.SetHistoryStore(store)
+			if mcpServer != nil {
+				mcpServer.SetHistoryStore(store)
+			}
+			proxy.LogInfo(fmt.Sprintf("Recording session started: %s", dir))
+			return dir, filepath.Base(dir), nil
+		})
+	}
+
 	go func() {
-		webSrv := webui.NewServer(*uiAddr, hist, ignoreStore, focusStore, rulesStore, ruleEngine, *proxyAddr, srv.Resolver(), srv.SigCache(), filterStore)
-		srv.SetStreamNotifier(webSrv.StreamNotifier())
 		if err := webSrv.ListenAndServe(); err != nil {
 			proxy.LogError(fmt.Sprintf("Web UI error: %v", err))
 		}
@@ -173,7 +210,7 @@ func main() {
 	if err != nil {
 		proxy.LogError(fmt.Sprintf("Agent forwarder error: %v", err))
 	} else {
-		mcpServer := agent.NewServer(agent.NewScope(hist, filterStore, ignoreStore, focusStore), hist, agentFwd)
+		mcpServer = agent.NewServer(agent.NewScope(hist, filterStore, ignoreStore, focusStore), hist, agentFwd)
 		mux := http.NewServeMux()
 		mux.Handle("/mcp", mcpServer.Handler())
 		go func() {

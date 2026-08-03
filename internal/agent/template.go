@@ -43,7 +43,7 @@ func (sc *Scope) buildTemplateRequest(spec RequestSpec) (*builtRequest, error) {
 	if !sc.IsVisible(spec.Template) {
 		return nil, fmt.Errorf("template %s is not in the agent's visible set", spec.Template)
 	}
-	entry, err := sc.hist.Get(spec.Template)
+	entry, err := sc.hist().Get(spec.Template)
 	if err != nil {
 		return nil, fmt.Errorf("load template: %w", err)
 	}
@@ -103,7 +103,7 @@ func (sc *Scope) buildTemplateRequest(spec RequestSpec) (*builtRequest, error) {
 // compressed bytes), with a decoded-text fallback for legacy entries.
 func (sc *Scope) templateBody(entry *history.Entry) ([]byte, error) {
 	if entry.Request.BodyFile != "" {
-		data, err := os.ReadFile(filepath.Join(sc.hist.Dir(), "bin", entry.Request.BodyFile))
+		data, err := os.ReadFile(filepath.Join(sc.hist().Dir(), "bin", entry.Request.BodyFile))
 		if err != nil {
 			return nil, fmt.Errorf("read template body: %w", err)
 		}

@@ -264,3 +264,25 @@ func TestScope_FilterValuesGateOff(t *testing.T) {
 		t.Fatalf("FilterValues with gate off = %+v, want empty", v)
 	}
 }
+
+func TestScope_SetHistoryStoreRotation(t *testing.T) {
+	hist1 := newTestHistory(t)
+	saveTestEntry(t, hist1, "a.com", "", 200)
+	sc := NewScope(hist1, &mockFilterStore{gate: true}, nil, nil)
+
+	if page := sc.ListEntries(history.Filters{}, 0, 10); page.VisibleCount != 1 {
+		t.Fatalf("pre-rotation VisibleCount = %d, want 1", page.VisibleCount)
+	}
+
+	hist2 := newTestHistory(t)
+	saveTestEntry(t, hist2, "b.com", "", 200)
+	sc.SetHistoryStore(hist2)
+
+	page := sc.ListEntries(history.Filters{}, 0, 10)
+	if page.VisibleCount != 1 || len(page.Entries) != 1 {
+		t.Fatalf("post-rotation page = %+v, want exactly the new store's entry", page)
+	}
+	if page.Entries[0].Host != "b.com" {
+		t.Errorf("post-rotation entry host = %q, want b.com", page.Entries[0].Host)
+	}
+}

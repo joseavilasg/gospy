@@ -94,6 +94,11 @@ func (s *Server) SetStreamNotifier(fn func(entryID string, size int64, done bool
 	s.interceptor.StreamNotifier = fn
 }
 
+// SetHistoryStore rotates the capture target to a new session store.
+func (s *Server) SetHistoryStore(h *history.Store) {
+	s.interceptor.SetHistoryStore(h)
+}
+
 // streamingResponseWriter flushes the response headers immediately after
 // WriteHeader for streaming responses. Without the explicit Flush, goproxy's
 // headers sit in the connection buffer until the first body chunk is written

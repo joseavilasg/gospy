@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -78,7 +79,7 @@ type FocusChecker interface {
 }
 
 type Server struct {
-	history     *history.Store
+	history     atomic.Pointer[history.Store]
 	ignoreStore IgnoreChecker
 	focusStore  FocusChecker
 	rulesStore  *rules.Store
@@ -95,8 +96,13 @@ type Server struct {
 	nonIgnoredTotal int
 	searchToken     uint64
 
-	streamHub *streamHub
+	streamHub      *streamHub
+	sessionStarter SessionStarter
 }
+
+// SessionStarter creates a recording session and rotates every consumer to it.
+// Registered by main in record auto mode; nil otherwise.
+type SessionStarter func(name string) (sessionDir, sessionName string, err error)
 
 // maxBodyLen caps the body the detail endpoint serves in a single response.
 // Streaming captures store the full body in the body file; the UI preview
@@ -116,7 +122,6 @@ type SignatureChecker interface {
 
 func NewServer(addr string, h *history.Store, ignore IgnoreChecker, focus FocusChecker, rulesStore *rules.Store, engine *rules.Engine, proxyAddr string, resolver ProcessResolver, sigCache SignatureChecker, filterStore *FilterStore) *Server {
 	s := &Server{
-		history:     h,
 		ignoreStore: ignore,
 		focusStore:  focus,
 		rulesStore:  rulesStore,
@@ -129,19 +134,51 @@ func NewServer(addr string, h *history.Store, ignore IgnoreChecker, focus FocusC
 		lastVisible: make(map[string]bool),
 		streamHub:   newStreamHub(h, maxBodyLen),
 	}
+	s.history.Store(h)
+	s.attachStore(h)
 	s.recomputeTotal()
+	return s
+}
+
+// hist returns the current history store. The pointer is swapped atomically
+// on session rotation so concurrent handlers serve the active session.
+func (s *Server) hist() *history.Store {
+	return s.history.Load()
+}
+
+// attachStore subscribes the total counter to a store's save events. Called
+// for the initial store and for every store on session rotation.
+func (s *Server) attachStore(h *history.Store) {
 	h.OnSave(func(e *history.Entry) {
-		if !ignore.Matches(e.Request.Host) {
+		if !s.ignoreStore.Matches(e.Request.Host) {
 			s.totalMu.Lock()
 			s.nonIgnoredTotal++
 			s.totalMu.Unlock()
 		}
 	})
-	return s
+}
+
+// SetHistoryStore rotates the session: swaps the store, resets the visible-set
+// snapshot and total, and bumps the filter version so the frontend refetches.
+func (s *Server) SetHistoryStore(h *history.Store) {
+	s.history.Store(h)
+	s.attachStore(h)
+	s.listMu.Lock()
+	s.lastVisible = make(map[string]bool)
+	s.listMu.Unlock()
+	s.recomputeTotal()
+	s.filterStore.Touch()
+	s.streamHub.SetHistoryStore(h)
+}
+
+// SetSessionStarter registers the callback that creates a recording session
+// (record auto mode). Without it POST /api/session/start answers 400.
+func (s *Server) SetSessionStarter(fn SessionStarter) {
+	s.sessionStarter = fn
 }
 
 func (s *Server) recomputeTotal() {
-	entries := s.history.ListSummary()
+	entries := s.hist().ListSummary()
 	total := 0
 	for _, le := range entries {
 		if !s.ignoreStore.Matches(le.Host) {
@@ -193,6 +230,7 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/api/process/signature", s.handleProcessSignature)
 	mux.HandleFunc("/api/process/events", s.handleProcessEvents)
 	mux.HandleFunc("/api/streams/", s.handleStreamEvents)
+	mux.HandleFunc("/api/session/start", s.handleSessionStart)
 
 	LogWebUI(s.addr)
 
@@ -320,7 +358,7 @@ func (s *Server) fullList(offset, limit int) listResponse {
 	filters, focusEnabled, version := s.filterStore.Snapshot()
 	opts := s.matchOpts(focusEnabled)
 
-	entries := s.history.ListSummary()
+	entries := s.hist().ListSummary()
 
 	s.listMu.Lock()
 	defer s.listMu.Unlock()
@@ -359,7 +397,7 @@ func (s *Server) diffList(since time.Time) listResponse {
 	upserts := make([]*history.ListEntry, 0)
 	removed := make([]string, 0)
 
-	for _, le := range s.history.ListSince(since) {
+	for _, le := range s.hist().ListSince(since) {
 		isVisible := filters.Matches(le, opts)
 		wasVisible := s.lastVisible[le.ID]
 		if isVisible {
@@ -397,6 +435,40 @@ type saveFiltersRequest struct {
 
 type agentViewRequest struct {
 	Preview bool `json:"preview"`
+}
+
+type sessionStartRequest struct {
+	Name string `json:"name"`
+}
+
+// handleSessionStart creates a new recording session (record auto mode). The
+// body is optional: {"name":"..."} for a named session, empty for an auto name
+// by timestamp.
+func (s *Server) handleSessionStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	starter := s.sessionStarter
+	if starter == nil {
+		http.Error(w, "no session recording active", http.StatusBadRequest)
+		return
+	}
+	var req sessionStartRequest
+	if r.Body != nil {
+		dec := json.NewDecoder(r.Body)
+		if err := dec.Decode(&req); err != nil && err != io.EOF {
+			http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	dir, name, err := starter(req.Name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.writeJSON(w, map[string]string{"session": dir, "name": name})
 }
 
 func (s *Server) handleAgentView(w http.ResponseWriter, r *http.Request) {
@@ -451,7 +523,7 @@ func (s *Server) handleSaveFilters(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleFilterOptions(w http.ResponseWriter, r *http.Request) {
 	typ := r.URL.Query().Get("type")
-	entries := s.history.ListSummary()
+	entries := s.hist().ListSummary()
 	s.writeJSON(w, map[string]interface{}{
 		"values": history.Options(entries, typ, s.ignoreStore),
 	})
@@ -522,7 +594,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	profile := s.filterStore.ActiveProfile()
 	s.filterStore.SetBodyIDsFor(profile, nil, token)
 
-	entries := s.history.ListSummary()
+	entries := s.hist().ListSummary()
 	enc := json.NewEncoder(w)
 	var ids []string
 	scanned := 0
@@ -544,7 +616,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		default:
 		}
 
-		entry, err := s.history.Get(id)
+		entry, err := s.hist().Get(id)
 		if err != nil {
 			continue
 		}
@@ -861,7 +933,7 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entry, err := s.history.Get(id)
+	entry, err := s.hist().Get(id)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -902,7 +974,7 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 		entry.ServerResponse.Body = entry.ServerResponse.Body[:maxBodyLen] + "\n... [truncated - body too large]"
 	}
 
-	binDir := filepath.Join(s.history.Dir(), "bin")
+	binDir := filepath.Join(s.hist().Dir(), "bin")
 
 	if entry.Request.BodyFile != "" {
 		var reqCT string
@@ -978,7 +1050,7 @@ func (s *Server) handleGetBodyBin(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 
-	entry, err := s.history.Get(id)
+	entry, err := s.hist().Get(id)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -996,7 +1068,7 @@ func (s *Server) handleGetBodyBin(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 
-	binPath := filepath.Join(s.history.Dir(), "bin", bodyFile)
+	binPath := filepath.Join(s.hist().Dir(), "bin", bodyFile)
 	f, err := os.Open(binPath)
 	if err != nil {
 		http.NotFound(w, r)
@@ -1030,7 +1102,7 @@ func readBodyPreview(path string, limit int) (string, bool) {
 }
 
 func (s *Server) handleSaveMultipart(w http.ResponseWriter, r *http.Request, id string) {
-	entry, err := s.history.Get(id)
+	entry, err := s.hist().Get(id)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -1057,7 +1129,7 @@ func (s *Server) handleSaveMultipart(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 
-	binDir := filepath.Join(s.history.Dir(), "bin")
+	binDir := filepath.Join(s.hist().Dir(), "bin")
 	origData, err := os.ReadFile(filepath.Join(binDir, entry.Request.BodyFile))
 	if err != nil {
 		http.Error(w, "original body not found", http.StatusInternalServerError)
@@ -1108,7 +1180,7 @@ func (s *Server) handleSaveMultipart(w http.ResponseWriter, r *http.Request, id 
 	writer.Close()
 
 	entry.Request.EditedBody = buf.String()
-	if err := s.history.Update(entry); err != nil {
+	if err := s.hist().Update(entry); err != nil {
 		http.Error(w, "save failed", http.StatusInternalServerError)
 		return
 	}
@@ -1119,7 +1191,7 @@ func (s *Server) handleSaveMultipart(w http.ResponseWriter, r *http.Request, id 
 }
 
 func (s *Server) handleCopyCurl(w http.ResponseWriter, r *http.Request, id string) {
-	entry, err := s.history.Get(id)
+	entry, err := s.hist().Get(id)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -1233,7 +1305,7 @@ func (s *Server) handleSaveBody(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 
-	if err := s.history.SaveEditedBody(id, body.Target, body.Body); err != nil {
+	if err := s.hist().SaveEditedBody(id, body.Target, body.Body); err != nil {
 		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
 		return
 	}
@@ -1249,7 +1321,7 @@ func (s *Server) handleRevertBody(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 
-	if err := s.history.RevertBody(id, target); err != nil {
+	if err := s.hist().RevertBody(id, target); err != nil {
 		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
 		return
 	}
@@ -1267,7 +1339,7 @@ func (s *Server) handleSaveHeaders(w http.ResponseWriter, r *http.Request, id st
 		return
 	}
 
-	if err := s.history.SaveEditedHeaders(id, payload.Headers); err != nil {
+	if err := s.hist().SaveEditedHeaders(id, payload.Headers); err != nil {
 		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
 		return
 	}
@@ -1277,7 +1349,7 @@ func (s *Server) handleSaveHeaders(w http.ResponseWriter, r *http.Request, id st
 }
 
 func (s *Server) handleRevertHeaders(w http.ResponseWriter, r *http.Request, id string) {
-	if err := s.history.RevertHeaders(id); err != nil {
+	if err := s.hist().RevertHeaders(id); err != nil {
 		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
 		return
 	}
@@ -1292,7 +1364,7 @@ func (s *Server) handleReplay(w http.ResponseWriter, r *http.Request, id string)
 	}
 	json.NewDecoder(r.Body).Decode(&bodyOverride)
 
-	original, err := s.history.Get(id)
+	original, err := s.hist().Get(id)
 	if err != nil {
 		http.Error(w, `{"error":"original request not found"}`, http.StatusNotFound)
 		return
@@ -1358,7 +1430,7 @@ func (s *Server) handleReplay(w http.ResponseWriter, r *http.Request, id string)
 		}
 	}
 
-	if err := s.history.Save(newEntry); err != nil {
+	if err := s.hist().Save(newEntry); err != nil {
 		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
 		return
 	}
@@ -1627,7 +1699,7 @@ func (s *Server) handleRequestRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entry, err := s.history.Get(id)
+	entry, err := s.hist().Get(id)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -1664,11 +1736,12 @@ type streamSub struct {
 }
 
 type streamOp struct {
-	kind    string // subscribe | unsubscribe | notify
+	kind    string // subscribe | unsubscribe | notify | setstore
 	entryID string
 	size    int64
 	done    bool
 	sub     *streamSub
+	store   *history.Store
 }
 
 // streamHub fans out body-growth notifications from the interceptor to the SSE
@@ -1703,8 +1776,30 @@ func (h *streamHub) run() {
 			h.unsubscribe(op)
 		case "notify":
 			h.notify(op)
+		case "setstore":
+			h.setStore(op)
 		}
 	}
+}
+
+// SetHistoryStore rotates the store the hub reads bodies through. Serialized
+// through the op channel: the swap and the subscriber teardown both happen on
+// the reactor goroutine, so no handler ever reads a half-rotated hub.
+func (h *streamHub) SetHistoryStore(store *history.Store) {
+	h.opCh <- streamOp{kind: "setstore", store: store}
+}
+
+func (h *streamHub) setStore(op streamOp) {
+	h.history = op.store
+	for _, subs := range h.subs {
+		for sub := range subs {
+			select {
+			case sub.ch <- streamEvent{Type: "done", Stream: false}:
+			default:
+			}
+		}
+	}
+	h.subs = make(map[string]map[*streamSub]struct{})
 }
 
 func (h *streamHub) subscribe(op streamOp) {
@@ -1857,7 +1952,7 @@ func (s *Server) handleStreamEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entry, err := s.history.Get(id)
+	entry, err := s.hist().Get(id)
 	if err != nil || entry.Response == nil || !entry.Response.Stream {
 		http.NotFound(w, r)
 		return

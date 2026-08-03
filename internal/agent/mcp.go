@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -18,15 +19,16 @@ import (
 // Server exposes the agent scope as an MCP server with 4 synchronous tools over
 // streamable HTTP on a single /mcp endpoint.
 type Server struct {
-	scope *Scope
-	hist  HistoryStore
-	fwd   *Forwarder
-	mcp   *server.MCPServer
+	scope   *Scope
+	histVal atomic.Value // HistoryStore
+	fwd     *Forwarder
+	mcp     *server.MCPServer
 }
 
 // NewServer wires the tools. The caller mounts Handler() at exactly /mcp.
 func NewServer(scope *Scope, hist HistoryStore, fwd *Forwarder) *Server {
-	s := &Server{scope: scope, hist: hist, fwd: fwd}
+	s := &Server{scope: scope, fwd: fwd}
+	s.histVal.Store(hist)
 	ms := server.NewMCPServer("gospy-agent", "1.0.0", server.WithToolCapabilities(true), server.WithInputSchemaValidation())
 
 	ms.AddTool(mcp.NewTool("list_entries",
@@ -73,6 +75,17 @@ func NewServer(scope *Scope, hist HistoryStore, fwd *Forwarder) *Server {
 
 	s.mcp = ms
 	return s
+}
+
+// hist returns the current history store. Swapped atomically on session
+// rotation so get_entry and send_request templates target the active session.
+func (s *Server) hist() HistoryStore {
+	return s.histVal.Load().(HistoryStore)
+}
+
+// SetHistoryStore rotates the session store the MCP reads.
+func (s *Server) SetHistoryStore(h HistoryStore) {
+	s.histVal.Store(h)
 }
 
 // Handler returns the streamable HTTP handler; mount it at exactly /mcp.
@@ -161,11 +174,11 @@ func (s *Server) handleGetEntry(ctx context.Context, req mcp.CallToolRequest) (*
 	if !s.scope.IsVisible(id) {
 		return mcp.NewToolResultErrorf("entry %s is not in the agent-visible set", id), nil
 	}
-	entry, err := s.hist.Get(id)
+	entry, err := s.hist().Get(id)
 	if err != nil {
 		return mcp.NewToolResultErrorf("entry %s not found", id), nil
 	}
-	return mcp.NewToolResultJSON(EntryDetail(s.hist.Dir(), entry))
+	return mcp.NewToolResultJSON(EntryDetail(s.hist().Dir(), entry))
 }
 
 func (s *Server) handleSendRequest(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -185,7 +198,7 @@ func (s *Server) handleSendRequest(ctx context.Context, req mcp.CallToolRequest)
 		return mcp.NewToolResultErrorf("forward failed: %v", err), nil
 	}
 	resp.Request = ResolvedRequest{Method: built.method, URL: built.url, BodySource: built.bodySource}
-	if le, err := s.hist.GetByAgentCallID(callID); err == nil {
+	if le, err := s.hist().GetByAgentCallID(callID); err == nil {
 		resp.EntryID = le.ID
 	}
 	return mcp.NewToolResultJSON(resp)

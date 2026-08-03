@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gospy/internal/history"
@@ -33,7 +34,7 @@ type entryUserData struct {
 }
 
 type Interceptor struct {
-	history     *history.Store
+	history     atomic.Pointer[history.Store]
 	ignoreStore *IgnoreStore
 	engine      *rules.Engine
 	skipPorts   map[string]bool
@@ -55,8 +56,7 @@ func NewInterceptor(h *history.Store, ignore *IgnoreStore, engine *rules.Engine,
 	for _, p := range skipPorts {
 		skip[p] = true
 	}
-	return &Interceptor{
-		history:                  h,
+	ic := &Interceptor{
 		ignoreStore:              ignore,
 		engine:                   engine,
 		skipPorts:                skip,
@@ -66,6 +66,20 @@ func NewInterceptor(h *history.Store, ignore *IgnoreStore, engine *rules.Engine,
 		streamCheckpointBytes:    64 * 1024,
 		streamNotifyInterval:     250 * time.Millisecond,
 	}
+	ic.history.Store(h)
+	return ic
+}
+
+// hist returns the current history store. The pointer is swapped atomically
+// when a recording session rotates, so concurrent handlers always target the
+// active store.
+func (ic *Interceptor) hist() *history.Store {
+	return ic.history.Load()
+}
+
+// SetHistoryStore rotates the capture target (used by session start).
+func (ic *Interceptor) SetHistoryStore(h *history.Store) {
+	ic.history.Store(h)
 }
 
 func (ic *Interceptor) isSelfRequest(host string) bool {
@@ -110,7 +124,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			ct := req.Header.Get("Content-Type")
 			if len(data) > 0 {
 				entryID = uuid.New().String()
-				if filename, err := ic.history.SaveBinaryBody(entryID, "req", data); err == nil {
+				if filename, err := ic.hist().SaveBinaryBody(entryID, "req", data); err == nil {
 					bodyFile = filename
 					bodySize = int64(len(data))
 				}
@@ -171,7 +185,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			Origin:            origin,
 			AgentCallID:       agentCallID,
 		}
-		_ = ic.history.Save(entry)
+		_ = ic.hist().Save(entry)
 		ctx.UserData = &entryUserData{entryID: entry.ID}
 		LogRequest(entry.ID, req.Method, url)
 		return req, nil
@@ -191,7 +205,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			Origin:            origin,
 			AgentCallID:       agentCallID,
 		}
-		_ = ic.history.Save(entry)
+		_ = ic.hist().Save(entry)
 		LogRequest(entry.ID, req.Method, url)
 		LogInfo(fmt.Sprintf("DROPPED by rule %q: %s %s", rule.Name, req.Method, url))
 		dropResp := &http.Response{
@@ -206,7 +220,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			Headers: make(map[string][]string),
 			Body:    "",
 		}
-		_ = ic.history.Update(entry)
+		_ = ic.hist().Update(entry)
 		return req, dropResp
 
 	case rules.ActionMock:
@@ -222,7 +236,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			Origin:            origin,
 			AgentCallID:       agentCallID,
 		}
-		_ = ic.history.Save(entry)
+		_ = ic.hist().Save(entry)
 		LogRequest(entry.ID, req.Method, url)
 		LogInfo(fmt.Sprintf("MOCKED by rule %q: %s %s", rule.Name, req.Method, url))
 
@@ -233,7 +247,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			Body:    ReadBodyString(resp.Body),
 		}
 		resp.Body = io.NopCloser(strings.NewReader(entry.Response.Body))
-		_ = ic.history.Update(entry)
+		_ = ic.hist().Update(entry)
 		LogResponse(entry.ID, req.Method, url, resp.StatusCode, resp.Header.Get("Content-Type"))
 		return req, resp
 
@@ -271,7 +285,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			Origin:            origin,
 			AgentCallID:       agentCallID,
 		}
-		_ = ic.history.Save(entry)
+		_ = ic.hist().Save(entry)
 		ctx.UserData = &entryUserData{entryID: entry.ID}
 		LogRequest(entry.ID, req.Method, url)
 		LogInfo(fmt.Sprintf("MODIFIED by rule %q: %s %s", rule.Name, req.Method, url))
@@ -290,7 +304,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			Origin:            origin,
 			AgentCallID:       agentCallID,
 		}
-		_ = ic.history.Save(entry)
+		_ = ic.hist().Save(entry)
 		LogRequest(entry.ID, req.Method, url)
 		LogInfo(fmt.Sprintf("RESPONSE MOCK by rule %q: %s %s", rule.Name, req.Method, url))
 		ctx.UserData = &requestUserData{
@@ -308,7 +322,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 		Origin:        origin,
 		AgentCallID:   agentCallID,
 	}
-	_ = ic.history.Save(entry)
+	_ = ic.hist().Save(entry)
 	ctx.UserData = &entryUserData{entryID: entry.ID}
 	LogRequest(entry.ID, req.Method, url)
 	return req, nil
@@ -337,14 +351,14 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 	if isStreamingResponse(resp) {
 		if ud, ok := ctx.UserData.(*entryUserData); ok {
 			entryID := ud.entryID
-			if entry, err := ic.history.Get(entryID); err == nil {
+			if entry, err := ic.hist().Get(entryID); err == nil {
 				entry.Response = &history.ResponseRecord{
 					Status:   resp.StatusCode,
 					Headers:  resp.Header,
 					BodyFile: entryID + "-stream.bin",
 					Stream:   true,
 				}
-				_ = ic.history.Update(entry)
+				_ = ic.hist().Update(entry)
 				LogResponse(entry.ID, ctx.Req.Method, reqURL, resp.StatusCode, resp.Header.Get("Content-Type"))
 
 				if resp.Body != nil {
@@ -365,7 +379,7 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 	}
 
 	if ud, ok := ctx.UserData.(*requestUserData); ok {
-		entry, err := ic.history.Get(ud.entryID)
+		entry, err := ic.hist().Get(ud.entryID)
 		if err == nil {
 			sresp := &history.ResponseRecord{
 				Status:  resp.StatusCode,
@@ -374,7 +388,7 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 			if len(bodyData) > 0 {
 				ce := resp.Header.Get("Content-Encoding")
 				ct := resp.Header.Get("Content-Type")
-				if filename, err := ic.history.SaveBinaryBody(entry.ID, "sresp", bodyData); err == nil {
+				if filename, err := ic.hist().SaveBinaryBody(entry.ID, "sresp", bodyData); err == nil {
 					sresp.BodyFile = filename
 					sresp.BodySize = int64(len(bodyData))
 				}
@@ -391,14 +405,14 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 				Headers: fakeResp.Header,
 				Body:    ReadBodyString(fakeResp.Body),
 			}
-			_ = ic.history.Update(entry)
+			_ = ic.hist().Update(entry)
 			LogResponse(entry.ID, ctx.Req.Method, reqURL, fakeResp.StatusCode, fakeResp.Header.Get("Content-Type"))
 		}
 		return buildHttpResponse(ctx.Req, ud.mockResponse)
 	}
 
 	if ud, ok := ctx.UserData.(*entryUserData); ok {
-		entry, err := ic.history.Get(ud.entryID)
+		entry, err := ic.hist().Get(ud.entryID)
 		if err == nil {
 			respRec := &history.ResponseRecord{
 				Status:  resp.StatusCode,
@@ -407,7 +421,7 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 			if len(bodyData) > 0 {
 				ce := resp.Header.Get("Content-Encoding")
 				ct := resp.Header.Get("Content-Type")
-				if filename, err := ic.history.SaveBinaryBody(entry.ID, "resp", bodyData); err == nil {
+				if filename, err := ic.hist().SaveBinaryBody(entry.ID, "resp", bodyData); err == nil {
 					respRec.BodyFile = filename
 					respRec.BodySize = int64(len(bodyData))
 				}
@@ -418,7 +432,7 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 				}
 			}
 			entry.Response = respRec
-			_ = ic.history.Update(entry)
+			_ = ic.hist().Update(entry)
 			LogResponse(entry.ID, ctx.Req.Method, reqURL, resp.StatusCode, resp.Header.Get("Content-Type"))
 		}
 		return resp
@@ -497,7 +511,7 @@ func (sc *streamCaptureReader) append(chunk []byte) {
 		return
 	}
 	if sc.file == nil {
-		if _, f, err := sc.ic.history.CreateStreamBody(sc.entryID); err == nil {
+		if _, f, err := sc.ic.hist().CreateStreamBody(sc.entryID); err == nil {
 			sc.file = f
 		}
 	}
@@ -546,11 +560,11 @@ func (sc *streamCaptureReader) checkpoint() {
 	sc.lastCheckpoint = size
 	sc.mu.Unlock()
 
-	if entry, err := sc.ic.history.Get(sc.entryID); err == nil {
+	if entry, err := sc.ic.hist().Get(sc.entryID); err == nil {
 		if entry.Response != nil {
 			entry.Response.BodySize = size
 			entry.Response.Stream = true
-			_ = sc.ic.history.Update(entry)
+			_ = sc.ic.hist().Update(entry)
 		}
 	}
 	sc.syncFile()
@@ -586,11 +600,11 @@ func (sc *streamCaptureReader) finish() {
 			_ = file.Close()
 		}
 
-		if entry, err := sc.ic.history.Get(sc.entryID); err == nil {
+		if entry, err := sc.ic.hist().Get(sc.entryID); err == nil {
 			if entry.Response != nil {
 				entry.Response.BodySize = size
 				entry.Response.Stream = false
-				_ = sc.ic.history.Update(entry)
+				_ = sc.ic.hist().Update(entry)
 			}
 		}
 
