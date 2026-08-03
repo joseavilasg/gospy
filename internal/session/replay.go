@@ -54,7 +54,7 @@ func (rs *ReplayServer) handleRequest(req *http.Request, ctx *goproxy.ProxyCtx) 
 		url += "?" + req.URL.RawQuery
 	}
 
-	entry := rs.session.Match(req.Method, url, req.Header, rs.cfg)
+	entry := rs.session.Match(req.Method, url, rs.cfg)
 	if entry == nil {
 		LogReplayMiss(req.Method, url)
 		return nil, &http.Response{

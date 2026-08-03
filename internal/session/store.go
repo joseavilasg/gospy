@@ -121,7 +121,7 @@ func (s *Store) SaveEntry(e *Entry) error {
 	return s.persistIndex()
 }
 
-func (s *Store) Match(method, rawURL string, headers map[string][]string, cfg *MatchConfig) *Entry {
+func (s *Store) Match(method, rawURL string, cfg *MatchConfig) *Entry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

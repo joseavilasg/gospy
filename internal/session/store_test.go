@@ -39,7 +39,7 @@ func TestSaveAndMatch(t *testing.T) {
 		t.Fatalf("NewOrLoad second: %v", err)
 	}
 
-	matched := s2.Match("GET", "https://example.com/api/v1/data", nil, nil)
+	matched := s2.Match("GET", "https://example.com/api/v1/data", nil)
 	if matched == nil {
 		t.Fatal("expected match, got nil")
 	}
@@ -50,7 +50,7 @@ func TestSaveAndMatch(t *testing.T) {
 		t.Fatalf("expected status 200, got %d", matched.Response.Status)
 	}
 
-	miss := s2.Match("POST", "https://example.com/api/v1/data", nil, nil)
+	miss := s2.Match("POST", "https://example.com/api/v1/data", nil)
 	if miss != nil {
 		t.Fatalf("expected no match for POST, got entry %s", miss.ID)
 	}
@@ -73,12 +73,12 @@ func TestMatchWithIgnoreQueryParams(t *testing.T) {
 
 	cfg := &MatchConfig{IgnoreQueryParams: []string{"token"}}
 
-	matched := s.Match("GET", "https://api.example.com/endpoint?token=xyz&id=123", nil, cfg)
+	matched := s.Match("GET", "https://api.example.com/endpoint?token=xyz&id=123", cfg)
 	if matched == nil {
 		t.Fatal("expected match with ignored token param")
 	}
 
-	miss := s.Match("GET", "https://api.example.com/endpoint?token=abc&id=456", nil, cfg)
+	miss := s.Match("GET", "https://api.example.com/endpoint?token=abc&id=456", cfg)
 	if miss != nil {
 		t.Fatal("expected no match when non-ignored param differs")
 	}
@@ -110,7 +110,7 @@ func TestEmptyMatch(t *testing.T) {
 	dir := t.TempDir()
 
 	s, _ := NewOrLoad(dir)
-	matched := s.Match("GET", "http://example.com/", nil, nil)
+	matched := s.Match("GET", "http://example.com/", nil)
 	if matched != nil {
 		t.Fatal("expected nil for empty session")
 	}

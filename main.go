@@ -248,8 +248,8 @@ func runReplay(caCert *ca.CA, addr, sessionDir, matchConfig string) {
 			fmt.Fprintf(os.Stderr, "ERROR: failed to load match config: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("Loaded match config: %d ignored params, %d ignored headers\n",
-			len(cfg.IgnoreQueryParams), len(cfg.IgnoreHeaders))
+		fmt.Printf("Loaded match config: %d ignored params\n",
+			len(cfg.IgnoreQueryParams))
 	}
 
 	srv := session.NewReplayServer(addr, caCert, s, cfg)

@@ -7,7 +7,6 @@ import (
 
 type MatchConfig struct {
 	IgnoreQueryParams []string `json:"ignore_query_params"`
-	IgnoreHeaders     []string `json:"ignore_headers"`
 }
 
 func LoadMatchConfig(path string) (*MatchConfig, error) {
