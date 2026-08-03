@@ -1,182 +1,80 @@
 package session
 
 import (
-	"encoding/json"
-	"fmt"
 	"net/url"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
-	"time"
+
+	"gospy/internal/history"
 )
 
-type IndexEntry struct {
-	ID        string    `json:"id"`
-	Method    string    `json:"method"`
-	URL       string    `json:"url"`
-	Host      string    `json:"host"`
-	Status    int       `json:"status"`
-	Timestamp time.Time `json:"timestamp"`
-}
-
-type Store struct {
-	dir          string
-	mu           sync.RWMutex
-	idx          []*IndexEntry
-	byID         map[string]*Entry
-	groups       map[string][]*IndexEntry
+// ReplayStore serves recorded responses from a history-format session
+// directory. It keeps per-URL groups with consumption cursors so repeated
+// requests (e.g. live manifest polls) are served in recorded order.
+type ReplayStore struct {
+	h            *history.Store
+	mu           sync.Mutex
+	groups       map[string][]*history.ListEntry
 	cursors      map[string]int
 	groupsCfg    *MatchConfig
 	groupsIdxLen int
 }
 
-func NewOrLoad(dir string) (*Store, error) {
-	if err := os.MkdirAll(filepath.Join(dir, "entries"), 0755); err != nil {
-		return nil, fmt.Errorf("create session dir: %w", err)
-	}
-	s := &Store{dir: dir, byID: make(map[string]*Entry)}
-	if err := s.loadIndex(); err != nil {
-		return s, nil
-	}
-	return s, nil
+func NewReplayStore(h *history.Store) *ReplayStore {
+	return &ReplayStore{h: h}
 }
 
-func (s *Store) loadIndex() error {
-	data, err := os.ReadFile(filepath.Join(s.dir, "index.json"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	var entries []*Entry
-	if err := json.Unmarshal(data, &entries); err != nil {
-		return err
-	}
-	s.idx = make([]*IndexEntry, 0, len(entries))
-	for _, e := range entries {
-		s.idx = append(s.idx, &IndexEntry{
-			ID:        e.ID,
-			Method:    e.Request.Method,
-			URL:       e.Request.URL,
-			Host:      e.Request.Host,
-			Status:    e.Response.Status,
-			Timestamp: e.Timestamp,
-		})
-		s.byID[e.ID] = e
-	}
-	return nil
-}
+func (r *ReplayStore) Dir() string { return r.h.Dir() }
 
-func (s *Store) persistIndex() error {
-	entries := make([]*Entry, 0, len(s.idx))
-	for _, ie := range s.idx {
-		if e, ok := s.byID[ie.ID]; ok {
-			entries = append(entries, e)
-		}
-	}
-	data, err := json.MarshalIndent(entries, "", "  ")
-	if err != nil {
-		return err
-	}
-	path := filepath.Join(s.dir, "index.json")
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
-}
+func (r *ReplayStore) Match(method, rawURL string, cfg *MatchConfig) (*history.Entry, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-func (s *Store) SaveBin(entryID, suffix string, data []byte) (string, error) {
-	filename := entryID + "-" + suffix + ".bin"
-	path := filepath.Join(s.dir, "entries", filename)
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return "", err
-	}
-	return filename, nil
-}
-
-func (s *Store) SaveEntry(e *Entry) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	path := filepath.Join(s.dir, "entries", e.ID+".json")
-	data, err := json.MarshalIndent(e, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal entry: %w", err)
-	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("write entry: %w", err)
-	}
-
-	ie := &IndexEntry{
-		ID:        e.ID,
-		Method:    e.Request.Method,
-		URL:       e.Request.URL,
-		Host:      e.Request.Host,
-		Status:    e.Response.Status,
-		Timestamp: e.Timestamp,
-	}
-	s.idx = append(s.idx, ie)
-	s.byID[e.ID] = e
-
-	return s.persistIndex()
-}
-
-func (s *Store) Match(method, rawURL string, cfg *MatchConfig) (*Entry, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.ensureGroups(cfg)
+	r.ensureGroups(cfg)
 	key := matchGroupKey(method, rawURL, cfg)
-	group := s.groups[key]
+	group := r.groups[key]
 	if len(group) == 0 {
 		return nil, false
 	}
-	idx := s.cursors[key]
+	idx := r.cursors[key]
 	if idx >= len(group) {
 		return nil, true
 	}
-	ie := group[idx]
-	s.cursors[key] = idx + 1
-	if e, ok := s.byID[ie.ID]; ok {
-		return e, false
+	le := group[idx]
+	r.cursors[key] = idx + 1
+	entry, err := r.h.Get(le.ID)
+	if err != nil {
+		return nil, false
 	}
-	return nil, false
+	return entry, false
 }
 
 func matchGroupKey(method, rawURL string, cfg *MatchConfig) string {
 	return strings.ToLower(method) + "\x00" + normalizeURL(rawURL, cfg)
 }
 
-func (s *Store) ensureGroups(cfg *MatchConfig) {
-	if s.groups != nil && s.groupsCfg == cfg && s.groupsIdxLen == len(s.idx) {
+func (r *ReplayStore) ensureGroups(cfg *MatchConfig) {
+	entries := r.h.ListSummary()
+	if r.groups != nil && r.groupsCfg == cfg && r.groupsIdxLen == len(entries) {
 		return
 	}
-	s.groups = make(map[string][]*IndexEntry)
-	for _, ie := range s.idx {
-		if ie.Status == 0 {
+	r.groups = make(map[string][]*history.ListEntry)
+	for _, le := range entries {
+		if le.Status == nil || *le.Status == 0 {
 			continue
 		}
-		key := matchGroupKey(ie.Method, ie.URL, cfg)
-		s.groups[key] = append(s.groups[key], ie)
+		key := matchGroupKey(le.Method, le.URL, cfg)
+		r.groups[key] = append(r.groups[key], le)
 	}
-	for key := range s.groups {
-		sort.Slice(s.groups[key], func(i, j int) bool {
-			return s.groups[key][i].Timestamp.Before(s.groups[key][j].Timestamp)
+	for key := range r.groups {
+		sort.Slice(r.groups[key], func(i, j int) bool {
+			return r.groups[key][i].Timestamp.Before(r.groups[key][j].Timestamp)
 		})
 	}
-	s.cursors = make(map[string]int)
-	s.groupsCfg = cfg
-	s.groupsIdxLen = len(s.idx)
-}
-
-func (s *Store) GetEntry(id string) *Entry {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.byID[id]
+	r.cursors = make(map[string]int)
+	r.groupsCfg = cfg
+	r.groupsIdxLen = len(entries)
 }
 
 func normalizeURL(rawURL string, cfg *MatchConfig) string {
@@ -199,10 +97,4 @@ func normalizeURL(rawURL string, cfg *MatchConfig) string {
 		result += "?" + u.RawQuery
 	}
 	return result
-}
-
-func SortByTimestamp(entries []*Entry) {
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Timestamp.Before(entries[j].Timestamp)
-	})
 }

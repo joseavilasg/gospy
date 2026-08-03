@@ -42,7 +42,7 @@ func main() {
 	resetProxy := flag.Bool("reset-proxy", false, "Restore system proxy to original settings (after crash)")
 	ignoreHosts := flag.String("ignore", "", "Comma-separated hosts to ignore (e.g. \"host1.com,host2.com\")")
 	focusHosts := flag.String("focus", "", "Comma-separated hosts to focus on (e.g. \"host1.com,host2.com\")")
-	sessionDir := flag.String("session", "", "Session directory for recording/replay")
+	sessionDir := flag.String("session", "", "Session name or directory for recording/replay")
 	matchConfig := flag.String("match-config", "", "Match configuration file for replay")
 	bindIface := flag.String("bind-iface", "", "Bind proxy outbound connections to a network interface (SO_BINDTODEVICE, Linux)")
 	dnsServer := flag.String("dns", "", "Custom DNS server for proxy outbound; auto-detected from --bind-iface when empty")
@@ -82,13 +82,19 @@ func main() {
 	}
 
 	if mode == "replay" {
-		runReplay(caCert, *proxyAddr, *sessionDir, *matchConfig)
+		runReplay(caCert, *proxyAddr, session.ResolveDir(*sessionDir, *dataDir), *matchConfig)
 		return
 	}
 
 	fmt.Println(caCert.InstallInstructions())
 
-	hist, err := history.New(*dataDir + "/history")
+	recordSessionDir := ""
+	histDir := *dataDir + "/history"
+	if mode == "record" && *sessionDir != "" {
+		recordSessionDir = session.ResolveDir(*sessionDir, *dataDir)
+		histDir = recordSessionDir
+	}
+	hist, err := history.New(histDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error initializing history: %v\n", err)
 		os.Exit(1)
@@ -133,10 +139,8 @@ func main() {
 		}
 	}
 
-	if mode == "record" && *sessionDir != "" {
-		rec := session.NewRecorder(*dataDir+"/history", *sessionDir)
-		rec.Subscribe(hist)
-		proxy.LogInfo(fmt.Sprintf("Recording session to %s", *sessionDir))
+	if mode == "record" && recordSessionDir != "" {
+		proxy.LogInfo(fmt.Sprintf("Recording session to %s", recordSessionDir))
 	}
 	if mode == "record" && !*systemProxy {
 		*noSystemProxy = true
@@ -244,8 +248,12 @@ func runReplay(caCert *ca.CA, addr, sessionDir, matchConfig string) {
 		fmt.Fprintf(os.Stderr, "ERROR: --session is required for replay mode\n")
 		os.Exit(1)
 	}
+	if _, err := os.Stat(sessionDir); os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "ERROR: session %s not found\n", sessionDir)
+		os.Exit(1)
+	}
 
-	s, err := session.NewOrLoad(sessionDir)
+	hist, err := history.New(sessionDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: failed to load session: %v\n", err)
 		os.Exit(1)
@@ -262,7 +270,7 @@ func runReplay(caCert *ca.CA, addr, sessionDir, matchConfig string) {
 			len(cfg.IgnoreQueryParams))
 	}
 
-	srv := session.NewReplayServer(addr, caCert, s, cfg)
+	srv := session.NewReplayServer(addr, caCert, session.NewReplayStore(hist), cfg)
 	fmt.Printf("Replay server listening on %s\n", addr)
 	fmt.Println("WARNING: All requests are served from recording, no network calls will be made")
 

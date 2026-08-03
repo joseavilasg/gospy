@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"gospy/internal/ca"
+	"gospy/internal/history"
 
 	"github.com/elazarl/goproxy"
 )
@@ -16,11 +17,11 @@ import (
 type ReplayServer struct {
 	addr    string
 	proxy   *goproxy.ProxyHttpServer
-	session *Store
+	session *ReplayStore
 	cfg     *MatchConfig
 }
 
-func NewReplayServer(addr string, caCert *ca.CA, session *Store, cfg *MatchConfig) *ReplayServer {
+func NewReplayServer(addr string, caCert *ca.CA, session *ReplayStore, cfg *MatchConfig) *ReplayServer {
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.Verbose = false
 
@@ -71,7 +72,7 @@ func (rs *ReplayServer) handleRequest(req *http.Request, ctx *goproxy.ProxyCtx) 
 		}
 	}
 
-	resp, err := buildResponse(entry, req, rs.session.dir)
+	resp, err := buildResponse(entry, req, rs.session.Dir())
 	if err != nil {
 		LogReplayMiss(req.Method, url)
 		return nil, &http.Response{
@@ -86,7 +87,10 @@ func (rs *ReplayServer) handleRequest(req *http.Request, ctx *goproxy.ProxyCtx) 
 	return nil, resp
 }
 
-func buildResponse(entry *Entry, req *http.Request, sessionDir string) (*http.Response, error) {
+func buildResponse(entry *history.Entry, req *http.Request, sessionDir string) (*http.Response, error) {
+	if entry.Response == nil {
+		return nil, fmt.Errorf("entry %s has no response", entry.ID)
+	}
 	status := entry.Response.Status
 	if status == 0 {
 		return nil, fmt.Errorf("entry %s has no response status", entry.ID)
@@ -101,7 +105,7 @@ func buildResponse(entry *Entry, req *http.Request, sessionDir string) (*http.Re
 
 	var body io.ReadCloser
 	if entry.Response.BodyFile != "" {
-		data, err := os.ReadFile(filepath.Join(sessionDir, "entries", entry.Response.BodyFile))
+		data, err := os.ReadFile(filepath.Join(sessionDir, "bin", entry.Response.BodyFile))
 		if err != nil {
 			return nil, fmt.Errorf("read body: %w", err)
 		}
