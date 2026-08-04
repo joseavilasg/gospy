@@ -166,6 +166,19 @@ func TestReplayOpenRendersSelectedRun(t *testing.T) {
 	}
 }
 
+// TestReplayDetailToolbarGated locks the replay gate around the whole
+// .detail-toolbar in the detail panel. If only the buttons were gated, replay
+// mode would still render the (empty) toolbar div - and its margin leaves a
+// dead band above the tabs (regression: in replay the detail panel showed an
+// empty strip where Ignore host / Add to focus / Replay / Rule used to be).
+func TestReplayDetailToolbarGated(t *testing.T) {
+	render := strings.ReplaceAll(renderJS, "\r\n", "\n")
+	const marker = "getReplayMode() ? '' : `\n        <div class=\"detail-toolbar\">"
+	if !strings.Contains(render, marker) {
+		t.Fatal("render.js: detail toolbar must be wrapped in the replay gate (getReplayMode() ? '' : `...<div class=\"detail-toolbar\">...`) so replay mode omits the empty toolbar div instead of rendering its margin as dead space")
+	}
+}
+
 func TestReplayFieldInListResponse(t *testing.T) {
 	s, _, _ := newTestServer(t)
 	full := s.fullList(0, 10)

@@ -396,14 +396,13 @@ export function renderDetail(req, activeTab = 'request') {
 
     panel.innerHTML = `
         ${actionBanner}
+        ${getReplayMode() ? '' : `
         <div class="detail-toolbar">
-            ${getReplayMode() ? '' : `
             ${ignoreBtn}
             ${focusBtn}
             <button class="btn-replay" data-action="send-replay"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg> Replay</button>
             <button class="btn-create-rule" data-action="create-rule-from-request"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="3" y="1" width="10" height="14" rx="1.5" stroke="currentColor" stroke-width="1.5"/><line x1="5.5" y1="5" x2="10.5" y2="5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="5.5" y1="8" x2="10.5" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="8" y1="10.5" x2="8" y2="13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="6.5" y1="11.75" x2="9.5" y2="11.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> Rule</button>
-            `}
-        </div>
+        </div>`}
         ${replayedFromHtml}
         <div class="tabs-row">
             <div class="tabs">
