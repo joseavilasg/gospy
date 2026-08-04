@@ -39,6 +39,9 @@ var appJS string
 //go:embed resize.js
 var resizeJS string
 
+//go:embed header.js
+var headerJS string
+
 //go:embed state.js
 var stateJS string
 
@@ -359,6 +362,7 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/style.css", s.handleStatic(styleCSS, "text/css"))
 	mux.HandleFunc("/app.js", s.handleStatic(appJS, "application/javascript"))
 	mux.HandleFunc("/resize.js", s.handleStatic(resizeJS, "application/javascript"))
+	mux.HandleFunc("/header.js", s.handleStatic(headerJS, "application/javascript"))
 	mux.HandleFunc("/state.js", s.handleStatic(stateJS, "application/javascript"))
 	mux.HandleFunc("/api.js", s.handleStatic(apiJS, "application/javascript"))
 	mux.HandleFunc("/render.js", s.handleStatic(renderJS, "application/javascript"))

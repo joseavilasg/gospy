@@ -190,6 +190,41 @@ func TestReplayDetailPanelTopPadding(t *testing.T) {
 	}
 }
 
+// TestHeaderActionsDataDriven locks the header refactor: action items live in
+// the header.js config and separators are derived from the visible units at
+// render time, so replay mode cannot leave orphaned palotes or hardcoded
+// header-sep ids behind in the markup.
+func TestHeaderActionsDataDriven(t *testing.T) {
+	if !strings.Contains(indexHTML, `<div class="header-actions" id="headerActions"></div>`) {
+		t.Fatal("index.html: header actions must be rendered into #headerActions by header.js, not hardcoded in the markup")
+	}
+	if !strings.Contains(styleCSS, ".header-actions") {
+		t.Fatal("style.css: .header-actions flex layout rule is required to lay out the rendered header items")
+	}
+	for _, hardcoded := range []string{`class="header-sep"`, `id="sepIgnored"`, `id="sepRules"`, `id="focusBtn"`, `id="replayChip"`} {
+		if strings.Contains(indexHTML, hardcoded) {
+			t.Fatalf("index.html: %s must live in the header.js item config, not in the markup (hardcoded separators are what left orphaned palotes in replay)", hardcoded)
+		}
+	}
+}
+
+// TestHeaderModuleSepsFromVisible locks header.js's separator logic: the
+// module must interleave .header-sep between adjacent visible items and honor
+// per-item mode hiding (hiddenIn), which is what collapses separators around
+// hidden items in replay.
+func TestHeaderModuleSepsFromVisible(t *testing.T) {
+	header := strings.ReplaceAll(headerJS, "\r\n", "\n")
+	if !strings.Contains(header, "header-sep") {
+		t.Fatal("header.js: separator rendering (.header-sep) must live in the header module")
+	}
+	if !strings.Contains(header, "hiddenIn") {
+		t.Fatal("header.js: per-item mode hiding (hiddenIn) must live in the header module")
+	}
+	if !strings.Contains(header, "sep !== false") {
+		t.Fatal("header.js: items with sep:false must be glued to the previous unit (e.g. a button and its own checkbox)")
+	}
+}
+
 func TestReplayFieldInListResponse(t *testing.T) {
 	s, _, _ := newTestServer(t)
 	full := s.fullList(0, 10)

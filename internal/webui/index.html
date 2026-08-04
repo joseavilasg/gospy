@@ -14,30 +14,7 @@
     <h1>GOSPY</h1>
     <span class="stats" id="stats">0 requests</span>
     <div style="flex:1"></div>
-    <button class="btn" id="focusBtn">Focus <span class="badge" id="focusedCount">0</span></button>
-    <div class="auto-refresh">
-      <input type="checkbox" id="focusEnabled" title="Enable focus filter">
-    </div>
-    <label class="agent-view-toggle" id="agentEnabledToggle">
-      <input type="checkbox" id="agentEnabled" title="Enable the agent MCP (resets to off on every start)">
-      <span>Agent enabled</span>
-    </label>
-    <label class="agent-view-toggle" id="agentPreviewToggle">
-      <input type="checkbox" id="agentPreview" title="Agent view: preview the scope the agent MCP can see">
-      <span>Agent view</span>
-    </label>
-    <div class="header-sep"></div>
-    <button class="btn" id="refreshBtn">Refresh</button>
-    <div class="auto-refresh">
-      <input type="checkbox" id="autoRefresh" checked title="Auto-refresh requests">
-    </div>
-    <div class="header-sep" id="sepIgnored"></div>
-    <button class="btn" id="ignoredBtn">Ignored <span class="badge" id="ignoredCount">0</span></button>
-    <div class="header-sep" id="sepRules"></div>
-    <button class="btn" id="rulesBtn">Rules <span class="badge" id="rulesCount">0</span></button>
-    <button class="btn replay-chip" id="replayChip" style="display:none" title="Replay activity"><span
-        class="replay-chip-label">REPLAY</span> <span class="badge" id="replayChipProgress">0/0</span><span
-        class="replay-chip-exhausted" id="replayChipExhausted" style="display:none">EXHAUSTED</span></button>
+    <div class="header-actions" id="headerActions"></div>
   </header>
   <div class="agent-banner" id="agentBanner" style="display:none">Agent enabled without active filters: the agent will
     see all traffic</div>

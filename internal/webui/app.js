@@ -2,6 +2,7 @@ import { setFilterText, setFocusEnabled, setAgentPreview, setAgentEnabled, setAg
 import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch, setOnSelectedUpdated, loadMore, setOnReplayUpdate, loadReplayRuns, loadReplayEvents, loadReplayEventDetail } from './api.js';
 import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, toggleReplayPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, buildResponseTab, ITEM_HEIGHT, renderReplayFeed, renderReplayEventDetail } from './render.js';
 import { makeResizable } from './resize.js';
+import { initHeader, setHeaderMode } from './header.js';
 import { isBodySearching, cancelBodySearch, invalidateCriteriaSave, syncCriteriaFromServer, restoreBodyFilter, setOnFilterChange, setOnListRefresh, initFilterPopover, openFilterPopover, closeFilterPopover, closeChip, openChip, getFilterChipsData, getMatchMode, setMatchMode, queueCriteriaSave } from './filters.js';
 import { initBodyTypes, editBody, saveBody, cancelBody, setBodyView, copyBody, getActiveEditor, postRenderBody } from './body-types.js';
 
@@ -18,9 +19,129 @@ document.getElementById('filterInput').addEventListener('input', (e) => {
     renderList();
 });
 
-document.getElementById('ignoredBtn').addEventListener('click', toggleIgnoredPanel);
-document.getElementById('focusBtn').addEventListener('click', toggleFocusedPanel);
-document.getElementById('rulesBtn').addEventListener('click', toggleRulesPanel);
+// Header action bar - items rendered by header.js; separators are derived from
+// the visible units, so replay mode can't leave orphaned palotes behind.
+const refreshClick = () => {
+    setLastTimestamp('');
+    document.getElementById('requestList').scrollTop = 0;
+    loadRequests();
+};
+
+const focusEnabledChange = (e) => {
+    setFocusEnabled(e.target.checked);
+    queueCriteriaSave();
+    document.getElementById('requestList').scrollTop = 0;
+};
+
+const agentPreviewChange = async (e) => {
+    const enabled = e.target.checked;
+    cancelBodySearch();
+    invalidateCriteriaSave();
+    setAgentPreview(enabled);
+    updateAgentBanner();
+    try {
+        const resp = await fetch('/api/agent/view', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ preview: enabled }),
+        });
+        const data = await resp.json();
+        applyFullList(data);
+        document.getElementById('requestList').scrollTop = 0;
+        syncCriteriaFromServer(data.filters, data.focusEnabled, {
+            preview: data.agentPreview,
+            enabled: data.agentEnabled,
+            exposed: data.agentExposed,
+        });
+    } catch (_) {}
+};
+
+const agentEnabledChange = async (e) => {
+    const enabled = e.target.checked;
+    setAgentEnabled(enabled);
+    updateAgentBanner();
+    try {
+        const resp = await fetch('/api/agent/enabled', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled }),
+        });
+        const data = await resp.json();
+        setAgentEnabled(!!data.enabled);
+        setAgentExposed(!!data.exposed);
+        updateAgentBanner();
+    } catch (_) {}
+};
+
+const replayChipClick = () => {
+    toggleReplayPanel();
+    if (document.getElementById('replayPanel').classList.contains('open')) {
+        const sel = document.getElementById('replayRunSelect');
+        if (!sel.value) {
+            populateReplayRuns().then(() => {
+                if (!_activeRunId && _pickedRun === null && sel.value) renderFeedFor(sel.value);
+            });
+        }
+        renderFeedFor(_pickedRun === null ? (_activeRunId || sel.value) : _pickedRun);
+    }
+};
+
+initHeader('headerActions', [
+    {
+        id: 'focusBtn',
+        hiddenIn: ['replay'],
+        html: '<button class="btn" id="focusBtn">Focus <span class="badge" id="focusedCount">0</span></button>',
+        events: { click: toggleFocusedPanel },
+    },
+    {
+        id: 'focusEnabled',
+        hiddenIn: ['replay'],
+        sep: false,
+        html: '<div class="auto-refresh"><input type="checkbox" id="focusEnabled" title="Enable focus filter"></div>',
+        events: { change: focusEnabledChange },
+    },
+    {
+        id: 'agentEnabledToggle',
+        hiddenIn: ['replay'],
+        html: '<label class="agent-view-toggle" id="agentEnabledToggle"><input type="checkbox" id="agentEnabled" title="Enable the agent MCP (resets to off on every start)"><span>Agent enabled</span></label>',
+        events: { change: agentEnabledChange },
+    },
+    {
+        id: 'agentPreviewToggle',
+        hiddenIn: ['replay'],
+        sep: false,
+        html: '<label class="agent-view-toggle" id="agentPreviewToggle"><input type="checkbox" id="agentPreview" title="Agent view: preview the scope the agent MCP can see"><span>Agent view</span></label>',
+        events: { change: agentPreviewChange },
+    },
+    {
+        id: 'refreshBtn',
+        html: '<button class="btn" id="refreshBtn">Refresh</button>',
+        events: { click: refreshClick },
+    },
+    {
+        id: 'autoRefresh',
+        sep: false,
+        html: '<div class="auto-refresh"><input type="checkbox" id="autoRefresh" checked title="Auto-refresh requests"></div>',
+    },
+    {
+        id: 'ignoredBtn',
+        hiddenIn: ['replay'],
+        html: '<button class="btn" id="ignoredBtn">Ignored <span class="badge" id="ignoredCount">0</span></button>',
+        events: { click: toggleIgnoredPanel },
+    },
+    {
+        id: 'rulesBtn',
+        hiddenIn: ['replay'],
+        html: '<button class="btn" id="rulesBtn">Rules <span class="badge" id="rulesCount">0</span></button>',
+        events: { click: toggleRulesPanel },
+    },
+    {
+        id: 'replayChip',
+        hiddenIn: ['normal'],
+        html: '<button class="btn replay-chip" id="replayChip" title="Replay activity"><span class="replay-chip-label">REPLAY</span> <span class="badge" id="replayChipProgress">0/0</span><span class="replay-chip-exhausted" id="replayChipExhausted" style="display:none">EXHAUSTED</span></button>',
+        events: { click: replayChipClick },
+    },
+]);
 
 // ── Replay mode (read-only UI over a session) ─────────────────────────────
 let _replayStreamSrc = null;
@@ -41,11 +162,10 @@ function updateReplayChip(rp) {
 
 function applyReplayLayout() {
     if (document.body.dataset.replayLayout) return;
-    ['focusBtn', 'focusEnabled', 'agentEnabledToggle', 'agentPreviewToggle', 'ignoredBtn', 'rulesBtn', 'sepIgnored', 'sepRules', 'agentBanner'].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.style.display = 'none';
-    });
     document.body.dataset.replayLayout = '1';
+    setHeaderMode('replay');
+    const banner = document.getElementById('agentBanner');
+    if (banner) banner.style.display = 'none';
 }
 
 function renderFeedFor(runId) {
@@ -58,12 +178,11 @@ function syncReplay(rp) {
     if (!rp) {
         if (_replayStreamSrc) { _replayStreamSrc.close(); _replayStreamSrc = null; }
         _activeRunId = null;
-        document.getElementById('replayChip').style.display = 'none';
+        setHeaderMode('normal');
         document.getElementById('replayPanel').classList.remove('open');
         return;
     }
     applyReplayLayout();
-    document.getElementById('replayChip').style.display = '';
     updateReplayChip(rp);
     setReplayServed(new Set(rp.served || []));
     setReplayComplete(!rp.active && !!rp.runId);
@@ -141,18 +260,6 @@ function populateReplayRuns() {
 }
 
 setOnReplayUpdate(syncReplay);
-document.getElementById('replayChip').addEventListener('click', () => {
-    toggleReplayPanel();
-    if (document.getElementById('replayPanel').classList.contains('open')) {
-        const sel = document.getElementById('replayRunSelect');
-        if (!sel.value) {
-            populateReplayRuns().then(() => {
-                if (!_activeRunId && _pickedRun === null && sel.value) renderFeedFor(sel.value);
-            });
-        }
-        renderFeedFor(_pickedRun === null ? (_activeRunId || sel.value) : _pickedRun);
-    }
-});
 document.getElementById('replayPanel').addEventListener('click', (e) => {
     if (e.target.closest('.ignored-panel-close')) { toggleReplayPanel(); return; }
     const item = e.target.closest('[data-action="replay-event-detail"]');
@@ -170,59 +277,6 @@ document.getElementById('replayRunSelect').addEventListener('change', (e) => {
 makeResizable(document.getElementById('replayDrag'), document.getElementById('replayPanel'), {
     persistKey: 'gospy-replay-panel-h',
     min: 120,
-});
-
-
-document.getElementById('refreshBtn').addEventListener('click', () => {
-    setLastTimestamp('');
-    document.getElementById('requestList').scrollTop = 0;
-    loadRequests();
-});
-
-document.getElementById('focusEnabled').addEventListener('change', (e) => {
-    setFocusEnabled(e.target.checked);
-    queueCriteriaSave();
-    document.getElementById('requestList').scrollTop = 0;
-});
-
-document.getElementById('agentPreview').addEventListener('change', async (e) => {
-    const enabled = e.target.checked;
-    cancelBodySearch();
-    invalidateCriteriaSave();
-    setAgentPreview(enabled);
-    updateAgentBanner();
-    try {
-        const resp = await fetch('/api/agent/view', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ preview: enabled }),
-        });
-        const data = await resp.json();
-        applyFullList(data);
-        document.getElementById('requestList').scrollTop = 0;
-        syncCriteriaFromServer(data.filters, data.focusEnabled, {
-            preview: data.agentPreview,
-            enabled: data.agentEnabled,
-            exposed: data.agentExposed,
-        });
-    } catch (_) {}
-});
-
-document.getElementById('agentEnabled').addEventListener('change', async (e) => {
-    const enabled = e.target.checked;
-    setAgentEnabled(enabled);
-    updateAgentBanner();
-    try {
-        const resp = await fetch('/api/agent/enabled', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled }),
-        });
-        const data = await resp.json();
-        setAgentEnabled(!!data.enabled);
-        setAgentExposed(!!data.exposed);
-        updateAgentBanner();
-    } catch (_) {}
 });
 
 document.getElementById('focusAddBtn').addEventListener('click', () => {

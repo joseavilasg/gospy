@@ -242,6 +242,12 @@ header .stats {
   color: var(--text-dim);
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-12);
+}
+
 .filter-input {
   background: var(--bg-input);
   border: 1px solid var(--bg-active);
