@@ -179,6 +179,17 @@ func TestReplayDetailToolbarGated(t *testing.T) {
 	}
 }
 
+// TestReplayDetailPanelTopPadding locks the replay-specific top padding of the
+// detail panel. With the action toolbar absent in replay, the panel must fall
+// back to the toolbar's own margin gap (--sp-12) instead of the full panel
+// padding (--sp-20) - otherwise the tabs content, which already has its own
+// padding, stacks two large paddings and looks overly spacious.
+func TestReplayDetailPanelTopPadding(t *testing.T) {
+	if !strings.Contains(styleCSS, ".detail-panel:not(:has(.detail-toolbar))") {
+		t.Fatal("style.css: detail panel lost its toolbarless top-padding rule - .detail-panel:not(:has(.detail-toolbar)) { padding-top: var(--sp-12) } is required so replay mode doesn't stack the full panel padding on top of the tab content's own padding")
+	}
+}
+
 func TestReplayFieldInListResponse(t *testing.T) {
 	s, _, _ := newTestServer(t)
 	full := s.fullList(0, 10)

@@ -636,6 +636,9 @@ header .stats {
     overflow-wrap: anywhere;
     background: var(--bg-panel);
 }
+.detail-panel:not(:has(.detail-toolbar)) {
+    padding-top: var(--sp-12);
+}
 .detail-panel .empty {
     color: var(--text-inactive);
     text-align: center;
@@ -2191,7 +2194,7 @@ pre.body-content {
     border-bottom: 1px solid var(--bg-active);
 }
 .replay-drag:hover { background: var(--bg-active); }
-body.resizing { cursor: ns-resize; user-select: none; }
+body.resizing { cursor: ns-resize; -webkit-user-select: none; user-select: none; }
 .replay-drawer-header {
     padding: var(--sp-8) var(--sp-12);
     border-bottom: 1px solid var(--bg-active);
