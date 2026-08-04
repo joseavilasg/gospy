@@ -8,10 +8,13 @@ import (
 	"github.com/one-api/winutil/executable"
 )
 
+func signatureSupported() bool { return true }
+
 func verifyFile(filePath string) *SignatureResult {
 	result := &SignatureResult{
 		FilePath:   filePath,
 		VerifiedAt: time.Now(),
+		Supported:  true,
 	}
 
 	signed, err := executable.VerifySignature(filePath)

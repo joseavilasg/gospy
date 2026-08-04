@@ -1,16 +1,6 @@
-//go:build !windows
+//go:build !windows && !linux
 
 package proxy
-
-type ProcessInfo struct {
-	PID         uint32
-	Path        string
-	Name        string
-	DisplayName string
-	IsSigned    *bool
-	SignerName  string
-	SignerReady bool
-}
 
 type ClientResolver struct{}
 

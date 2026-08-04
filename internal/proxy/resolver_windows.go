@@ -69,16 +69,6 @@ func processDisplayName(exePath string) (name, displayName string) {
 	return base, ""
 }
 
-type ProcessInfo struct {
-	PID         uint32
-	Path        string
-	Name        string
-	DisplayName string
-	IsSigned    *bool
-	SignerName  string
-	SignerReady bool
-}
-
 type ClientResolver struct {
 	mu         sync.RWMutex
 	portToInfo map[uint16]*ProcessInfo

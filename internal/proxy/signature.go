@@ -14,6 +14,7 @@ type SignatureResult struct {
 	SignerName string    `json:"signerName,omitempty"`
 	VerifiedAt time.Time `json:"verifiedAt"`
 	Error      string    `json:"error,omitempty"`
+	Supported  bool      `json:"supported"`
 }
 
 type SignatureCache struct {
@@ -55,6 +56,7 @@ func (sc *SignatureCache) VerifyAsync(filePath string) {
 	sc.cache[filePath] = &SignatureResult{
 		FilePath:   filePath,
 		VerifiedAt: time.Now(),
+		Supported:  signatureSupported(),
 	}
 	sc.mu.Unlock()
 

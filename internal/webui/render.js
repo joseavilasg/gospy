@@ -572,7 +572,9 @@ function loadSignatureInfo() {
             const signedEl = document.getElementById('originSigned');
             if (!signedEl) return;
 
-            if (data.status === 'analyzing') {
+            if (data.supported === false) {
+                signedEl.innerHTML = '<span class="origin-status unknown">N/A</span>';
+            } else if (data.status === 'analyzing') {
                 signedEl.innerHTML = '<span class="origin-status analyzing">Analyzing...</span>';
             } else if (data.isSigned) {
                 signedEl.innerHTML = `<span class="origin-status signed">✓ Signed by ${escapeHtml(data.signerName || 'Unknown')}</span>`;

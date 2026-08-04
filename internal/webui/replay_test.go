@@ -225,6 +225,16 @@ func TestHeaderModuleSepsFromVisible(t *testing.T) {
 	}
 }
 
+// TestOriginSignedUnsupportedHandled locks the signature row on platforms
+// without binary signing: the UI must render "N/A" when the server reports
+// supported:false instead of a misleading "Unsigned" (Linux has no
+// Authenticode equivalent).
+func TestOriginSignedUnsupportedHandled(t *testing.T) {
+	if !strings.Contains(renderJS, "data.supported === false") {
+		t.Fatal("render.js: signature loading must handle supported:false so Linux shows N/A instead of Unsigned")
+	}
+}
+
 func TestReplayFieldInListResponse(t *testing.T) {
 	s, _, _ := newTestServer(t)
 	full := s.fullList(0, 10)
