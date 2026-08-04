@@ -1,265 +1,282 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gospy - Request Viewer</title>
-    <link rel="stylesheet" href="style.css">
-    <link rel="stylesheet" href="json-viewer.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gospy - Request Viewer</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="json-viewer.css">
 </head>
+
 <body>
-    <header>
-        <h1>GOSPY</h1>
-        <span class="stats" id="stats">0 requests</span>
-        <div style="flex:1"></div>
-        <button class="btn" id="focusBtn">Focus <span class="badge" id="focusedCount">0</span></button>
-        <div class="auto-refresh">
-            <input type="checkbox" id="focusEnabled" title="Enable focus filter">
-        </div>
-        <label class="agent-view-toggle" id="agentEnabledToggle">
-            <input type="checkbox" id="agentEnabled" title="Enable the agent MCP (resets to off on every start)">
-            <span>Agent enabled</span>
-        </label>
-        <label class="agent-view-toggle" id="agentPreviewToggle">
-            <input type="checkbox" id="agentPreview" title="Agent view: preview the scope the agent MCP can see">
-            <span>Agent view</span>
-        </label>
-        <div class="header-sep"></div>
-        <button class="btn" id="refreshBtn">Refresh</button>
-        <div class="auto-refresh">
-            <input type="checkbox" id="autoRefresh" checked title="Auto-refresh requests">
-        </div>
-        <div class="header-sep" id="sepIgnored"></div>
-        <button class="btn" id="ignoredBtn">Ignored <span class="badge" id="ignoredCount">0</span></button>
-        <div class="header-sep" id="sepRules"></div>
-        <button class="btn" id="rulesBtn">Rules <span class="badge" id="rulesCount">0</span></button>
-        <button class="btn replay-chip" id="replayChip" style="display:none" title="Replay activity"><span class="replay-chip-label">REPLAY</span> <span class="badge" id="replayChipProgress">0/0</span><span class="replay-chip-exhausted" id="replayChipExhausted" style="display:none">EXHAUSTED</span></button>
-    </header>
-    <div class="agent-banner" id="agentBanner" style="display:none">Agent enabled without active filters: the agent will see all traffic</div>
-    <div class="container" id="container">
-        <div class="list-column">
-            <div class="filter-bar" id="filterBar">
-                <div class="filter-bar-row">
-                    <input type="text" class="filter-input" id="filterInput" placeholder="Filter (method, url, status, process)...">
-                    <button class="filter-add-btn" id="addFilterBtn">+ Add filter</button>
-                    <div class="filter-popover" id="filterPopover" style="display:none">
-                        <div class="filter-popover-step" id="filterStep1">
-                            <div class="filter-popover-search">
-                                <input type="text" placeholder="Search filter..." id="filterTypeSearch">
-                            </div>
-                            <div class="filter-popover-content">
-                                <!-- populated dynamically from registered filter types -->
-                            </div>
-                        </div>
-                        <div class="filter-popover-step" id="filterStep2" style="display:none">
-                            <div class="filter-popover-search">
-                                <button class="filter-type-back" id="filterTypeBack">←</button>
-                                <span class="filter-popover-title" id="filterStep2Title"></span>
-                            </div>
-                            <div class="filter-popover-content" id="modalFilterContent"></div>
-                            <div class="filter-popover-footer">
-                                <span class="filter-popover-count" id="filterMatchCount"></span>
-                                <button class="filter-popover-clear" id="filterClearBtn">Clear all</button>
-                                <button class="filter-popover-confirm" id="filterConfirmBtn">Apply</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="filter-chips" id="filterChips"></div>
-                <div class="filter-overflow-panel" id="filterOverflowPanel" style="display:none">
-                    <div class="filter-bar-header" id="filterBarHeader">
-                        <span class="filter-bar-label">Active filters</span>
-                        <div class="filter-mode-toggle" id="filterModeToggle">
-                            <button class="filter-mode-btn active" data-mode="all">Match: All</button>
-                            <button class="filter-mode-btn" data-mode="any">Match: Any</button>
-                        </div>
-                    </div>
-                    <div class="filter-overflow-chips" id="filterOverflowChips"></div>
-                    <div class="filter-overflow-divider"></div>
-                    <button class="filter-add-btn" id="overflowAddFilterBtn">+ Add filter</button>
-                </div>
-            </div>
-                <div class="request-list" id="requestList">
-                    <div style="padding:20px;color:#666;text-align:center">
-                        Waiting for requests...
-                    </div>
-                </div>
-            </div>
-            <button class="list-toggle" id="toggleListBtn" title="Toggle request list"><svg width="12" height="12" viewBox="0 0 12 12"><polyline points="8,2 4,6 8,10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-        <div class="detail-panel" id="detailPanel">
-            <div class="empty">Select a request to view details</div>
-        </div>
-        <div class="ignored-panel side-panel" id="ignoredPanel">
-            <div class="ignored-panel-header">
-                <h3>Ignored Hosts</h3>
-                <button class="ignored-panel-close">&times;</button>
-            </div>
-            <div class="ignored-list" id="ignoredList"></div>
-            <div class="focus-add">
-                <input type="text" id="ignoreInput" placeholder="Add host or wildcard...">
-                <button id="ignoreAddBtn">+</button>
-            </div>
-        </div>
-        <div class="ignored-panel side-panel" id="focusedPanel">
-            <div class="ignored-panel-header">
-                <h3>Focused Hosts</h3>
-                <button class="ignored-panel-close">&times;</button>
-            </div>
-            <div class="ignored-list" id="focusedList"></div>
-            <div class="focus-add">
-                <input type="text" id="focusInput" placeholder="Add host or wildcard...">
-                <button id="focusAddBtn">+</button>
-            </div>
-        </div>
-        <div class="rules-panel side-panel" id="rulesPanel">
-            <div class="ignored-panel-header">
-                <h3>Rules</h3>
-                <button class="ignored-panel-close">&times;</button>
-            </div>
-            <div class="rules-list" id="rulesList"></div>
-            <div class="rules-add">
-                <button id="addRuleBtn">+ Create Rule</button>
-            </div>
-        </div>
+  <header>
+    <h1>GOSPY</h1>
+    <span class="stats" id="stats">0 requests</span>
+    <div style="flex:1"></div>
+    <button class="btn" id="focusBtn">Focus <span class="badge" id="focusedCount">0</span></button>
+    <div class="auto-refresh">
+      <input type="checkbox" id="focusEnabled" title="Enable focus filter">
     </div>
-
-    <div class="replay-panel" id="replayPanel">
-        <div class="replay-drag" id="replayDrag"></div>
-        <div class="replay-drawer-header">
-            <h3>Replay activity</h3>
-            <select id="replayRunSelect" class="replay-run-select"></select>
-            <span class="replay-run-meta" id="replayRunMeta"></span>
-            <div style="flex:1"></div>
-            <button class="ignored-panel-close" title="Close replay panel">&times;</button>
-        </div>
-        <div class="replay-feed" id="replayFeed"></div>
+    <label class="agent-view-toggle" id="agentEnabledToggle">
+      <input type="checkbox" id="agentEnabled" title="Enable the agent MCP (resets to off on every start)">
+      <span>Agent enabled</span>
+    </label>
+    <label class="agent-view-toggle" id="agentPreviewToggle">
+      <input type="checkbox" id="agentPreview" title="Agent view: preview the scope the agent MCP can see">
+      <span>Agent view</span>
+    </label>
+    <div class="header-sep"></div>
+    <button class="btn" id="refreshBtn">Refresh</button>
+    <div class="auto-refresh">
+      <input type="checkbox" id="autoRefresh" checked title="Auto-refresh requests">
     </div>
-
-    <div class="modal-overlay" id="ruleModal">
-        <div class="modal">
-            <div class="modal-header">
-                <h3 id="ruleModalTitle">New Rule</h3>
-                <button class="modal-close" id="ruleModalClose">&times;</button>
+    <div class="header-sep" id="sepIgnored"></div>
+    <button class="btn" id="ignoredBtn">Ignored <span class="badge" id="ignoredCount">0</span></button>
+    <div class="header-sep" id="sepRules"></div>
+    <button class="btn" id="rulesBtn">Rules <span class="badge" id="rulesCount">0</span></button>
+    <button class="btn replay-chip" id="replayChip" style="display:none" title="Replay activity"><span
+        class="replay-chip-label">REPLAY</span> <span class="badge" id="replayChipProgress">0/0</span><span
+        class="replay-chip-exhausted" id="replayChipExhausted" style="display:none">EXHAUSTED</span></button>
+  </header>
+  <div class="agent-banner" id="agentBanner" style="display:none">Agent enabled without active filters: the agent will
+    see all traffic</div>
+  <div class="container" id="container">
+    <div class="list-column">
+      <div class="filter-bar" id="filterBar">
+        <div class="filter-bar-row">
+          <input type="text" class="filter-input" id="filterInput"
+            placeholder="Filter (method, url, status, process)...">
+          <button class="filter-add-btn" id="addFilterBtn">+ Add filter</button>
+          <div class="filter-popover" id="filterPopover" style="display:none">
+            <div class="filter-popover-step" id="filterStep1">
+              <div class="filter-popover-search">
+                <input type="text" placeholder="Search filter..." id="filterTypeSearch">
+              </div>
+              <div class="filter-popover-content">
+                <!-- populated dynamically from registered filter types -->
+              </div>
             </div>
-            <div class="modal-body">
-                <div class="form-group">
-                    <label>Name</label>
-                    <input type="text" id="ruleName" placeholder="Rule name...">
-                </div>
-
-                <div class="form-section">Match</div>
-                <div class="form-row">
-                    <div class="form-group form-group-small">
-                        <label>Method</label>
-                        <select id="ruleMethod">
-                            <option value="">Any</option>
-                            <option value="GET">GET</option>
-                            <option value="POST">POST</option>
-                            <option value="PUT">PUT</option>
-                            <option value="DELETE">DELETE</option>
-                            <option value="PATCH">PATCH</option>
-                            <option value="OPTIONS">OPTIONS</option>
-                            <option value="HEAD">HEAD</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Host</label>
-                        <input type="text" id="ruleHost" placeholder="telemetry.example.com">
-                    </div>
-                    <div class="form-group">
-                        <label>URL (regex)</label>
-                        <input type="text" id="ruleUrl" placeholder="/api/v2/.*">
-                    </div>
-                </div>
-                <div id="matchWarning" class="match-warning" style="display:none"></div>
-
-                <div class="form-section">Request</div>
-                <div class="form-group">
-                    <label>When a request matches above:</label>
-                    <div class="radio-group">
-                        <label class="radio-label"><input type="radio" name="ruleRequestAction" value="passthrough" checked> Passthrough — forward as-is</label>
-                        <label class="radio-label"><input type="radio" name="ruleRequestAction" value="modify"> Modify — change headers/body before server</label>
-                        <label class="radio-label"><input type="radio" name="ruleRequestAction" value="mock"> Mock — block, return fake response</label>
-                        <label class="radio-label"><input type="radio" name="ruleRequestAction" value="drop"> Drop — block silently (timeout)</label>
-                    </div>
-                </div>
-
-                <div id="modifyRequestSection" style="display:none">
-                    <div class="form-row">
-                        <div class="form-group" style="flex:1">
-                            <label>Host</label>
-                            <input type="text" id="modifyHost" placeholder="example.com">
-                        </div>
-                        <div class="form-group" style="flex:1">
-                            <label>URL Path</label>
-                            <input type="text" id="modifyUrl" placeholder="/api/v2/data?q=1">
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label>Modified Request Headers</label>
-                        <div id="modifyHeaders" class="inline-headers-editor"></div>
-                        <button class="btn-small" id="addModifyHeader">+ Add Header</button>
-                    </div>
-                    <div class="form-group">
-                        <label>Modified Request Body</label>
-                        <div class="monaco-modal-container" id="modifyBodyEditor"></div>
-                    </div>
-                </div>
-
-                <div id="mockRequestSection" style="display:none">
-                    <div class="form-section">Mock Response</div>
-                    <div class="form-group">
-                        <label>Status Code</label>
-                        <input type="number" id="mockRequestStatus" value="200" min="100" max="599">
-                    </div>
-                    <div class="form-group">
-                        <label>Response Headers</label>
-                        <div id="mockRequestHeaders" class="inline-headers-editor"></div>
-                        <button class="btn-small" id="addMockReqHeader">+ Add Header</button>
-                    </div>
-                    <div class="form-group">
-                        <label>Response Body</label>
-                        <div class="monaco-modal-container" id="mockRequestBodyEditor"></div>
-                    </div>
-                </div>
-
-                <div id="responseSection">
-                    <div class="form-section">Response</div>
-                    <div class="form-group">
-                        <label>After request reaches server:</label>
-                        <div class="radio-group">
-                            <label class="radio-label"><input type="radio" name="ruleResponseAction" value="real" checked> Real — forward server response as-is</label>
-                            <label class="radio-label"><input type="radio" name="ruleResponseAction" value="response_mock"> Mock — replace with custom response</label>
-                        </div>
-                    </div>
-
-                    <div id="mockResponseSection" style="display:none">
-                        <div class="form-group">
-                            <label>Status Code</label>
-                            <input type="number" id="mockResponseStatus" value="200" min="100" max="599">
-                        </div>
-                        <div class="form-group">
-                            <label>Response Headers</label>
-                            <div id="mockResponseHeaders" class="inline-headers-editor"></div>
-                            <button class="btn-small" id="addMockRespHeader">+ Add Header</button>
-                        </div>
-                        <div class="form-group">
-                            <label>Response Body</label>
-                            <div class="monaco-modal-container" id="mockResponseBodyEditor"></div>
-                        </div>
-                    </div>
-                </div>
+            <div class="filter-popover-step" id="filterStep2" style="display:none">
+              <div class="filter-popover-search">
+                <button class="filter-type-back" id="filterTypeBack">←</button>
+                <span class="filter-popover-title" id="filterStep2Title"></span>
+              </div>
+              <div class="filter-popover-content" id="modalFilterContent"></div>
+              <div class="filter-popover-footer">
+                <span class="filter-popover-count" id="filterMatchCount"></span>
+                <button class="filter-popover-clear" id="filterClearBtn">Clear all</button>
+                <button class="filter-popover-confirm" id="filterConfirmBtn">Apply</button>
+              </div>
             </div>
-            <div class="modal-footer">
-                <button class="modal-btn modal-btn-cancel" id="ruleModalCancelBtn">Cancel</button>
-                <button class="modal-btn modal-btn-save" id="ruleModalSaveBtn">Save Rule</button>
-            </div>
+          </div>
         </div>
+        <div class="filter-chips" id="filterChips"></div>
+        <div class="filter-overflow-panel" id="filterOverflowPanel" style="display:none">
+          <div class="filter-bar-header" id="filterBarHeader">
+            <span class="filter-bar-label">Active filters</span>
+            <div class="filter-mode-toggle" id="filterModeToggle">
+              <button class="filter-mode-btn active" data-mode="all">Match: All</button>
+              <button class="filter-mode-btn" data-mode="any">Match: Any</button>
+            </div>
+          </div>
+          <div class="filter-overflow-chips" id="filterOverflowChips"></div>
+          <div class="filter-overflow-divider"></div>
+          <button class="filter-add-btn" id="overflowAddFilterBtn">+ Add filter</button>
+        </div>
+      </div>
+      <div class="request-list" id="requestList">
+        <div style="padding:20px;color:#666;text-align:center">
+          Waiting for requests...
+        </div>
+      </div>
     </div>
+    <button class="list-toggle" id="toggleListBtn" title="Toggle request list"><svg width="12" height="12"
+        viewBox="0 0 12 12">
+        <polyline points="8,2 4,6 8,10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+          stroke-linejoin="round" />
+      </svg></button>
+    <div class="detail-panel" id="detailPanel">
+      <div class="empty">Select a request to view details</div>
+    </div>
+    <div class="ignored-panel side-panel" id="ignoredPanel">
+      <div class="ignored-panel-header">
+        <h3>Ignored Hosts</h3>
+        <button class="ignored-panel-close">&times;</button>
+      </div>
+      <div class="ignored-list" id="ignoredList"></div>
+      <div class="focus-add">
+        <input type="text" id="ignoreInput" placeholder="Add host or wildcard...">
+        <button id="ignoreAddBtn">+</button>
+      </div>
+    </div>
+    <div class="ignored-panel side-panel" id="focusedPanel">
+      <div class="ignored-panel-header">
+        <h3>Focused Hosts</h3>
+        <button class="ignored-panel-close">&times;</button>
+      </div>
+      <div class="ignored-list" id="focusedList"></div>
+      <div class="focus-add">
+        <input type="text" id="focusInput" placeholder="Add host or wildcard...">
+        <button id="focusAddBtn">+</button>
+      </div>
+    </div>
+    <div class="rules-panel side-panel" id="rulesPanel">
+      <div class="ignored-panel-header">
+        <h3>Rules</h3>
+        <button class="ignored-panel-close">&times;</button>
+      </div>
+      <div class="rules-list" id="rulesList"></div>
+      <div class="rules-add">
+        <button id="addRuleBtn">+ Create Rule</button>
+      </div>
+    </div>
+  </div>
 
-    <script src="json-viewer.js"></script>
-    <script src="monaco/vs/loader.js"></script>
-    <script src="monaco-init.js"></script>
-    <script type="module" src="app.js"></script>
+  <div class="replay-panel" id="replayPanel">
+    <div class="replay-drag" id="replayDrag"></div>
+    <div class="replay-drawer-header">
+      <h3>Replay activity</h3>
+      <select id="replayRunSelect" class="replay-run-select"></select>
+      <span class="replay-run-meta" id="replayRunMeta"></span>
+      <div style="flex:1"></div>
+      <button class="ignored-panel-close" title="Close replay panel">&times;</button>
+    </div>
+    <div class="replay-feed" id="replayFeed"></div>
+  </div>
+
+  <div class="modal-overlay" id="ruleModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="ruleModalTitle">New Rule</h3>
+        <button class="modal-close" id="ruleModalClose">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Name</label>
+          <input type="text" id="ruleName" placeholder="Rule name...">
+        </div>
+
+        <div class="form-section">Match</div>
+        <div class="form-row">
+          <div class="form-group form-group-small">
+            <label>Method</label>
+            <select id="ruleMethod">
+              <option value="">Any</option>
+              <option value="GET">GET</option>
+              <option value="POST">POST</option>
+              <option value="PUT">PUT</option>
+              <option value="DELETE">DELETE</option>
+              <option value="PATCH">PATCH</option>
+              <option value="OPTIONS">OPTIONS</option>
+              <option value="HEAD">HEAD</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Host</label>
+            <input type="text" id="ruleHost" placeholder="telemetry.example.com">
+          </div>
+          <div class="form-group">
+            <label>URL (regex)</label>
+            <input type="text" id="ruleUrl" placeholder="/api/v2/.*">
+          </div>
+        </div>
+        <div id="matchWarning" class="match-warning" style="display:none"></div>
+
+        <div class="form-section">Request</div>
+        <div class="form-group">
+          <label>When a request matches above:</label>
+          <div class="radio-group">
+            <label class="radio-label"><input type="radio" name="ruleRequestAction" value="passthrough" checked>
+              Passthrough — forward as-is</label>
+            <label class="radio-label"><input type="radio" name="ruleRequestAction" value="modify"> Modify — change
+              headers/body before server</label>
+            <label class="radio-label"><input type="radio" name="ruleRequestAction" value="mock"> Mock — block, return
+              fake response</label>
+            <label class="radio-label"><input type="radio" name="ruleRequestAction" value="drop"> Drop — block silently
+              (timeout)</label>
+          </div>
+        </div>
+
+        <div id="modifyRequestSection" style="display:none">
+          <div class="form-row">
+            <div class="form-group" style="flex:1">
+              <label>Host</label>
+              <input type="text" id="modifyHost" placeholder="example.com">
+            </div>
+            <div class="form-group" style="flex:1">
+              <label>URL Path</label>
+              <input type="text" id="modifyUrl" placeholder="/api/v2/data?q=1">
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Modified Request Headers</label>
+            <div id="modifyHeaders" class="inline-headers-editor"></div>
+            <button class="btn-small" id="addModifyHeader">+ Add Header</button>
+          </div>
+          <div class="form-group">
+            <label>Modified Request Body</label>
+            <div class="monaco-modal-container" id="modifyBodyEditor"></div>
+          </div>
+        </div>
+
+        <div id="mockRequestSection" style="display:none">
+          <div class="form-section">Mock Response</div>
+          <div class="form-group">
+            <label>Status Code</label>
+            <input type="number" id="mockRequestStatus" value="200" min="100" max="599">
+          </div>
+          <div class="form-group">
+            <label>Response Headers</label>
+            <div id="mockRequestHeaders" class="inline-headers-editor"></div>
+            <button class="btn-small" id="addMockReqHeader">+ Add Header</button>
+          </div>
+          <div class="form-group">
+            <label>Response Body</label>
+            <div class="monaco-modal-container" id="mockRequestBodyEditor"></div>
+          </div>
+        </div>
+
+        <div id="responseSection">
+          <div class="form-section">Response</div>
+          <div class="form-group">
+            <label>After request reaches server:</label>
+            <div class="radio-group">
+              <label class="radio-label"><input type="radio" name="ruleResponseAction" value="real" checked> Real —
+                forward server response as-is</label>
+              <label class="radio-label"><input type="radio" name="ruleResponseAction" value="response_mock"> Mock —
+                replace with custom response</label>
+            </div>
+          </div>
+
+          <div id="mockResponseSection" style="display:none">
+            <div class="form-group">
+              <label>Status Code</label>
+              <input type="number" id="mockResponseStatus" value="200" min="100" max="599">
+            </div>
+            <div class="form-group">
+              <label>Response Headers</label>
+              <div id="mockResponseHeaders" class="inline-headers-editor"></div>
+              <button class="btn-small" id="addMockRespHeader">+ Add Header</button>
+            </div>
+            <div class="form-group">
+              <label>Response Body</label>
+              <div class="monaco-modal-container" id="mockResponseBodyEditor"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="modal-btn modal-btn-cancel" id="ruleModalCancelBtn">Cancel</button>
+        <button class="modal-btn modal-btn-save" id="ruleModalSaveBtn">Save Rule</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="json-viewer.js"></script>
+  <script src="monaco/vs/loader.js"></script>
+  <script src="monaco-init.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
+
 </html>
