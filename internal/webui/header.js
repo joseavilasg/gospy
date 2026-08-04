@@ -12,35 +12,35 @@ let items = [];
 let mode = 'normal';
 
 export function initHeader(containerId, headerItems) {
-    containerEl = document.getElementById(containerId);
-    items = headerItems;
-    render();
+  containerEl = document.getElementById(containerId);
+  items = headerItems;
+  render();
 }
 
 export function setHeaderMode(nextMode) {
-    if (nextMode === mode) return;
-    mode = nextMode;
-    render();
+  if (nextMode === mode) return;
+  mode = nextMode;
+  render();
 }
 
 function render() {
-    const visible = items.filter((item) => !(item.hiddenIn || []).includes(mode));
-    let html = '';
-    let hasPrev = false;
-    for (const item of visible) {
-        if (hasPrev && item.sep !== false) html += '<div class="header-sep"></div>';
-        html += item.html;
-        hasPrev = true;
+  const visible = items.filter((item) => !(item.hiddenIn || []).includes(mode));
+  let html = '';
+  let hasPrev = false;
+  for (const item of visible) {
+    if (hasPrev && item.sep !== false) html += '<div class="header-sep"></div>';
+    html += item.html;
+    hasPrev = true;
+  }
+  containerEl.innerHTML = html;
+  for (const item of items) {
+    const el = document.getElementById(item.id);
+    if (!el) continue;
+    const hidden = (item.hiddenIn || []).includes(mode);
+    el.style.display = hidden ? 'none' : '';
+    if (hidden || !item.events) continue;
+    for (const [type, handler] of Object.entries(item.events)) {
+      el.addEventListener(type, handler);
     }
-    containerEl.innerHTML = html;
-    for (const item of items) {
-        const el = document.getElementById(item.id);
-        if (!el) continue;
-        const hidden = (item.hiddenIn || []).includes(mode);
-        el.style.display = hidden ? 'none' : '';
-        if (hidden || !item.events) continue;
-        for (const [type, handler] of Object.entries(item.events)) {
-            el.addEventListener(type, handler);
-        }
-    }
+  }
 }

@@ -15,24 +15,24 @@ export let totalRequests = 0;
 export let visibleCount = 0;
 
 export function setRequests(val) {
-    requestsMap.clear();
-    for (const item of val) requestsMap.set(item.id, item);
-    requests = val;
+  requestsMap.clear();
+  for (const item of val) requestsMap.set(item.id, item);
+  requests = val;
 }
 export function upsertRequests(newItems) {
-    const existingIds = new Set(requestsMap.keys());
-    for (const item of newItems) {
-        if (requestsMap.has(item.id)) requestsMap.set(item.id, item);
-    }
-    const newOnly = newItems.filter(item => !existingIds.has(item.id));
-    if (newOnly.length > 0) {
-        requestsMap = new Map([...newOnly.map(i => [i.id, i]), ...requestsMap]);
-    }
-    requests = Array.from(requestsMap.values());
+  const existingIds = new Set(requestsMap.keys());
+  for (const item of newItems) {
+    if (requestsMap.has(item.id)) requestsMap.set(item.id, item);
+  }
+  const newOnly = newItems.filter(item => !existingIds.has(item.id));
+  if (newOnly.length > 0) {
+    requestsMap = new Map([...newOnly.map(i => [i.id, i]), ...requestsMap]);
+  }
+  requests = Array.from(requestsMap.values());
 }
 export function removeRequests(ids) {
-    for (const id of ids) requestsMap.delete(id);
-    requests = Array.from(requestsMap.values());
+  for (const id of ids) requestsMap.delete(id);
+  requests = Array.from(requestsMap.values());
 }
 export function setSelectedId(val) { selectedId = val; }
 export function setFilterText(val) { filterText = val; }
@@ -61,24 +61,24 @@ export function getReplayMode() { return replayMode; }
 export function markReplayServed(id) { if (id) replayServed.add(id); }
 
 export function applyFullList(data) {
-    setRequests(data.entries);
-    setTotalRequests(data.total);
-    setVisibleCount(data.visibleCount);
-    setCriteriaVersion(data.version);
+  setRequests(data.entries);
+  setTotalRequests(data.total);
+  setVisibleCount(data.visibleCount);
+  setCriteriaVersion(data.version);
 }
 export function applyPage(data) {
-    for (const item of data.entries) {
-        requestsMap.set(item.id, item);
-    }
-    requests = Array.from(requestsMap.values());
-    setVisibleCount(data.visibleCount);
+  for (const item of data.entries) {
+    requestsMap.set(item.id, item);
+  }
+  requests = Array.from(requestsMap.values());
+  setVisibleCount(data.visibleCount);
 }
 export function applyListDiff(data) {
-    upsertRequests(data.upserts);
-    removeRequests(data.removed || []);
-    setTotalRequests(data.total);
-    setVisibleCount(data.visibleCount);
-    setCriteriaVersion(data.version);
+  upsertRequests(data.upserts);
+  removeRequests(data.removed || []);
+  setTotalRequests(data.total);
+  setVisibleCount(data.visibleCount);
+  setCriteriaVersion(data.version);
 }
 
 export let rules = [];
