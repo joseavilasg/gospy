@@ -1,6 +1,6 @@
 import { setFilterText, setFocusEnabled, setAgentPreview, setAgentEnabled, setAgentExposed, agentExposed, applyFullList, setLastTimestamp, selectedId, requests, rules, setRules, setSignatureCache, visibleCount, getReplayMode, setReplayMode, setReplayServed, setReplayComplete, markReplayServed } from './state.js';
 import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch, setOnSelectedUpdated, loadMore, setOnReplayUpdate, loadReplayRuns, loadReplayEvents, loadReplayEventDetail } from './api.js';
-import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, toggleReplayPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, buildResponseTab, ITEM_HEIGHT, renderReplayFeed, renderReplayEventDetail } from './render.js';
+import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, toggleReplayPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, buildResponseTab, ITEM_HEIGHT, renderReplayFeed, appendReplayEvent, renderReplayEventDetail } from './render.js';
 import { makeResizable } from './resize.js';
 import { initHeader, setHeaderMode } from './header.js';
 import { isBodySearching, cancelBodySearch, invalidateCriteriaSave, syncCriteriaFromServer, restoreBodyFilter, setOnFilterChange, setOnListRefresh, initFilterPopover, openFilterPopover, closeFilterPopover, closeChip, openChip, getFilterChipsData, getMatchMode, setMatchMode, queueCriteriaSave } from './filters.js';
@@ -76,6 +76,7 @@ const agentEnabledChange = async (e) => {
 const replayChipClick = () => {
   toggleReplayPanel();
   if (document.getElementById('replayPanel').classList.contains('open')) {
+    ensureReplayStream();
     const sel = document.getElementById('replayRunSelect');
     if (!sel.value) {
       populateReplayRuns().then(() => {
@@ -176,7 +177,7 @@ function renderFeedFor(runId) {
 function syncReplay(rp) {
   setReplayMode(!!rp);
   if (!rp) {
-    if (_replayStreamSrc) { _replayStreamSrc.close(); _replayStreamSrc = null; }
+    closeReplayStream();
     _activeRunId = null;
     setHeaderMode('normal');
     document.getElementById('replayPanel').classList.remove('open');
@@ -186,39 +187,56 @@ function syncReplay(rp) {
   updateReplayChip(rp);
   setReplayServed(new Set(rp.served || []));
   setReplayComplete(!rp.active && !!rp.runId);
+  if (!_activeRunId && rp.active && rp.runId) _activeRunId = rp.runId;
   renderList();
+  ensureReplayStream();
+}
 
-  if (rp.active && rp.runId) {
-    if (_activeRunId !== rp.runId) {
-      _activeRunId = rp.runId;
-      connectReplayStream(rp.runId);
-      renderFeedFor(_pickedRun === null ? rp.runId : _pickedRun);
-    }
-  } else if (_replayStreamSrc) {
+function closeReplayStream() {
+  if (_replayStreamSrc) {
     _replayStreamSrc.close();
     _replayStreamSrc = null;
   }
 }
 
-function connectReplayStream(runId) {
-  if (_replayStreamSrc) { _replayStreamSrc.close(); _replayStreamSrc = null; }
-  const src = new EventSource(`/api/replay/events/${encodeURIComponent(runId)}/stream`);
+function connectReplayStream() {
+  if (_replayStreamSrc && _replayStreamSrc.readyState !== EventSource.CLOSED) return;
+  const src = new EventSource('/api/replay/events/stream');
   _replayStreamSrc = src;
   src.onmessage = (e) => {
     try {
       const ev = JSON.parse(e.data);
-      if (ev.type === 'runChanged') { src.close(); return; }
+      if (ev.type === 'runChanged') {
+        if (!ev.runId) return;
+        _activeRunId = ev.runId;
+        _pickedRun = null;
+        populateReplayRuns().then(() => {
+          const sel = document.getElementById('replayRunSelect');
+          if (sel && [...sel.options].some(o => o.value === _activeRunId)) sel.value = _activeRunId;
+          updateReplayRunMeta(_activeRunId);
+        });
+        renderFeedFor(_activeRunId);
+        return;
+      }
       if (ev.result === 'hit' && ev.entryId) {
         markReplayServed(ev.entryId);
         renderList();
       }
-      if (_pickedRun === null || _pickedRun === runId) {
-        loadReplayEvents(runId).then(renderReplayFeed);
-      }
+      updateReplayChip({ active: true, consumed: ev.consumed, total: ev.total, exhausted: ev.exhausted });
+      if (_pickedRun === null && ev.runId === _activeRunId) appendReplayEvent(ev);
     } catch (err) { }
   };
-  src.onerror = () => { src.close(); _replayStreamSrc = null; };
 }
+
+function ensureReplayStream() {
+  if (getReplayMode() && (!_replayStreamSrc || _replayStreamSrc.readyState === EventSource.CLOSED)) {
+    connectReplayStream();
+  }
+}
+
+setInterval(() => {
+  ensureReplayStream();
+}, 3000);
 
 let _replayRuns = [];
 

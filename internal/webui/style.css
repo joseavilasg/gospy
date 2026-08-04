@@ -2844,6 +2844,12 @@ body.resizing {
   text-align: right;
 }
 
+.replay-event-time {
+  flex-shrink: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-placeholder);
+}
+
 .replay-event-hit .replay-event-result {
   color: var(--green);
 }

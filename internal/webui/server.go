@@ -2314,6 +2314,10 @@ func (s *Server) handleReplayEventsSub(w http.ResponseWriter, r *http.Request) {
 		s.handleReplayStream(w, r, runID)
 		return
 	}
+	if len(parts) == 1 && parts[0] == "stream" {
+		s.handleReplayStream(w, r, "")
+		return
+	}
 	if len(parts) < 2 {
 		http.NotFound(w, r)
 		return
@@ -2404,12 +2408,16 @@ func (s *Server) handleReplayBody(w http.ResponseWriter, r *http.Request, runID 
 	w.Write(data)
 }
 
-// handleReplayStream streams the active run's events over SSE: the current
-// snapshot on connect, then live pushes. Only the active run can stream; past
-// runs are read via the list/detail endpoints.
+// handleReplayStream streams replay events over SSE. With a specific runID (the
+// legacy per-run path <runID>/stream) only that run can stream and a run switch
+// closes the connection. With runID=="" (the active stream /api/replay/events/
+// stream) it subscribes regardless of whether a run is active, sends a leading
+// runChanged announcing the current run, then streams its snapshot and keeps
+// streaming across run switches - the frontend uses this so the panel never has
+// to reconnect.
 func (s *Server) handleReplayStream(w http.ResponseWriter, r *http.Request, runID string) {
 	s.replayMu.Lock()
-	if runID != s.replayRunID {
+	if runID != "" && runID != s.replayRunID {
 		s.replayMu.Unlock()
 		http.NotFound(w, r)
 		return
@@ -2417,6 +2425,7 @@ func (s *Server) handleReplayStream(w http.ResponseWriter, r *http.Request, runI
 	ch := make(chan session.ReplayEvent, 64)
 	s.replayClients[ch] = struct{}{}
 	snapshot := append([]session.ReplayEvent(nil), s.replayEvents...)
+	snapshotRun := s.replayRunID
 	s.replayMu.Unlock()
 	defer func() {
 		s.replayMu.Lock()
@@ -2435,23 +2444,36 @@ func (s *Server) handleReplayStream(w http.ResponseWriter, r *http.Request, runI
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	ctx := r.Context()
+	active := runID == ""
+	current := runID
+	if active {
+		current = snapshotRun
+		data, _ := json.Marshal(map[string]string{"type": "runChanged", "runId": current})
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
 	for _, ev := range snapshot {
 		data, _ := json.Marshal(ev)
 		fmt.Fprintf(w, "data: %s\n\n", data)
 	}
-	flusher.Flush()
+	if len(snapshot) > 0 {
+		flusher.Flush()
+	}
 
+	ctx := r.Context()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case ev := <-ch:
-			if ev.RunID != runID {
-				data, _ := json.Marshal(map[string]string{"type": "runChanged", "runId": ev.RunID})
+			if ev.RunID != current {
+				current = ev.RunID
+				data, _ := json.Marshal(map[string]string{"type": "runChanged", "runId": current})
 				fmt.Fprintf(w, "data: %s\n\n", data)
 				flusher.Flush()
-				return
+				if !active {
+					return
+				}
 			}
 			data, _ := json.Marshal(ev)
 			fmt.Fprintf(w, "data: %s\n\n", data)

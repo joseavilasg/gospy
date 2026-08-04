@@ -832,6 +832,22 @@ export function openRuleModalFromRequest(entry) {
   toggleResponseActionSections('real');
 }
 
+function replayEventRow(ev) {
+  const icon = ev.result === 'hit' ? '✓' : ev.result === 'miss' ? '✗' : '‼';
+  const status = ev.status != null ? ev.status : '';
+  const time = ev.ts ? `<span class="replay-event-time">${new Date(ev.ts).toLocaleTimeString()}</span>` : '';
+  const pair = ev.result === 'hit' && ev.matchedUrl
+    ? `<div class="replay-event-pair">→ matched <span class="replay-event-pair-url">${escapeHtml(ev.matchedUrl)}</span></div>`
+    : '';
+  return `<div class="replay-event replay-event-${ev.result}" data-action="replay-event-detail" data-run="${escapeHtml(ev.runId)}" data-seq="${ev.seq}" title="${new Date(ev.ts).toLocaleString()}">
+            <span class="replay-event-result">${icon}</span>
+            <span class="replay-event-method">${escapeHtml(ev.method)}</span>
+            <span class="replay-event-url">${escapeHtml(ev.url)}</span>
+            <span class="replay-event-status">${status}</span>
+            ${time}
+        </div>${pair}`;
+}
+
 export function renderReplayFeed(events) {
   const feed = document.getElementById('replayFeed');
   if (!feed) return;
@@ -839,19 +855,14 @@ export function renderReplayFeed(events) {
     feed.innerHTML = '<div class="replay-event-empty">No replay activity yet — requests will appear here as the replay server serves them.</div>';
     return;
   }
-  feed.innerHTML = events.map(ev => {
-    const icon = ev.result === 'hit' ? '✓' : ev.result === 'miss' ? '✗' : '‼';
-    const status = ev.status != null ? ev.status : '';
-    const pair = ev.result === 'hit' && ev.matchedUrl
-      ? `<div class="replay-event-pair">→ matched <span class="replay-event-pair-url">${escapeHtml(ev.matchedUrl)}</span></div>`
-      : '';
-    return `<div class="replay-event replay-event-${ev.result}" data-action="replay-event-detail" data-run="${escapeHtml(ev.runId)}" data-seq="${ev.seq}" title="${new Date(ev.ts).toLocaleString()}">
-            <span class="replay-event-result">${icon}</span>
-            <span class="replay-event-method">${escapeHtml(ev.method)}</span>
-            <span class="replay-event-url">${escapeHtml(ev.url)}</span>
-            <span class="replay-event-status">${status}</span>
-        </div>${pair}`;
-  }).join('');
+  feed.innerHTML = events.map(replayEventRow).join('');
+}
+
+export function appendReplayEvent(ev) {
+  const feed = document.getElementById('replayFeed');
+  if (!feed) return;
+  if (feed.querySelector('.replay-event-empty')) feed.innerHTML = '';
+  feed.insertAdjacentHTML('beforeend', replayEventRow(ev));
 }
 
 export function renderReplayEventDetail(detail) {

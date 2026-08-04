@@ -412,3 +412,130 @@ func TestReplayStreamRejectsInactiveRun(t *testing.T) {
 		t.Fatalf("expected 404 for inactive run, got %d", rec.Code)
 	}
 }
+
+// TestReplayActiveStream exercises the active stream (/api/replay/events/stream,
+// runID==""). It must subscribe with no run active, announce the first run via
+// runChanged, and keep streaming across a run switch instead of closing like the
+// per-run path - that is what keeps the panel live without reconnects.
+func TestReplayActiveStream(t *testing.T) {
+	s, _, _ := newReplayServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/replay/events/stream", nil).WithContext(ctx)
+	rec := &flushRecorder{httptest.NewRecorder()}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.handleReplayStream(rec, req, "")
+	}()
+
+	notify := s.ReplayNotifier()
+	notify(session.ReplayEvent{Seq: 1, RunID: "runA", Method: "GET", URL: "https://a.example.com/x", Result: "hit", Status: 200, Consumed: 1, Total: 2})
+	time.Sleep(20 * time.Millisecond)
+	notify(session.ReplayEvent{Seq: 2, RunID: "runB", Method: "GET", URL: "https://b.example.com/y", Result: "miss", Status: 404, Consumed: 1, Total: 1, Exhausted: true})
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `"type":"runChanged"`) || !strings.Contains(body, `"runId":"runA"`) {
+		t.Fatalf("SSE missing the leading runChanged for the first run: %s", body)
+	}
+	if !strings.Contains(body, `"seq":1`) || !strings.Contains(body, `"seq":2`) {
+		t.Fatalf("SSE missing events: %s", body)
+	}
+	if !strings.Contains(body, `"type":"runChanged"`) || !strings.Contains(body, `"runId":"runB"`) {
+		t.Fatalf("SSE missing runChanged for the run switch (must keep streaming): %s", body)
+	}
+}
+
+// TestReplayActiveStreamSnapshot locks the snapshot semantics: connecting when a
+// run is already active must send a leading runChanged for that run followed by
+// its buffered events.
+func TestReplayActiveStreamSnapshot(t *testing.T) {
+	s, _, _ := newReplayServer(t)
+	notify := s.ReplayNotifier()
+	notify(session.ReplayEvent{Seq: 1, RunID: "runX", Method: "GET", URL: "https://x.example.com/", Result: "hit", Status: 200, Consumed: 1, Total: 1, Exhausted: true})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/replay/events/stream", nil).WithContext(ctx)
+	rec := &flushRecorder{httptest.NewRecorder()}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.handleReplayStream(rec, req, "")
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `"type":"runChanged"`) || !strings.Contains(body, `"runId":"runX"`) {
+		t.Fatalf("SSE missing the leading runChanged for the active run: %s", body)
+	}
+	if !strings.Contains(body, `"seq":1`) {
+		t.Fatalf("SSE missing the snapshot event: %s", body)
+	}
+}
+
+// TestReplayPerRunStreamClosesOnSwitch locks the legacy per-run path behavior:
+// a <runID>/stream connection must terminate when the run switches.
+func TestReplayPerRunStreamClosesOnSwitch(t *testing.T) {
+	s, _, _ := newReplayServer(t)
+	notify := s.ReplayNotifier()
+	notify(session.ReplayEvent{Seq: 1, RunID: "run1", Method: "GET", URL: "https://a.example.com/", Result: "hit", Status: 200})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/stream", nil).WithContext(ctx)
+	rec := &flushRecorder{httptest.NewRecorder()}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.handleReplayStream(rec, req, "run1")
+	}()
+
+	notify(session.ReplayEvent{Seq: 2, RunID: "run2", Method: "GET", URL: "https://b.example.com/", Result: "miss", Status: 404})
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("per-run stream did not close on run switch")
+	}
+}
+
+// TestReplayActiveStreamFrontend locks the panel's live channel wiring: the
+// frontend must connect the dedicated active stream (independent of the
+// auto-refresh poll), reconnect it when it closes, and must not self-kill it in
+// onerror (EventSource auto-reconnects; a closed stream is recreated by the
+// ensureReplayStream self-heal). The old run-scoped stream URL is gone.
+func TestReplayActiveStreamFrontend(t *testing.T) {
+	if !strings.Contains(appJS, "new EventSource('/api/replay/events/stream')") {
+		t.Fatal("app.js: the replay panel must connect the dedicated active stream (/api/replay/events/stream) so live events push to the feed regardless of the auto-refresh poll")
+	}
+	if !strings.Contains(appJS, "ensureReplayStream") {
+		t.Fatal("app.js: syncReplay/chip-open must call ensureReplayStream to (re)connect the active replay stream")
+	}
+	if strings.Contains(appJS, "src.onerror") {
+		t.Fatal("app.js: connectReplayStream must not self-kill the stream in onerror - EventSource auto-reconnects, and the ensureReplayStream self-heal recreates a closed stream")
+	}
+	if strings.Contains(appJS, "/api/replay/events/${encodeURIComponent(runId)}/stream") {
+		t.Fatal("app.js: the run-scoped stream URL must be gone - the panel uses the dedicated active stream that survives run switches")
+	}
+}
+
+// TestReplayFeedTimestamps locks the per-event timestamp in the replay feed
+// rows: the same toLocaleTimeString used by the request list, styled muted.
+func TestReplayFeedTimestamps(t *testing.T) {
+	render := strings.ReplaceAll(renderJS, "\r\n", "\n")
+	if !strings.Contains(render, "replay-event-time") || !strings.Contains(render, "toLocaleTimeString") {
+		t.Fatal("render.js: replay feed rows must carry a per-event timestamp (replay-event-time) so the panel shows when each request was served")
+	}
+	if !strings.Contains(styleCSS, ".replay-event-time") {
+		t.Fatal("style.css: .replay-event-time rule is required for the feed timestamp")
+	}
+}
