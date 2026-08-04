@@ -237,6 +237,85 @@ func TestMatchRebuildAfterSave(t *testing.T) {
 	}
 }
 
+func TestMatchDetailedMissUnconsumed(t *testing.T) {
+	rs, h := newReplay(t)
+	base := time.Now()
+	saveTestEntry(t, h, "u1", "GET", "https://example.com/a", 200, base)
+	saveTestEntry(t, h, "u2", "GET", "https://example.com/b", 200, base.Add(time.Second))
+	saveTestEntry(t, h, "u3", "GET", "https://example.com/c", 200, base.Add(2*time.Second))
+
+	if _, res, _, _ := rs.MatchDetailed("GET", "https://example.com/a", nil); res != ResultHit {
+		t.Fatalf("expected hit, got %v", res)
+	}
+
+	entry, result, pending, total := rs.MatchDetailed("GET", "https://example.com/not-recorded", nil)
+	if entry != nil || result != ResultMiss {
+		t.Fatalf("expected miss, got entry=%v result=%v", entry, result)
+	}
+	if total != 2 {
+		t.Fatalf("expected 2 pending, got %d", total)
+	}
+	if len(pending) != 2 {
+		t.Fatalf("expected 2 unconsumed entries, got %d", len(pending))
+	}
+	if pending[0].Method != "GET" || pending[0].URL != "https://example.com/b" {
+		t.Fatalf("unexpected pending[0]: %+v", pending[0])
+	}
+	if pending[1].URL != "https://example.com/c" {
+		t.Fatalf("unexpected pending[1]: %+v", pending[1])
+	}
+}
+
+func TestMatchDetailedHitNoUnconsumed(t *testing.T) {
+	rs, h := newReplay(t)
+	saveTestEntry(t, h, "h1", "GET", "https://example.com/a", 200, time.Now())
+	saveTestEntry(t, h, "h2", "GET", "https://example.com/b", 200, time.Now().Add(time.Second))
+
+	entry, result, pending, total := rs.MatchDetailed("GET", "https://example.com/a", nil)
+	if result != ResultHit || entry == nil {
+		t.Fatalf("expected hit, got entry=%v result=%v", entry, result)
+	}
+	if pending != nil || total != 1 {
+		t.Fatalf("expected no unconsumed on hit, got pending=%v total=%d", pending, total)
+	}
+}
+
+func TestMatchDetailedExhaustedNoPending(t *testing.T) {
+	rs, h := newReplay(t)
+	saveTestEntry(t, h, "x1", "GET", "https://example.com/a", 200, time.Now())
+
+	if _, res, _, _ := rs.MatchDetailed("GET", "https://example.com/a", nil); res != ResultHit {
+		t.Fatalf("expected hit, got %v", res)
+	}
+	entry, result, pending, total := rs.MatchDetailed("GET", "https://example.com/anything", nil)
+	if entry != nil || result != ResultExhausted {
+		t.Fatalf("expected exhausted, got entry=%v result=%v", entry, result)
+	}
+	if pending != nil || total != 0 {
+		t.Fatalf("expected no pending when exhausted, got pending=%v total=%d", pending, total)
+	}
+}
+
+func TestProgress(t *testing.T) {
+	rs, h := newReplay(t)
+	saveTestEntry(t, h, "p1", "GET", "https://example.com/a", 200, time.Now())
+	saveTestEntry(t, h, "p2", "GET", "https://example.com/b", 200, time.Now().Add(time.Second))
+
+	if consumed, total, exhausted := rs.Progress(nil); consumed != 0 || total != 2 || exhausted {
+		t.Fatalf("expected 0/2 not exhausted, got %d/%d exhausted=%v", consumed, total, exhausted)
+	}
+
+	rs.Match("GET", "https://example.com/a", nil)
+	if consumed, total, exhausted := rs.Progress(nil); consumed != 1 || total != 2 || exhausted {
+		t.Fatalf("expected 1/2 not exhausted, got %d/%d exhausted=%v", consumed, total, exhausted)
+	}
+
+	rs.Match("GET", "https://example.com/b", nil)
+	if consumed, total, exhausted := rs.Progress(nil); consumed != 2 || total != 2 || !exhausted {
+		t.Fatalf("expected 2/2 exhausted, got %d/%d exhausted=%v", consumed, total, exhausted)
+	}
+}
+
 func TestMatchMethodCaseInsensitive(t *testing.T) {
 	rs, h := newReplay(t)
 	saveTestEntry(t, h, "g1", "get", "https://s.example.com/x", 200, time.Now())

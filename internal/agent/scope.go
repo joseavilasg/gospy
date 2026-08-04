@@ -7,14 +7,6 @@ import (
 	"gospy/internal/history"
 )
 
-// HistoryStore is the minimal history access the agent scope needs.
-type HistoryStore interface {
-	ListSummary() []*history.ListEntry
-	Get(id string) (*history.Entry, error)
-	GetByAgentCallID(callID string) (*history.ListEntry, error)
-	Dir() string
-}
-
 // FilterStore is the minimal filter-store access the agent scope needs.
 type FilterStore interface {
 	SnapshotAgent() (history.Filters, bool, int)
@@ -25,26 +17,27 @@ type FilterStore interface {
 // profile applies. Agent-origin entries are filtered exactly like any other
 // entry - there is no origin bypass.
 type Scope struct {
-	histVal atomic.Value // HistoryStore
+	histVal atomic.Pointer[history.Store]
 	filter  FilterStore
 	ignored history.HostMatcher
 	focused history.HostMatcher
 }
 
-func NewScope(hist HistoryStore, filter FilterStore, ignored, focused history.HostMatcher) *Scope {
+func NewScope(hist *history.Store, filter FilterStore, ignored, focused history.HostMatcher) *Scope {
 	sc := &Scope{filter: filter, ignored: ignored, focused: focused}
 	sc.histVal.Store(hist)
 	return sc
 }
 
 // hist returns the current history store. Swapped atomically on session
-// rotation so the MCP always serves the active session.
-func (sc *Scope) hist() HistoryStore {
-	return sc.histVal.Load().(HistoryStore)
+// rotation so the MCP always serves the active session. Nil when no session
+// is active (record auto mode before the first session start).
+func (sc *Scope) hist() *history.Store {
+	return sc.histVal.Load()
 }
 
 // SetHistoryStore rotates the session store the MCP scope reads.
-func (sc *Scope) SetHistoryStore(h HistoryStore) {
+func (sc *Scope) SetHistoryStore(h *history.Store) {
 	sc.histVal.Store(h)
 }
 
@@ -73,7 +66,9 @@ func (sc *Scope) GateEnabled() bool {
 }
 
 func (sc *Scope) base() (all []*history.ListEntry, filters history.Filters, opts history.MatchOpts) {
-	all = sc.hist().ListSummary()
+	if st := sc.hist(); st != nil {
+		all = st.ListSummary()
+	}
 	filters, focusEnabled, _ := sc.filter.SnapshotAgent()
 	opts = history.MatchOpts{
 		Ignored:      sc.ignored,

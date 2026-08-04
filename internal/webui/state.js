@@ -49,6 +49,17 @@ export function setCriteriaVersion(val) { criteriaVersion = val; }
 export function setTotalRequests(val) { totalRequests = val; }
 export function setVisibleCount(val) { visibleCount = val; }
 
+export let replayMode = false;
+export let replayServed = new Set();
+export let replayComplete = false;
+export function setReplayMode(val) { replayMode = val; }
+export function setReplayServed(val) { replayServed = val; }
+export function setReplayComplete(val) { replayComplete = val; }
+export function isReplayServed(id) { return replayServed.has(id); }
+export function isReplayComplete() { return replayComplete; }
+export function getReplayMode() { return replayMode; }
+export function markReplayServed(id) { if (id) replayServed.add(id); }
+
 export function applyFullList(data) {
     setRequests(data.entries);
     setTotalRequests(data.total);

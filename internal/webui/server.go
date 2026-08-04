@@ -22,6 +22,7 @@ import (
 	"gospy/internal/history"
 	"gospy/internal/proxy"
 	"gospy/internal/rules"
+	"gospy/internal/session"
 
 	"google.golang.org/protobuf/encoding/protowire"
 )
@@ -34,6 +35,9 @@ var styleCSS string
 
 //go:embed app.js
 var appJS string
+
+//go:embed resize.js
+var resizeJS string
 
 //go:embed state.js
 var stateJS string
@@ -98,6 +102,14 @@ type Server struct {
 
 	streamHub      *streamHub
 	sessionStarter SessionStarter
+
+	replayMode   bool
+	replayLogDir string
+
+	replayMu      sync.Mutex
+	replayRunID   string
+	replayEvents  []session.ReplayEvent
+	replayClients map[chan session.ReplayEvent]struct{}
 }
 
 // SessionStarter creates a recording session and rotates every consumer to it.
@@ -122,17 +134,18 @@ type SignatureChecker interface {
 
 func NewServer(addr string, h *history.Store, ignore IgnoreChecker, focus FocusChecker, rulesStore *rules.Store, engine *rules.Engine, proxyAddr string, resolver ProcessResolver, sigCache SignatureChecker, filterStore *FilterStore) *Server {
 	s := &Server{
-		ignoreStore: ignore,
-		focusStore:  focus,
-		rulesStore:  rulesStore,
-		engine:      engine,
-		filterStore: filterStore,
-		addr:        addr,
-		proxyAddr:   proxyAddr,
-		resolver:    resolver,
-		sigCache:    sigCache,
-		lastVisible: make(map[string]bool),
-		streamHub:   newStreamHub(h, maxBodyLen),
+		ignoreStore:   ignore,
+		focusStore:    focus,
+		rulesStore:    rulesStore,
+		engine:        engine,
+		filterStore:   filterStore,
+		addr:          addr,
+		proxyAddr:     proxyAddr,
+		resolver:      resolver,
+		sigCache:      sigCache,
+		lastVisible:   make(map[string]bool),
+		streamHub:     newStreamHub(h, maxBodyLen),
+		replayClients: make(map[chan session.ReplayEvent]struct{}),
 	}
 	s.history.Store(h)
 	s.attachStore(h)
@@ -146,9 +159,46 @@ func (s *Server) hist() *history.Store {
 	return s.history.Load()
 }
 
+// listSummary returns the index of the active session, or nil when no session
+// is recording (record auto mode before the first session start).
+func (s *Server) listSummary() []*history.ListEntry {
+	if st := s.hist(); st != nil {
+		return st.ListSummary()
+	}
+	return nil
+}
+
+// listSince returns the entries updated after since, or nil when no session is
+// recording.
+func (s *Server) listSince(since time.Time) []*history.ListEntry {
+	if st := s.hist(); st != nil {
+		return st.ListSince(since)
+	}
+	return nil
+}
+
+// getEntry returns the entry with the given id, writing a 404 when no session
+// is recording or the entry does not exist.
+func (s *Server) getEntry(w http.ResponseWriter, r *http.Request, id string) (*history.Entry, bool) {
+	st := s.hist()
+	if st == nil {
+		http.Error(w, "no session recording active", http.StatusNotFound)
+		return nil, false
+	}
+	entry, err := st.Get(id)
+	if err != nil {
+		http.NotFound(w, r)
+		return nil, false
+	}
+	return entry, true
+}
+
 // attachStore subscribes the total counter to a store's save events. Called
 // for the initial store and for every store on session rotation.
 func (s *Server) attachStore(h *history.Store) {
+	if h == nil {
+		return
+	}
 	h.OnSave(func(e *history.Entry) {
 		if !s.ignoreStore.Matches(e.Request.Host) {
 			s.totalMu.Lock()
@@ -177,8 +227,114 @@ func (s *Server) SetSessionStarter(fn SessionStarter) {
 	s.sessionStarter = fn
 }
 
+// SetReplayMode toggles the replay read-only mode: the UI keeps showing the
+// recorded session but every mutating route answers 404 and session creation
+// is refused.
+func (s *Server) SetReplayMode(on bool) {
+	s.replayMode = on
+}
+
+// SetReplayLogDir points the server at the directory holding replay runs
+// (<dataDir>/replay/<session>). Used by the replay endpoints and the run
+// selector.
+func (s *Server) SetReplayLogDir(dir string) {
+	s.replayLogDir = dir
+}
+
+// ReplayNotifier returns the callback to wire into the replay server. It keeps
+// the active run's events in memory (for the list response, run endpoints and
+// SSE snapshots) and fans every event out to connected stream clients.
+func (s *Server) ReplayNotifier() func(ev session.ReplayEvent) {
+	return func(ev session.ReplayEvent) {
+		s.replayMu.Lock()
+		if ev.RunID != s.replayRunID {
+			s.replayRunID = ev.RunID
+			s.replayEvents = nil
+		}
+		s.replayEvents = append(s.replayEvents, ev)
+		clients := make([]chan session.ReplayEvent, 0, len(s.replayClients))
+		for ch := range s.replayClients {
+			clients = append(clients, ch)
+		}
+		s.replayMu.Unlock()
+		for _, ch := range clients {
+			select {
+			case ch <- ev:
+			default:
+			}
+		}
+	}
+}
+
+// replayList is the replay state shipped inside every list response so the
+// frontend chip and served badges survive reloads. Active refers to a run being
+// written in this process; served is the set of hit entry IDs.
+type replayList struct {
+	Active    bool     `json:"active"`
+	RunID     string   `json:"activeRunId,omitempty"`
+	Consumed  int      `json:"consumed"`
+	Total     int      `json:"total"`
+	Exhausted bool     `json:"exhausted"`
+	Served    []string `json:"served"`
+}
+
+// replayInfo returns the replay state for the list response, or nil when the
+// server is not in replay mode.
+func (s *Server) replayInfo() *replayList {
+	if !s.replayMode {
+		return nil
+	}
+	s.replayMu.Lock()
+	defer s.replayMu.Unlock()
+	if s.replayRunID == "" {
+		return &replayList{}
+	}
+	info := &replayList{Active: true, RunID: s.replayRunID, Served: []string{}}
+	for _, ev := range s.replayEvents {
+		if ev.Result == "hit" && ev.EntryID != "" {
+			info.Served = append(info.Served, ev.EntryID)
+		}
+	}
+	if n := len(s.replayEvents); n > 0 {
+		last := s.replayEvents[n-1]
+		info.Consumed = last.Consumed
+		info.Total = last.Total
+		info.Exhausted = last.Exhausted
+	}
+	return info
+}
+
+// replayReadOnly rejects every request with 404 while the server is in replay
+// mode, keeping the UI read-only.
+func (s *Server) replayReadOnly(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.replayMode {
+			http.NotFound(w, r)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// replayEventsFor returns the events of a run. The active run is served from
+// the in-memory mirror; past runs are loaded from disk.
+func (s *Server) replayEventsFor(runID string) ([]session.ReplayEvent, error) {
+	s.replayMu.Lock()
+	if runID == s.replayRunID {
+		events := append([]session.ReplayEvent(nil), s.replayEvents...)
+		s.replayMu.Unlock()
+		return events, nil
+	}
+	s.replayMu.Unlock()
+	dir, err := session.ReplayRunDir(s.replayLogDir, runID)
+	if err != nil {
+		return nil, err
+	}
+	return session.LoadReplayRun(dir)
+}
+
 func (s *Server) recomputeTotal() {
-	entries := s.hist().ListSummary()
+	entries := s.listSummary()
 	total := 0
 	for _, le := range entries {
 		if !s.ignoreStore.Matches(le.Host) {
@@ -202,6 +358,7 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/style.css", s.handleStatic(styleCSS, "text/css"))
 	mux.HandleFunc("/app.js", s.handleStatic(appJS, "application/javascript"))
+	mux.HandleFunc("/resize.js", s.handleStatic(resizeJS, "application/javascript"))
 	mux.HandleFunc("/state.js", s.handleStatic(stateJS, "application/javascript"))
 	mux.HandleFunc("/api.js", s.handleStatic(apiJS, "application/javascript"))
 	mux.HandleFunc("/render.js", s.handleStatic(renderJS, "application/javascript"))
@@ -217,20 +374,23 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/api/filters/options", s.handleFilterOptions)
 	mux.HandleFunc("/api/filters/body", s.handleClearBodyFilter)
 	mux.HandleFunc("/api/filters", s.handleSaveFilters)
-	mux.HandleFunc("/api/agent/view", s.handleAgentView)
-	mux.HandleFunc("/api/agent/enabled", s.handleAgentEnabled)
-	mux.HandleFunc("/api/ignored", s.handleIgnored)
-	mux.HandleFunc("/api/ignored/", s.handleIgnoredHost)
-	mux.HandleFunc("/api/focused", s.handleFocused)
-	mux.HandleFunc("/api/focused/", s.handleFocusedHost)
+	mux.HandleFunc("/api/agent/view", s.replayReadOnly(s.handleAgentView))
+	mux.HandleFunc("/api/agent/enabled", s.replayReadOnly(s.handleAgentEnabled))
+	mux.HandleFunc("/api/ignored", s.replayReadOnly(s.handleIgnored))
+	mux.HandleFunc("/api/ignored/", s.replayReadOnly(s.handleIgnoredHost))
+	mux.HandleFunc("/api/focused", s.replayReadOnly(s.handleFocused))
+	mux.HandleFunc("/api/focused/", s.replayReadOnly(s.handleFocusedHost))
 	mux.HandleFunc("/api/rules/check-match", s.handleCheckMatch)
-	mux.HandleFunc("/api/rules", s.handleRules)
-	mux.HandleFunc("/api/rules/", s.handleRule)
-	mux.HandleFunc("/api/request-rule", s.handleRequestRule)
+	mux.HandleFunc("/api/rules", s.replayReadOnly(s.handleRules))
+	mux.HandleFunc("/api/rules/", s.replayReadOnly(s.handleRule))
+	mux.HandleFunc("/api/request-rule", s.replayReadOnly(s.handleRequestRule))
 	mux.HandleFunc("/api/process/signature", s.handleProcessSignature)
-	mux.HandleFunc("/api/process/events", s.handleProcessEvents)
+	mux.HandleFunc("/api/process/events", s.replayReadOnly(s.handleProcessEvents))
 	mux.HandleFunc("/api/streams/", s.handleStreamEvents)
 	mux.HandleFunc("/api/session/start", s.handleSessionStart)
+	mux.HandleFunc("/api/replay/runs", s.handleReplayRuns)
+	mux.HandleFunc("/api/replay/events", s.handleReplayEventsList)
+	mux.HandleFunc("/api/replay/events/", s.handleReplayEventsSub)
 
 	LogWebUI(s.addr)
 
@@ -314,6 +474,7 @@ type listResponse struct {
 	AgentPreview bool                 `json:"agentPreview"`
 	AgentEnabled bool                 `json:"agentEnabled"`
 	AgentExposed bool                 `json:"agentExposed"`
+	Replay       *replayList          `json:"replay,omitempty"`
 }
 
 // agentExposed reports whether the agent MCP is active AND its profile has no
@@ -358,7 +519,7 @@ func (s *Server) fullList(offset, limit int) listResponse {
 	filters, focusEnabled, version := s.filterStore.Snapshot()
 	opts := s.matchOpts(focusEnabled)
 
-	entries := s.hist().ListSummary()
+	entries := s.listSummary()
 
 	s.listMu.Lock()
 	defer s.listMu.Unlock()
@@ -384,6 +545,7 @@ func (s *Server) fullList(offset, limit int) listResponse {
 		AgentPreview: s.filterStore.AgentPreview(),
 		AgentEnabled: s.filterStore.AgentGate(),
 		AgentExposed: s.agentExposed(),
+		Replay:       s.replayInfo(),
 	}
 }
 
@@ -397,7 +559,7 @@ func (s *Server) diffList(since time.Time) listResponse {
 	upserts := make([]*history.ListEntry, 0)
 	removed := make([]string, 0)
 
-	for _, le := range s.hist().ListSince(since) {
+	for _, le := range s.listSince(since) {
 		isVisible := filters.Matches(le, opts)
 		wasVisible := s.lastVisible[le.ID]
 		if isVisible {
@@ -419,10 +581,11 @@ func (s *Server) diffList(since time.Time) listResponse {
 		AgentPreview: s.filterStore.AgentPreview(),
 		AgentEnabled: s.filterStore.AgentGate(),
 		AgentExposed: s.agentExposed(),
+		Replay:       s.replayInfo(),
 	}
 }
 
-func (s *Server) writeJSON(w http.ResponseWriter, v interface{}) {
+func (s *Server) writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	json.NewEncoder(w).Encode(v)
@@ -448,6 +611,10 @@ func (s *Server) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.replayMode {
+		http.Error(w, "replay mode: no recording", http.StatusConflict)
 		return
 	}
 	starter := s.sessionStarter
@@ -523,8 +690,8 @@ func (s *Server) handleSaveFilters(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleFilterOptions(w http.ResponseWriter, r *http.Request) {
 	typ := r.URL.Query().Get("type")
-	entries := s.hist().ListSummary()
-	s.writeJSON(w, map[string]interface{}{
+	entries := s.listSummary()
+	s.writeJSON(w, map[string]any{
 		"values": history.Options(entries, typ, s.ignoreStore),
 	})
 }
@@ -550,7 +717,7 @@ func searchResponseBody(resp *history.ResponseRecord) string {
 	}
 	ces := resp.Headers["Content-Encoding"]
 	if len(ces) > 0 {
-		result := proxy.DecompressBody([]byte(resp.RawBody), ces[0])
+		result := history.DecompressBody([]byte(resp.RawBody), ces[0])
 		if len(strings.TrimSpace(result.Decoded)) > 0 {
 			return result.Decoded
 		}
@@ -594,7 +761,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	profile := s.filterStore.ActiveProfile()
 	s.filterStore.SetBodyIDsFor(profile, nil, token)
 
-	entries := s.hist().ListSummary()
+	entries := s.listSummary()
 	enc := json.NewEncoder(w)
 	var ids []string
 	scanned := 0
@@ -642,7 +809,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 		if scanned%5 == 0 || scanned == total {
 			commit()
-			enc.Encode(map[string]interface{}{
+			enc.Encode(map[string]any{
 				"scanned": scanned,
 				"total":   total,
 			})
@@ -651,7 +818,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	commit()
-	enc.Encode(map[string]interface{}{
+	enc.Encode(map[string]any{
 		"done":       true,
 		"matchCount": len(ids),
 	})
@@ -910,6 +1077,19 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 
 	if len(parts) > 1 {
 		sub := parts[1]
+		if s.replayMode {
+			switch {
+			case sub == "body-bin" && r.Method == http.MethodGet:
+				s.handleGetBodyBin(w, r, id)
+				return
+			case sub == "curl" && r.Method == http.MethodGet:
+				s.handleCopyCurl(w, r, id)
+				return
+			default:
+				http.NotFound(w, r)
+				return
+			}
+		}
 		switch {
 		case sub == "body" && r.Method == http.MethodPut:
 			s.handleSaveBody(w, r, id)
@@ -933,9 +1113,8 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entry, err := s.hist().Get(id)
-	if err != nil {
-		http.NotFound(w, r)
+	entry, ok := s.getEntry(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -945,7 +1124,7 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 		if len(ce) > 0 {
 			enc = ce[0]
 		}
-		entry.Request.Body = proxy.DecompressBody([]byte(entry.Request.RawBody), enc).Decoded
+		entry.Request.Body = history.DecompressBody([]byte(entry.Request.RawBody), enc).Decoded
 	}
 	if entry.Response != nil && entry.Response.RawBody != "" && entry.Response.Body == "" {
 		ce := entry.Response.Headers["Content-Encoding"]
@@ -953,7 +1132,7 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 		if len(ce) > 0 {
 			enc = ce[0]
 		}
-		entry.Response.Body = proxy.DecompressBody([]byte(entry.Response.RawBody), enc).Decoded
+		entry.Response.Body = history.DecompressBody([]byte(entry.Response.RawBody), enc).Decoded
 	}
 	if entry.ServerResponse != nil && entry.ServerResponse.RawBody != "" && entry.ServerResponse.Body == "" {
 		ce := entry.ServerResponse.Headers["Content-Encoding"]
@@ -961,7 +1140,7 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 		if len(ce) > 0 {
 			enc = ce[0]
 		}
-		entry.ServerResponse.Body = proxy.DecompressBody([]byte(entry.ServerResponse.RawBody), enc).Decoded
+		entry.ServerResponse.Body = history.DecompressBody([]byte(entry.ServerResponse.RawBody), enc).Decoded
 	}
 
 	if len(entry.Request.Body) > maxBodyLen {
@@ -1050,9 +1229,8 @@ func (s *Server) handleGetBodyBin(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 
-	entry, err := s.hist().Get(id)
-	if err != nil {
-		http.NotFound(w, r)
+	entry, ok := s.getEntry(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -1102,9 +1280,8 @@ func readBodyPreview(path string, limit int) (string, bool) {
 }
 
 func (s *Server) handleSaveMultipart(w http.ResponseWriter, r *http.Request, id string) {
-	entry, err := s.hist().Get(id)
-	if err != nil {
-		http.NotFound(w, r)
+	entry, ok := s.getEntry(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -1191,9 +1368,8 @@ func (s *Server) handleSaveMultipart(w http.ResponseWriter, r *http.Request, id 
 }
 
 func (s *Server) handleCopyCurl(w http.ResponseWriter, r *http.Request, id string) {
-	entry, err := s.hist().Get(id)
-	if err != nil {
-		http.NotFound(w, r)
+	entry, ok := s.getEntry(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -1292,6 +1468,10 @@ func (s *Server) handleCopyCurl(w http.ResponseWriter, r *http.Request, id strin
 }
 
 func (s *Server) handleSaveBody(w http.ResponseWriter, r *http.Request, id string) {
+	if s.hist() == nil {
+		http.Error(w, "no session recording active", http.StatusNotFound)
+		return
+	}
 	var body struct {
 		Target string `json:"target"`
 		Body   string `json:"body"`
@@ -1315,6 +1495,10 @@ func (s *Server) handleSaveBody(w http.ResponseWriter, r *http.Request, id strin
 }
 
 func (s *Server) handleRevertBody(w http.ResponseWriter, r *http.Request, id string) {
+	if s.hist() == nil {
+		http.Error(w, "no session recording active", http.StatusNotFound)
+		return
+	}
 	target := r.URL.Query().Get("target")
 	if target != "request" && target != "response" {
 		http.Error(w, `{"error":"target must be request or response"}`, http.StatusBadRequest)
@@ -1331,6 +1515,10 @@ func (s *Server) handleRevertBody(w http.ResponseWriter, r *http.Request, id str
 }
 
 func (s *Server) handleSaveHeaders(w http.ResponseWriter, r *http.Request, id string) {
+	if s.hist() == nil {
+		http.Error(w, "no session recording active", http.StatusNotFound)
+		return
+	}
 	var payload struct {
 		Headers map[string][]string `json:"headers"`
 	}
@@ -1349,6 +1537,10 @@ func (s *Server) handleSaveHeaders(w http.ResponseWriter, r *http.Request, id st
 }
 
 func (s *Server) handleRevertHeaders(w http.ResponseWriter, r *http.Request, id string) {
+	if s.hist() == nil {
+		http.Error(w, "no session recording active", http.StatusNotFound)
+		return
+	}
 	if err := s.hist().RevertHeaders(id); err != nil {
 		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
 		return
@@ -1364,9 +1556,8 @@ func (s *Server) handleReplay(w http.ResponseWriter, r *http.Request, id string)
 	}
 	json.NewDecoder(r.Body).Decode(&bodyOverride)
 
-	original, err := s.hist().Get(id)
-	if err != nil {
-		http.Error(w, `{"error":"original request not found"}`, http.StatusNotFound)
+	original, ok := s.getEntry(w, r, id)
+	if !ok {
 		return
 	}
 
@@ -1616,7 +1807,7 @@ func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
 			deactivated = []string{}
 		}
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(map[string]interface{}{"rule": rule, "deactivated": deactivated})
+		json.NewEncoder(w).Encode(map[string]any{"rule": rule, "deactivated": deactivated})
 	default:
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 	}
@@ -1677,7 +1868,7 @@ func (s *Server) handleRule(w http.ResponseWriter, r *http.Request) {
 				if deactivated == nil {
 					deactivated = []string{}
 				}
-				json.NewEncoder(w).Encode(map[string]interface{}{"rule": rule, "deactivated": deactivated})
+				json.NewEncoder(w).Encode(map[string]any{"rule": rule, "deactivated": deactivated})
 				return
 			}
 		}
@@ -1938,6 +2129,10 @@ func (s *Server) StreamNotifier() func(entryID string, size int64, done bool) {
 }
 
 func (s *Server) handleStreamEvents(w http.ResponseWriter, r *http.Request) {
+	if s.replayMode {
+		http.NotFound(w, r)
+		return
+	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/streams/")
 	parts := strings.SplitN(path, "/", 2)
 	id := parts[0]
@@ -1952,8 +2147,11 @@ func (s *Server) handleStreamEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entry, err := s.hist().Get(id)
-	if err != nil || entry.Response == nil || !entry.Response.Stream {
+	entry, ok := s.getEntry(w, r, id)
+	if !ok {
+		return
+	}
+	if entry.Response == nil || !entry.Response.Stream {
 		http.NotFound(w, r)
 		return
 	}
@@ -1998,13 +2196,13 @@ func (s *Server) handleProcessSignature(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if s.sigCache == nil {
-			json.NewEncoder(w).Encode(map[string]interface{}{"status": "unsupported"})
+			json.NewEncoder(w).Encode(map[string]any{"status": "unsupported"})
 			return
 		}
 		result := s.sigCache.Get(filePath)
 		if result == nil {
 			s.sigCache.VerifyAsync(filePath)
-			json.NewEncoder(w).Encode(map[string]interface{}{"status": "analyzing", "filePath": filePath})
+			json.NewEncoder(w).Encode(map[string]any{"status": "analyzing", "filePath": filePath})
 			return
 		}
 		json.NewEncoder(w).Encode(result)
@@ -2044,6 +2242,214 @@ func (s *Server) handleProcessEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		case result := <-ch:
 			data, _ := json.Marshal(result)
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+	}
+}
+
+// handleReplayRuns lists every replay run stored for this session, newest first.
+func (s *Server) handleReplayRuns(w http.ResponseWriter, r *http.Request) {
+	if !s.replayMode {
+		http.NotFound(w, r)
+		return
+	}
+	runs, err := session.ListReplayRuns(s.replayLogDir)
+	if err != nil {
+		runs = nil
+	}
+	if runs == nil {
+		runs = []session.RunSummary{}
+	}
+	s.writeJSON(w, map[string]any{"runs": runs})
+}
+
+// handleReplayEventsList returns the events of a run. run= empty selects the
+// active run.
+func (s *Server) handleReplayEventsList(w http.ResponseWriter, r *http.Request) {
+	if !s.replayMode {
+		http.NotFound(w, r)
+		return
+	}
+	runID := r.URL.Query().Get("run")
+	if runID == "" {
+		s.replayMu.Lock()
+		runID = s.replayRunID
+		s.replayMu.Unlock()
+		if runID == "" {
+			s.writeJSON(w, map[string]any{"runId": "", "events": []session.ReplayEvent{}})
+			return
+		}
+	}
+	events, err := s.replayEventsFor(runID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if events == nil {
+		events = []session.ReplayEvent{}
+	}
+	s.writeJSON(w, map[string]any{"runId": runID, "events": events})
+}
+
+// handleReplayEventsSub dispatches the per-run endpoints: <run>/stream (SSE),
+// <run>/<seq> (detail) and <run>/<seq>/body (request body bytes).
+func (s *Server) handleReplayEventsSub(w http.ResponseWriter, r *http.Request) {
+	if !s.replayMode {
+		http.NotFound(w, r)
+		return
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/api/replay/events/")
+	parts := strings.Split(path, "/")
+	if len(parts) < 1 || parts[0] == "" {
+		http.NotFound(w, r)
+		return
+	}
+	runID := parts[0]
+	if len(parts) == 2 && parts[1] == "stream" {
+		s.handleReplayStream(w, r, runID)
+		return
+	}
+	if len(parts) < 2 {
+		http.NotFound(w, r)
+		return
+	}
+	seq, err := strconv.Atoi(parts[1])
+	if err != nil || seq < 1 {
+		http.NotFound(w, r)
+		return
+	}
+	if len(parts) == 3 && parts[2] == "body" {
+		s.handleReplayBody(w, r, runID, seq)
+		return
+	}
+	s.handleReplayEventDetail(w, r, runID, seq)
+}
+
+// replayDetailResponse pairs a replay event with the recorded entry it hit (if
+// any), so the frontend can compare the incoming request against the match.
+type replayDetailResponse struct {
+	Event        session.ReplayEvent `json:"event"`
+	MatchedEntry *history.Entry      `json:"matchedEntry,omitempty"`
+}
+
+func (s *Server) handleReplayEventDetail(w http.ResponseWriter, r *http.Request, runID string, seq int) {
+	events, err := s.replayEventsFor(runID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	var ev *session.ReplayEvent
+	for i := range events {
+		if events[i].Seq == seq {
+			ev = &events[i]
+			break
+		}
+	}
+	if ev == nil {
+		http.NotFound(w, r)
+		return
+	}
+	var matched *history.Entry
+	if ev.Result == "hit" && ev.EntryID != "" {
+		if e, err := s.hist().Get(ev.EntryID); err == nil {
+			matched = e
+		}
+	}
+	s.writeJSON(w, replayDetailResponse{Event: *ev, MatchedEntry: matched})
+}
+
+// handleReplayBody serves the stored raw body of a replay event's request.
+func (s *Server) handleReplayBody(w http.ResponseWriter, r *http.Request, runID string, seq int) {
+	events, err := s.replayEventsFor(runID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	var rec *history.RequestRecord
+	for i := range events {
+		if events[i].Seq == seq {
+			rec = &events[i].Request
+			break
+		}
+	}
+	if rec == nil || rec.BodyFile == "" {
+		http.NotFound(w, r)
+		return
+	}
+	dir, err := session.ReplayRunDir(s.replayLogDir, runID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	data, err := session.ReadReplayBody(dir, rec.BodyFile)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	h := http.Header(rec.Headers)
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	switch {
+	case rec.IsBinaryBody:
+		w.Header().Set("Content-Type", "application/octet-stream")
+	case h.Get("Content-Type") != "":
+		w.Header().Set("Content-Type", h.Get("Content-Type"))
+	default:
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	}
+	w.Write(data)
+}
+
+// handleReplayStream streams the active run's events over SSE: the current
+// snapshot on connect, then live pushes. Only the active run can stream; past
+// runs are read via the list/detail endpoints.
+func (s *Server) handleReplayStream(w http.ResponseWriter, r *http.Request, runID string) {
+	s.replayMu.Lock()
+	if runID != s.replayRunID {
+		s.replayMu.Unlock()
+		http.NotFound(w, r)
+		return
+	}
+	ch := make(chan session.ReplayEvent, 64)
+	s.replayClients[ch] = struct{}{}
+	snapshot := append([]session.ReplayEvent(nil), s.replayEvents...)
+	s.replayMu.Unlock()
+	defer func() {
+		s.replayMu.Lock()
+		delete(s.replayClients, ch)
+		s.replayMu.Unlock()
+	}()
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	ctx := r.Context()
+	for _, ev := range snapshot {
+		data, _ := json.Marshal(ev)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+	}
+	flusher.Flush()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev := <-ch:
+			if ev.RunID != runID {
+				data, _ := json.Marshal(map[string]string{"type": "runChanged", "runId": ev.RunID})
+				fmt.Fprintf(w, "data: %s\n\n", data)
+				flusher.Flush()
+				return
+			}
+			data, _ := json.Marshal(ev)
 			fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()
 		}

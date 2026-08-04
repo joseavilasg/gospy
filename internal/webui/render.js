@@ -1,4 +1,4 @@
-import { requests, selectedId, filterText, ignoredHosts, focusedHosts, focusEnabled, setSelectedId, rules, totalRequests, visibleCount } from './state.js';
+import { requests, selectedId, filterText, ignoredHosts, focusedHosts, focusEnabled, setSelectedId, rules, totalRequests, visibleCount, isReplayServed, isReplayComplete, getReplayMode } from './state.js';
 import { isAnyFilterActive } from './filters.js';
 import { detectBodyType, getKebabItems, renderContent, isEditable, getEntryData } from './body-types.js';
 
@@ -58,7 +58,14 @@ function buildItemHtml(r) {
         ? '<span class="stream-badge" title="Streaming response — live">●</span>'
         : '';
 
-    return `<div class="request-item${selected}" title="${escapeHtml(url)}" data-id="${r.id}"><span class="method method-${method}">${method}</span><span class="url">${escapeHtml(url)}</span>${status != null ? `<span class="status ${statusClass}">${status}</span>` : ''}${actionBadge}${replayBadge}${agentBadge}${streamBadge}${processBadge}<span class="time">${time}</span></div>`;
+    let serveBadge = '';
+    if (isReplayServed(r.id)) {
+        serveBadge = '<span class="serve-badge serve-badge-hit" title="Served in this replay run">✓</span>';
+    } else if (isReplayComplete()) {
+        serveBadge = '<span class="serve-badge serve-badge-miss" title="Never served in this replay run">✗</span>';
+    }
+
+    return `<div class="request-item${selected}" title="${escapeHtml(url)}" data-id="${r.id}"><span class="method method-${method}">${method}</span><span class="url">${escapeHtml(url)}</span>${status != null ? `<span class="status ${statusClass}">${status}</span>` : ''}${actionBadge}${replayBadge}${agentBadge}${streamBadge}${serveBadge}${processBadge}<span class="time">${time}</span></div>`;
 }
 
 export function renderList() {
@@ -390,10 +397,12 @@ export function renderDetail(req, activeTab = 'request') {
     panel.innerHTML = `
         ${actionBanner}
         <div class="detail-toolbar">
+            ${getReplayMode() ? '' : `
             ${ignoreBtn}
             ${focusBtn}
             <button class="btn-replay" data-action="send-replay"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg> Replay</button>
             <button class="btn-create-rule" data-action="create-rule-from-request"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="3" y="1" width="10" height="14" rx="1.5" stroke="currentColor" stroke-width="1.5"/><line x1="5.5" y1="5" x2="10.5" y2="5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="5.5" y1="8" x2="10.5" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="8" y1="10.5" x2="8" y2="13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="6.5" y1="11.75" x2="9.5" y2="11.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> Rule</button>
+            `}
         </div>
         ${replayedFromHtml}
         <div class="tabs-row">
@@ -612,6 +621,14 @@ function closeAllPanels() {
     document.getElementById('ignoredPanel').classList.remove('open');
     document.getElementById('focusedPanel').classList.remove('open');
     document.getElementById('rulesPanel').classList.remove('open');
+    document.getElementById('replayPanel').classList.remove('open');
+}
+
+export function toggleReplayPanel() {
+    const panel = document.getElementById('replayPanel');
+    const wasOpen = panel.classList.contains('open');
+    closeAllPanels();
+    if (!wasOpen) panel.classList.add('open');
 }
 
 export function toggleIgnoredPanel() {
@@ -812,4 +829,108 @@ export function openRuleModalFromRequest(entry) {
     document.querySelector('input[name="ruleRequestAction"][value="mock"]').checked = true;
     toggleRequestActionSections('mock');
     toggleResponseActionSections('real');
+}
+
+export function renderReplayFeed(events) {
+    const feed = document.getElementById('replayFeed');
+    if (!feed) return;
+    if (!events || events.length === 0) {
+        feed.innerHTML = '<div class="replay-event-empty">No replay activity yet — requests will appear here as the replay server serves them.</div>';
+        return;
+    }
+    feed.innerHTML = events.map(ev => {
+        const icon = ev.result === 'hit' ? '✓' : ev.result === 'miss' ? '✗' : '‼';
+        const status = ev.status != null ? ev.status : '';
+        const pair = ev.result === 'hit' && ev.matchedUrl
+            ? `<div class="replay-event-pair">→ matched <span class="replay-event-pair-url">${escapeHtml(ev.matchedUrl)}</span></div>`
+            : '';
+        return `<div class="replay-event replay-event-${ev.result}" data-action="replay-event-detail" data-run="${escapeHtml(ev.runId)}" data-seq="${ev.seq}" title="${new Date(ev.ts).toLocaleString()}">
+            <span class="replay-event-result">${icon}</span>
+            <span class="replay-event-method">${escapeHtml(ev.method)}</span>
+            <span class="replay-event-url">${escapeHtml(ev.url)}</span>
+            <span class="replay-event-status">${status}</span>
+        </div>${pair}`;
+    }).join('');
+}
+
+export function renderReplayEventDetail(detail) {
+    const panel = document.getElementById('detailPanel');
+    if (!panel || !detail?.event) return;
+    const ev = detail.event;
+    const req = ev.request || {};
+    const headers = req.headers || {};
+
+    const icon = ev.result === 'hit' ? '✓' : ev.result === 'miss' ? '✗' : '‼';
+    const statusHtml = ev.status != null
+        ? `<span class="status ${ev.status < 300 ? 'status-2xx' : ev.status < 400 ? 'status-3xx' : ev.status < 500 ? 'status-4xx' : 'status-5xx'}">${ev.status}</span>`
+        : '';
+
+    let bodyHtml = '';
+    if (req.body) {
+        bodyHtml = `<div class="body-viewer-body"><pre>${escapeHtml(req.body)}</pre></div>`;
+    } else if (req.bodyFile) {
+        bodyHtml = `<div class="body-viewer-body"><a class="replay-event-body-link" data-action="replay-body" data-run="${escapeHtml(ev.runId)}" data-seq="${ev.seq}" href="#">Load body (${req.bodySize || ''} bytes)</a></div>`;
+    } else if (req.isBinaryBody) {
+        bodyHtml = `<div class="body-viewer-body"><pre>Binary body — ${req.bodySize || ''} bytes</pre></div>`;
+    }
+
+    let matchedHtml = '';
+    if (ev.result === 'hit') {
+        const m = detail.matchedEntry;
+        if (m) {
+            const mUrl = m.request?.url || m.url || m.host || '';
+            matchedHtml = `<div class="section-panel">
+                <div class="section-header"><span class="section-title">Matched entry (recorded)</span></div>
+                <div class="content-block">
+                    <pre>${escapeHtml(m.method)} ${escapeHtml(mUrl)}</pre>
+                    <button class="btn-active" data-action="goto-replay" data-id="${escapeHtml(m.id)}">Open in list</button>
+                </div>
+            </div>`;
+        } else {
+            matchedHtml = `<div class="section-panel">
+                <div class="section-header"><span class="section-title">Matched entry (recorded)</span></div>
+                <div class="content-block"><span class="replay-event-empty">Entry ${escapeHtml(ev.entryId || '')} not available.</span></div>
+            </div>`;
+        }
+    }
+
+    let unconsumedHtml = '';
+    if (ev.unconsumed && ev.unconsumed.length > 0) {
+        const rows = ev.unconsumed.map(u =>
+            `<div class="replay-event-pending" data-action="goto-replay" data-id="${escapeHtml(u.id)}"><span class="method method-${u.method}">${u.method}</span><span class="url">${escapeHtml(u.url)}</span></div>`
+        ).join('');
+        const more = ev.totalPending > 50 ? `<div class="replay-event-pending-more">and ${ev.totalPending - 50} more</div>` : '';
+        unconsumedHtml = `<div class="section-panel">
+            <div class="section-header"><span class="section-title">Entries pending at that time (${ev.totalPending})</span></div>
+            <div class="content-block">${rows}${more}</div>
+        </div>`;
+    }
+
+    panel.innerHTML = `
+        <div class="detail-header">
+            <div class="detail-title">[${icon} ${escapeHtml(ev.result.toUpperCase())}] ${escapeHtml(ev.method)} ${escapeHtml(ev.url)} ${statusHtml}</div>
+            <div class="detail-subtitle">${escapeHtml(ev.runId)} · seq ${ev.seq} · ${new Date(ev.ts).toLocaleString()}</div>
+        </div>
+        <div class="tabs-row">
+            <div class="tabs"><button class="tab active">Incoming request</button></div>
+            <div class="detail-id-group"><span class="detail-id">replay event</span></div>
+        </div>
+        <div class="tab-content">
+            <div class="section-panel">
+                <div class="section-header"><span class="section-title">Incoming request</span></div>
+                <div class="content-block">
+                    <pre>${escapeHtml(ev.method)} ${escapeHtml(req.url || req.host || '')}</pre>
+                </div>
+            </div>
+            <div class="section-panel">
+                <div class="section-header"><span class="section-title">Headers</span></div>
+                <div class="content-block"><div class="headers-container">${buildHeaderRows(headers)}</div></div>
+            </div>
+            ${bodyHtml ? `<div class="section-panel">
+                <div class="section-header"><span class="section-title">Body</span></div>
+                <div class="content-block">${bodyHtml}</div>
+            </div>` : ''}
+            ${matchedHtml}
+            ${unconsumedHtml}
+        </div>`;
 }

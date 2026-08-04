@@ -16,11 +16,11 @@
         <div class="auto-refresh">
             <input type="checkbox" id="focusEnabled" title="Enable focus filter">
         </div>
-        <label class="agent-view-toggle">
+        <label class="agent-view-toggle" id="agentEnabledToggle">
             <input type="checkbox" id="agentEnabled" title="Enable the agent MCP (resets to off on every start)">
             <span>Agent enabled</span>
         </label>
-        <label class="agent-view-toggle">
+        <label class="agent-view-toggle" id="agentPreviewToggle">
             <input type="checkbox" id="agentPreview" title="Agent view: preview the scope the agent MCP can see">
             <span>Agent view</span>
         </label>
@@ -29,10 +29,11 @@
         <div class="auto-refresh">
             <input type="checkbox" id="autoRefresh" checked title="Auto-refresh requests">
         </div>
-        <div class="header-sep"></div>
+        <div class="header-sep" id="sepIgnored"></div>
         <button class="btn" id="ignoredBtn">Ignored <span class="badge" id="ignoredCount">0</span></button>
-        <div class="header-sep"></div>
+        <div class="header-sep" id="sepRules"></div>
         <button class="btn" id="rulesBtn">Rules <span class="badge" id="rulesCount">0</span></button>
+        <button class="btn replay-chip" id="replayChip" style="display:none" title="Replay activity"><span class="replay-chip-label">REPLAY</span> <span class="badge" id="replayChipProgress">0/0</span><span class="replay-chip-exhausted" id="replayChipExhausted" style="display:none">EXHAUSTED</span></button>
     </header>
     <div class="agent-banner" id="agentBanner" style="display:none">Agent enabled without active filters: the agent will see all traffic</div>
     <div class="container" id="container">
@@ -120,6 +121,18 @@
                 <button id="addRuleBtn">+ Create Rule</button>
             </div>
         </div>
+    </div>
+
+    <div class="replay-panel" id="replayPanel">
+        <div class="replay-drag" id="replayDrag"></div>
+        <div class="replay-drawer-header">
+            <h3>Replay activity</h3>
+            <select id="replayRunSelect" class="replay-run-select"></select>
+            <span class="replay-run-meta" id="replayRunMeta"></span>
+            <div style="flex:1"></div>
+            <button class="ignored-panel-close" title="Close replay panel">&times;</button>
+        </div>
+        <div class="replay-feed" id="replayFeed"></div>
     </div>
 
     <div class="modal-overlay" id="ruleModal">

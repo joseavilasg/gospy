@@ -20,13 +20,13 @@ import (
 // streamable HTTP on a single /mcp endpoint.
 type Server struct {
 	scope   *Scope
-	histVal atomic.Value // HistoryStore
+	histVal atomic.Pointer[history.Store]
 	fwd     *Forwarder
 	mcp     *server.MCPServer
 }
 
 // NewServer wires the tools. The caller mounts Handler() at exactly /mcp.
-func NewServer(scope *Scope, hist HistoryStore, fwd *Forwarder) *Server {
+func NewServer(scope *Scope, hist *history.Store, fwd *Forwarder) *Server {
 	s := &Server{scope: scope, fwd: fwd}
 	s.histVal.Store(hist)
 	ms := server.NewMCPServer("gospy-agent", "1.0.0", server.WithToolCapabilities(true), server.WithInputSchemaValidation())
@@ -79,13 +79,15 @@ func NewServer(scope *Scope, hist HistoryStore, fwd *Forwarder) *Server {
 
 // hist returns the current history store. Swapped atomically on session
 // rotation so get_entry and send_request templates target the active session.
-func (s *Server) hist() HistoryStore {
-	return s.histVal.Load().(HistoryStore)
+func (s *Server) hist() *history.Store {
+	return s.histVal.Load()
 }
 
-// SetHistoryStore rotates the session store the MCP reads.
-func (s *Server) SetHistoryStore(h HistoryStore) {
+// SetHistoryStore rotates the session store the MCP reads, keeping the scope
+// in sync so list_entries and get_entry serve the same active session.
+func (s *Server) SetHistoryStore(h *history.Store) {
 	s.histVal.Store(h)
+	s.scope.SetHistoryStore(h)
 }
 
 // Handler returns the streamable HTTP handler; mount it at exactly /mcp.
@@ -171,6 +173,9 @@ func (s *Server) handleGetEntry(ctx context.Context, req mcp.CallToolRequest) (*
 	if id == "" {
 		return mcp.NewToolResultError("id is required"), nil
 	}
+	if s.hist() == nil {
+		return mcp.NewToolResultError("no session recording active"), nil
+	}
 	if !s.scope.IsVisible(id) {
 		return mcp.NewToolResultErrorf("entry %s is not in the agent-visible set", id), nil
 	}
@@ -198,8 +203,10 @@ func (s *Server) handleSendRequest(ctx context.Context, req mcp.CallToolRequest)
 		return mcp.NewToolResultErrorf("forward failed: %v", err), nil
 	}
 	resp.Request = ResolvedRequest{Method: built.method, URL: built.url, BodySource: built.bodySource}
-	if le, err := s.hist().GetByAgentCallID(callID); err == nil {
-		resp.EntryID = le.ID
+	if st := s.hist(); st != nil {
+		if le, err := st.GetByAgentCallID(callID); err == nil {
+			resp.EntryID = le.ID
+		}
 	}
 	return mcp.NewToolResultJSON(resp)
 }

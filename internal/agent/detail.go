@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"gospy/internal/history"
-	"gospy/internal/proxy"
 )
 
 const hexDumpMaxLines = 20
@@ -64,7 +63,7 @@ func decodeBody(raw string, headers map[string][]string) string {
 	if ce := headers["Content-Encoding"]; len(ce) > 0 {
 		enc = ce[0]
 	}
-	return proxy.DecompressBody([]byte(raw), enc).Decoded
+	return history.DecompressBody([]byte(raw), enc).Decoded
 }
 
 func readHexDump(dir, bodyFile string) string {

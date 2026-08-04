@@ -1,12 +1,15 @@
 package session
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"gospy/internal/ca"
 	"gospy/internal/history"
@@ -15,10 +18,14 @@ import (
 )
 
 type ReplayServer struct {
-	addr    string
-	proxy   *goproxy.ProxyHttpServer
-	session *ReplayStore
-	cfg     *MatchConfig
+	addr     string
+	proxy    *goproxy.ProxyHttpServer
+	session  *ReplayStore
+	cfg      *MatchConfig
+	logRoot  string
+	logMu    sync.Mutex
+	log      *ReplayLog
+	notifier func(ReplayEvent)
 }
 
 func NewReplayServer(addr string, caCert *ca.CA, session *ReplayStore, cfg *MatchConfig) *ReplayServer {
@@ -45,6 +52,28 @@ func NewReplayServer(addr string, caCert *ca.CA, session *ReplayStore, cfg *Matc
 	return rs
 }
 
+// SetReplayLogRoot enables persistence of every replay run under root. The
+// first request served after a process start opens a new run directory.
+func (rs *ReplayServer) SetReplayLogRoot(root string) {
+	rs.logRoot = root
+}
+
+// SetReplayNotifier registers a callback invoked for every request handled by
+// the replay server, after the event has been persisted.
+func (rs *ReplayServer) SetReplayNotifier(fn func(ReplayEvent)) {
+	rs.notifier = fn
+}
+
+// Close finalizes the active run log.
+func (rs *ReplayServer) Close() error {
+	rs.logMu.Lock()
+	defer rs.logMu.Unlock()
+	if rs.log == nil {
+		return nil
+	}
+	return rs.log.Close()
+}
+
 func (rs *ReplayServer) ListenAndServe() error {
 	return http.ListenAndServe(rs.addr, rs.proxy)
 }
@@ -55,38 +84,146 @@ func (rs *ReplayServer) handleRequest(req *http.Request, ctx *goproxy.ProxyCtx) 
 		url += "?" + req.URL.RawQuery
 	}
 
-	entry, result := rs.session.Match(req.Method, url, rs.cfg)
+	rec, rawBody := captureRequest(req, url)
+	entry, result, unconsumed, totalPending := rs.session.MatchDetailed(req.Method, url, rs.cfg)
+
+	ev := ReplayEvent{
+		Timestamp: time.Now(),
+		Method:    req.Method,
+		URL:       url,
+		Request:   rec,
+		Result:    result.String(),
+	}
+
+	var resp *http.Response
+	var buildErr error
 	switch result {
 	case ResultHit:
-		resp, err := buildResponse(entry, req, rs.session.Dir())
-		if err != nil {
+		resp, buildErr = buildResponse(entry, req, rs.session.Dir())
+		if buildErr != nil {
 			LogReplayMiss(req.Method, url)
-			return nil, &http.Response{
-				StatusCode: http.StatusInternalServerError,
-				Header:     make(http.Header),
-				Body:       io.NopCloser(strings.NewReader("replay error: " + err.Error())),
-				Request:    req,
+			errText := "replay error: " + buildErr.Error()
+			resp = &http.Response{
+				StatusCode:    http.StatusInternalServerError,
+				Header:        make(http.Header),
+				Body:          io.NopCloser(strings.NewReader(errText)),
+				ContentLength: int64(len(errText)),
+				Request:       req,
 			}
 		}
 		resp.Header.Set("X-Gospy-Replay", "hit")
-		LogReplayHit(req.Method, url, entry.Response.Status)
-		return nil, resp
+		ev.Status = resp.StatusCode
+		ev.EntryID = entry.ID
+		ev.MatchedURL = entry.Request.URL
+		LogReplayHit(req.Method, url, resp.StatusCode)
 	case ResultMiss:
+		ev.Status = http.StatusNotFound
+		ev.Unconsumed = unconsumed
+		ev.TotalPending = totalPending
+		missText := "no recording for " + req.Method + " " + url
+		resp = &http.Response{
+			StatusCode:    http.StatusNotFound,
+			Header:        http.Header{"X-Gospy-Replay": {"miss"}},
+			Body:          io.NopCloser(strings.NewReader(missText)),
+			ContentLength: int64(len(missText)),
+			Request:       req,
+		}
 		LogReplayMiss(req.Method, url)
-		return nil, &http.Response{
-			StatusCode: http.StatusNotFound,
-			Header:     http.Header{"X-Gospy-Replay": {"miss"}},
-			Body:       io.NopCloser(strings.NewReader("no recording for " + req.Method + " " + url)),
-			Request:    req,
-		}
 	default:
-		LogReplayExhausted(req.Method, url)
-		return nil, &http.Response{
-			StatusCode: http.StatusGone,
-			Header:     http.Header{"X-Gospy-Replay": {"exhausted"}},
-			Body:       io.NopCloser(strings.NewReader("replay exhausted: all recorded requests have been served")),
-			Request:    req,
+		ev.Status = http.StatusGone
+		exhaustedText := "replay exhausted: all recorded requests have been served"
+		resp = &http.Response{
+			StatusCode:    http.StatusGone,
+			Header:        http.Header{"X-Gospy-Replay": {"exhausted"}},
+			Body:          io.NopCloser(strings.NewReader(exhaustedText)),
+			ContentLength: int64(len(exhaustedText)),
+			Request:       req,
 		}
+		LogReplayExhausted(req.Method, url)
+	}
+
+	rs.emit(&ev, rawBody)
+	return nil, resp
+}
+
+// emit records the event with its run progress and notifies listeners.
+func (rs *ReplayServer) emit(ev *ReplayEvent, rawBody []byte) {
+	consumed, total, exhausted := rs.session.Progress(rs.cfg)
+	ev.Consumed = consumed
+	ev.Total = total
+	ev.Exhausted = exhausted
+
+	if rs.logRoot != "" {
+		if log, err := rs.ensureLog(); err == nil {
+			ev.RunID = log.RunID()
+			if err := log.Append(ev, rawBody); err != nil {
+				fmt.Printf("[REPLAY] warn: write run log: %v\n", err)
+			}
+		}
+	}
+	if rs.notifier != nil {
+		rs.notifier(*ev)
+	}
+}
+
+func (rs *ReplayServer) ensureLog() (*ReplayLog, error) {
+	rs.logMu.Lock()
+	defer rs.logMu.Unlock()
+	if rs.log != nil {
+		return rs.log, nil
+	}
+	runDir := nextRunDir(rs.logRoot)
+	log, err := OpenReplayLog(runDir, filepath.Base(runDir))
+	if err != nil {
+		return nil, err
+	}
+	rs.log = log
+	return log, nil
+}
+
+// captureRequest mirrors the interceptor's body handling: the raw body is
+// always retained (written to the run bin by the log), and text bodies are
+// decoded inline for display.
+func captureRequest(req *http.Request, url string) (history.RequestRecord, []byte) {
+	rec := history.RequestRecord{
+		Method:  req.Method,
+		URL:     url,
+		Host:    req.Host,
+		Headers: req.Header.Clone(),
+	}
+	var raw []byte
+	if req.Body != nil {
+		var buf bytes.Buffer
+		if _, err := io.Copy(&buf, req.Body); err == nil {
+			data := buf.Bytes()
+			ce := req.Header.Get("Content-Encoding")
+			ct := req.Header.Get("Content-Type")
+			if len(data) > 0 {
+				raw = data
+				rec.IsBinaryBody = history.IsBinaryBody(data, ce, ct)
+				if !rec.IsBinaryBody {
+					result := history.DecompressBody(data, ce)
+					rec.Body = result.Decoded
+					rec.RawBody = result.Raw
+					rec.Compression = result.Compression
+				}
+			}
+		}
+		req.Body = io.NopCloser(&buf)
+	}
+	return rec, raw
+}
+
+// nextRunDir picks a run directory under root using a timestamp, appending a
+// numeric suffix when the directory already exists.
+func nextRunDir(root string) string {
+	base := time.Now().Format("20060102-150405")
+	dir := filepath.Join(root, base)
+	for i := 2; ; i++ {
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			return dir
+		}
+		dir = filepath.Join(root, fmt.Sprintf("%s-%d", base, i))
 	}
 }
 
@@ -107,22 +244,25 @@ func buildResponse(entry *history.Entry, req *http.Request, sessionDir string) (
 	}
 
 	var body io.ReadCloser
+	var contentLength int64
 	if entry.Response.BodyFile != "" {
 		data, err := os.ReadFile(filepath.Join(sessionDir, "bin", entry.Response.BodyFile))
 		if err != nil {
 			return nil, fmt.Errorf("read body: %w", err)
 		}
 		body = io.NopCloser(strings.NewReader(string(data)))
+		contentLength = int64(len(data))
 	} else {
 		body = http.NoBody
 	}
 
 	return &http.Response{
-		StatusCode: status,
-		Status:     http.StatusText(status),
-		Header:     headers,
-		Body:       body,
-		Request:    req,
+		StatusCode:    status,
+		Status:        http.StatusText(status),
+		Header:        headers,
+		Body:          body,
+		ContentLength: contentLength,
+		Request:       req,
 	}, nil
 }
 

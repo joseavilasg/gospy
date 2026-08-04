@@ -82,7 +82,7 @@ func main() {
 	}
 
 	if mode == "replay" {
-		runReplay(caCert, *proxyAddr, session.ResolveDir(*sessionDir, *dataDir), *matchConfig)
+		runReplay(caCert, *proxyAddr, session.ResolveDir(*sessionDir, *dataDir), *matchConfig, *uiAddr, *dataDir)
 		return
 	}
 
@@ -92,16 +92,9 @@ func main() {
 	autoSession := mode == "record" && *sessionDir == ""
 	var hist *history.Store
 	if autoSession {
-		pendingDir := filepath.Join(*dataDir, "sessions", "_pending")
-		if err := os.RemoveAll(pendingDir); err != nil {
-			fmt.Fprintf(os.Stderr, "Error clearing pending sessions: %v\n", err)
-			os.Exit(1)
-		}
-		hist, err = history.New(pendingDir)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error initializing history: %v\n", err)
-			os.Exit(1)
-		}
+		// No session yet: the proxy rejects all traffic (503 + X-Gospy-Replay:
+		// nosession) until POST /api/session/start swaps in a real store.
+		hist = nil
 	} else {
 		histDir := *dataDir + "/history"
 		if mode == "record" {
@@ -159,6 +152,7 @@ func main() {
 	}
 	if autoSession {
 		proxy.LogInfo("Waiting for session start: POST http://localhost:8081/api/session/start")
+		proxy.LogInfo("Proxy traffic is rejected until a session starts")
 	}
 	if mode == "record" && !*systemProxy {
 		*noSystemProxy = true
@@ -280,7 +274,7 @@ func main() {
 	}
 }
 
-func runReplay(caCert *ca.CA, addr, sessionDir, matchConfig string) {
+func runReplay(caCert *ca.CA, addr, sessionDir, matchConfig, uiAddr, dataDir string) {
 	if sessionDir == "" {
 		fmt.Fprintf(os.Stderr, "ERROR: --session is required for replay mode\n")
 		os.Exit(1)
@@ -311,12 +305,51 @@ func runReplay(caCert *ca.CA, addr, sessionDir, matchConfig string) {
 	fmt.Printf("Replay server listening on %s\n", addr)
 	fmt.Println("WARNING: All requests are served from recording, no network calls will be made")
 
+	if uiAddr != "" {
+		replayRoot := filepath.Join(dataDir, "replay", filepath.Base(sessionDir))
+		srv.SetReplayLogRoot(replayRoot)
+
+		uiBase, err := os.MkdirTemp("", "gospy-replay-ui-")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: failed to create UI temp dir: %v\n", err)
+			os.Exit(1)
+		}
+		defer os.RemoveAll(uiBase)
+
+		ignoreStore := proxy.NewIgnoreStore(filepath.Join(uiBase, "ignore.json"))
+		_ = ignoreStore.Load()
+		focusStore := proxy.NewFocusStore(filepath.Join(uiBase, "focus.json"))
+		_ = focusStore.Load()
+		rulesStore := rules.NewStore(filepath.Join(uiBase, "rules.json"))
+		_ = rulesStore.Load()
+		ruleEngine := rules.NewEngine()
+		ruleEngine.Load(rulesStore.GetRules())
+		filterStore := webui.NewFilterStore(filepath.Join(uiBase, "filters.json"))
+
+		webSrv := webui.NewServer(uiAddr, hist, ignoreStore, focusStore, rulesStore, ruleEngine, addr, nil, nil, filterStore)
+		webSrv.SetReplayMode(true)
+		webSrv.SetReplayLogDir(replayRoot)
+		srv.SetReplayNotifier(webSrv.ReplayNotifier())
+
+		go func() {
+			if err := webSrv.ListenAndServe(); err != nil {
+				proxy.LogError(fmt.Sprintf("Web UI error: %v", err))
+			}
+		}()
+
+		proxy.LogInfo(fmt.Sprintf("Web UI at http://localhost%s", uiAddr))
+		proxy.LogInfo("Replay mode: read-only")
+	}
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
 		fmt.Println()
 		fmt.Println("Shutting down...")
+		if err := srv.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error finalizing replay log: %v\n", err)
+		}
 		os.Exit(0)
 	}()
 

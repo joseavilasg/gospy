@@ -2,9 +2,6 @@ package proxy
 
 import (
 	"bytes"
-	"compress/flate"
-	"compress/gzip"
-	"compress/zlib"
 	"fmt"
 	"io"
 	"net"
@@ -19,7 +16,6 @@ import (
 	"gospy/internal/history"
 	"gospy/internal/rules"
 
-	"github.com/andybalholm/brotli"
 	"github.com/elazarl/goproxy"
 	"github.com/google/uuid"
 )
@@ -91,6 +87,13 @@ func (ic *Interceptor) isSelfRequest(host string) bool {
 }
 
 func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+	// No store means no active session (record auto mode before the first
+	// POST /api/session/start). The proxy rejects all traffic: nothing is
+	// proxied and nothing is captured.
+	if ic.hist() == nil {
+		return req, noSessionResponse(req)
+	}
+
 	if ic.isSelfRequest(req.Host) {
 		return req, nil
 	}
@@ -128,9 +131,9 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 					bodyFile = filename
 					bodySize = int64(len(data))
 				}
-				isBinary = isBinaryBody(data, ce, ct)
+				isBinary = history.IsBinaryBody(data, ce, ct)
 				if !isBinary {
-					result := DecompressBody(data, ce)
+					result := history.DecompressBody(data, ce)
 					body = result.Decoded
 					rawBody = result.Raw
 					compression = result.Compression
@@ -329,7 +332,10 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 }
 
 func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
-	if resp == nil || ctx.Req == nil {
+	// Defensive: HandleRequest rejects everything pre-session, so no proxied
+	// response can reach this point. Guard anyway against a session ending
+	// mid-flight.
+	if resp == nil || ctx.Req == nil || ic.hist() == nil {
 		return resp
 	}
 
@@ -392,7 +398,7 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 					sresp.BodyFile = filename
 					sresp.BodySize = int64(len(bodyData))
 				}
-				if !isBinaryBody(bodyData, ce, ct) {
+				if !history.IsBinaryBody(bodyData, ce, ct) {
 					sresp.RawBody = string(bodyData)
 				} else {
 					sresp.IsBinaryBody = true
@@ -425,7 +431,7 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 					respRec.BodyFile = filename
 					respRec.BodySize = int64(len(bodyData))
 				}
-				if !isBinaryBody(bodyData, ce, ct) {
+				if !history.IsBinaryBody(bodyData, ce, ct) {
 					respRec.RawBody = string(bodyData)
 				} else {
 					respRec.IsBinaryBody = true
@@ -441,10 +447,38 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 	return resp
 }
 
-func (ic *Interceptor) HandleConnect(host string, ctx *goproxy.ProxyCtx) *goproxy.ConnectAction {
+// HandleConnect decides how HTTPS CONNECT tunnels are handled. With no active
+// session (record auto mode before the first session start) the tunnel is
+// rejected with the same 503 + X-Gospy-Replay: nosession used for plain HTTP,
+// so the client gets a clear response instead of a silent close. Otherwise the
+// tunnel is MITM'd and recorded.
+func (ic *Interceptor) HandleConnect(host string, ctx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
+	if ic.hist() == nil {
+		ctx.Resp = noSessionResponse(ctx.Req)
+		return goproxy.RejectConnect, host
+	}
 	LogConnect(host)
 	LogMITM(host)
-	return goproxy.MitmConnect
+	return goproxy.MitmConnect, host
+}
+
+// noSessionResponse builds the response for any request that reaches the proxy
+// before a recording session exists (record auto mode). The X-Gospy-Replay
+// header mirrors the replay contract with a distinct value so callers can tell
+// "no session" apart from hit/miss/exhausted.
+func noSessionResponse(req *http.Request) *http.Response {
+	const body = "no session recording active\n"
+	resp := &http.Response{
+		StatusCode:    http.StatusServiceUnavailable,
+		Status:        "503 Service Unavailable",
+		Header:        make(http.Header),
+		ContentLength: int64(len(body)),
+		Body:          io.NopCloser(strings.NewReader(body)),
+		Request:       req,
+	}
+	resp.Header.Set("Content-Type", "text/plain; charset=utf-8")
+	resp.Header.Set("X-Gospy-Replay", "nosession")
+	return resp
 }
 
 // isStreamingResponse reports whether the response is a server-sent event
@@ -699,114 +733,4 @@ func ReadBodyString(body io.Reader) string {
 		return ""
 	}
 	return buf.String()
-}
-
-func IsTextResponse(contentType string) bool {
-	textTypes := []string{
-		"application/json",
-		"application/x-www-form-urlencoded",
-		"text/html",
-		"text/plain",
-		"text/css",
-		"text/javascript",
-		"application/javascript",
-		"application/xml",
-		"text/xml",
-		"text/csv",
-		"text/markdown",
-	}
-	ct := strings.ToLower(contentType)
-	for _, t := range textTypes {
-		if strings.Contains(ct, t) {
-			return true
-		}
-	}
-	return false
-}
-
-func isKnownBinaryContentType(contentType string) bool {
-	ct := strings.ToLower(contentType)
-	knownBinary := []string{
-		"application/x-protobuf",
-		"application/protobuf",
-		"application/msgpack",
-	}
-	for _, t := range knownBinary {
-		if strings.Contains(ct, t) {
-			return true
-		}
-	}
-	if strings.HasPrefix(ct, "image/") || strings.HasPrefix(ct, "audio/") || strings.HasPrefix(ct, "video/") || strings.HasPrefix(ct, "font/") {
-		return true
-	}
-	return false
-}
-
-func isBinaryBody(data []byte, contentEncoding, contentType string) bool {
-	if len(data) == 0 {
-		return false
-	}
-	if contentEncoding != "" {
-		return !IsTextResponse(contentType)
-	}
-	if isKnownBinaryContentType(contentType) {
-		return true
-	}
-	checkLen := min(8192, len(data))
-	for i := 0; i < checkLen; i++ {
-		if data[i] == 0 {
-			return true
-		}
-	}
-	return false
-}
-
-type DecompressResult struct {
-	Decoded     string
-	Raw         string
-	Compression string
-}
-
-func decompressBody(data []byte, contentEncoding string) DecompressResult {
-	if len(data) == 0 {
-		return DecompressResult{}
-	}
-
-	raw := string(data)
-
-	if len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b {
-		reader, err := gzip.NewReader(bytes.NewReader(data))
-		if err == nil {
-			defer reader.Close()
-			if decompressed, err := io.ReadAll(reader); err == nil {
-				return DecompressResult{Decoded: string(decompressed), Raw: raw, Compression: "gzip"}
-			}
-		}
-	}
-
-	if data[0] == 0x78 {
-		reader, err := zlib.NewReader(bytes.NewReader(data))
-		if err == nil {
-			defer reader.Close()
-			if decompressed, err := io.ReadAll(reader); err == nil {
-				return DecompressResult{Decoded: string(decompressed), Raw: raw, Compression: "zlib"}
-			}
-		}
-	}
-
-	if len(contentEncoding) > 0 && strings.Contains(strings.ToLower(contentEncoding), "br") {
-		reader := brotli.NewReader(bytes.NewReader(data))
-		if decompressed, err := io.ReadAll(reader); err == nil {
-			return DecompressResult{Decoded: string(decompressed), Raw: raw, Compression: "brotli"}
-		}
-	}
-
-	if len(contentEncoding) > 0 && strings.Contains(strings.ToLower(contentEncoding), "deflate") {
-		reader := flate.NewReader(bytes.NewReader(data))
-		if decompressed, err := io.ReadAll(reader); err == nil {
-			return DecompressResult{Decoded: string(decompressed), Raw: raw, Compression: "deflate"}
-		}
-	}
-
-	return DecompressResult{Decoded: raw}
 }

@@ -67,7 +67,10 @@ func NewServer(addr string, uiAddr string, caCert *ca.CA, hist *history.Store, r
 
 	interceptor := NewInterceptor(hist, ignoreStore, ruleEngine, skipPorts, resolver, sigCache)
 
-	proxy.OnRequest().HandleConnect(goproxy.AlwaysMitm)
+	// HandleConnect rejects the tunnel with 503 + X-Gospy-Replay: nosession
+	// while no recording session is active (record auto mode), MITM'ing
+	// otherwise with the custom CA set on goproxy.MitmConnect above.
+	proxy.OnRequest().HandleConnect(goproxy.FuncHttpsHandler(interceptor.HandleConnect))
 
 	proxy.OnRequest().DoFunc(interceptor.HandleRequest)
 

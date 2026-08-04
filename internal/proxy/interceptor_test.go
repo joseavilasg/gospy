@@ -2,9 +2,6 @@ package proxy
 
 import (
 	"bytes"
-	"compress/flate"
-	"compress/gzip"
-	"compress/zlib"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,7 +15,6 @@ import (
 	"gospy/internal/history"
 	"gospy/internal/rules"
 
-	"github.com/andybalholm/brotli"
 	"github.com/elazarl/goproxy"
 )
 
@@ -738,124 +734,6 @@ func TestInterceptor_ModifyWithBody(t *testing.T) {
 	}
 }
 
-func TestDecompressBody_Gzip(t *testing.T) {
-	original := `{"key":"value","method":"POST"}`
-	var buf bytes.Buffer
-	w := gzip.NewWriter(&buf)
-	w.Write([]byte(original))
-	w.Close()
-
-	result := decompressBody(buf.Bytes(), "gzip")
-	if result.Decoded != original {
-		t.Errorf("gzip decoded: got %q, want %q", result.Decoded, original)
-	}
-	if result.Compression != "gzip" {
-		t.Errorf("gzip compression: got %q, want %q", result.Compression, "gzip")
-	}
-	if result.Raw == "" {
-		t.Error("gzip: raw should not be empty")
-	}
-}
-
-func TestDecompressBody_Zlib(t *testing.T) {
-	original := `{"status":200,"body":"hello world"}`
-	var buf bytes.Buffer
-	w, _ := zlib.NewWriterLevel(&buf, zlib.DefaultCompression)
-	w.Write([]byte(original))
-	w.Close()
-
-	result := decompressBody(buf.Bytes(), "deflate")
-	if result.Decoded != original {
-		t.Errorf("zlib decoded: got %q, want %q", result.Decoded, original)
-	}
-	if result.Compression != "zlib" {
-		t.Errorf("zlib compression: got %q, want %q", result.Compression, "zlib")
-	}
-}
-
-func TestDecompressBody_Deflate(t *testing.T) {
-	original := `{"host":"example.com","path":"/api"}`
-
-	flatBuf, err := flatten([]byte(original))
-	if err != nil {
-		t.Fatalf("flate compress: %v", err)
-	}
-
-	result := decompressBody(flatBuf, "deflate")
-	if result.Decoded != original {
-		t.Errorf("deflate decoded: got %q, want %q", result.Decoded, original)
-	}
-	if result.Compression != "deflate" {
-		t.Errorf("deflate compression: got %q, want %q", result.Compression, "deflate")
-	}
-}
-
-func TestDecompressBody_Brotli(t *testing.T) {
-	original := `{"content":"brotli compressed data"}`
-	var buf bytes.Buffer
-	w := brotli.NewWriter(&buf)
-	w.Write([]byte(original))
-	w.Close()
-
-	result := decompressBody(buf.Bytes(), "br")
-	if result.Decoded != original {
-		t.Errorf("brotli decoded: got %q, want %q", result.Decoded, original)
-	}
-	if result.Compression != "brotli" {
-		t.Errorf("brotli compression: got %q, want %q", result.Compression, "brotli")
-	}
-}
-
-func TestDecompressBody_PlainText(t *testing.T) {
-	original := `{"plain":"no compression"}`
-	result := decompressBody([]byte(original), "")
-	if result.Decoded != original {
-		t.Errorf("plain decoded: got %q, want %q", result.Decoded, original)
-	}
-	if result.Compression != "" {
-		t.Errorf("plain compression: got %q, want empty", result.Compression)
-	}
-}
-
-func TestDecompressBody_Empty(t *testing.T) {
-	result := decompressBody([]byte{}, "")
-	if result.Decoded != "" {
-		t.Errorf("empty decoded: got %q, want empty string", result.Decoded)
-	}
-}
-
-func TestDecompressBody_DeflateWithoutHeader(t *testing.T) {
-	original := `{"host":"example.com","path":"/api"}`
-
-	flatBuf, err := flatten([]byte(original))
-	if err != nil {
-		t.Fatalf("flate compress: %v", err)
-	}
-
-	result := decompressBody(flatBuf, "")
-	if result.Decoded == original {
-		t.Error("deflate without header should not decompress")
-	}
-	if result.Compression != "" {
-		t.Errorf("deflate without header: compression should be empty, got %q", result.Compression)
-	}
-}
-
-func flatten(data []byte) ([]byte, error) {
-	var buf bytes.Buffer
-	w, err := flate.NewWriter(&buf, flate.DefaultCompression)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := w.Write(data); err != nil {
-		return nil, err
-	}
-	if err := w.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
 func TestInterceptor_SetHistoryStore(t *testing.T) {
 	ic, store1 := newTestInterceptor(t, nil)
 	store2, err := history.New(t.TempDir())
@@ -876,5 +754,77 @@ func TestInterceptor_SetHistoryStore(t *testing.T) {
 	}
 	if got := store2.ListSummary(); len(got) != 1 {
 		t.Errorf("rotated store captured %d entries, want 1", len(got))
+	}
+}
+
+// --- Session gate (record auto mode, no session started) ---
+
+func newNilStoreInterceptor(t *testing.T) *Interceptor {
+	t.Helper()
+	ignoreStore := NewIgnoreStore(t.TempDir() + "/ignore.json")
+	_ = ignoreStore.Load()
+	engine := rules.NewEngine()
+	engine.Load(nil)
+	return NewInterceptor(nil, ignoreStore, engine, nil, nil, nil)
+}
+
+func TestInterceptor_RejectsWithoutSession(t *testing.T) {
+	ic := newNilStoreInterceptor(t)
+	req := newRequest("GET", "http://example.com/api")
+	ctx := newProxyCtx(req)
+
+	returnedReq, resp := ic.HandleRequest(req, ctx)
+
+	if returnedReq != req {
+		t.Error("HandleRequest should return the same request")
+	}
+	if resp == nil {
+		t.Fatal("HandleRequest should return a rejection response")
+	}
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("StatusCode = %d, want 503", resp.StatusCode)
+	}
+	if got := resp.Header.Get("X-Gospy-Replay"); got != "nosession" {
+		t.Errorf("X-Gospy-Replay = %q, want nosession", got)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "no session recording active") {
+		t.Errorf("body = %q, want rejection message", string(body))
+	}
+}
+
+func TestInterceptor_HandleConnectWithoutSession(t *testing.T) {
+	ic := newNilStoreInterceptor(t)
+	req := newRequest("CONNECT", "https://example.com:443")
+	ctx := newProxyCtx(req)
+
+	action, _ := ic.HandleConnect("example.com:443", ctx)
+
+	if action != goproxy.RejectConnect {
+		t.Errorf("action = %v, want RejectConnect", action)
+	}
+	if ctx.Resp == nil {
+		t.Fatal("ctx.Resp should carry the rejection response")
+	}
+	if ctx.Resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("ctx.Resp.StatusCode = %d, want 503", ctx.Resp.StatusCode)
+	}
+	if got := ctx.Resp.Header.Get("X-Gospy-Replay"); got != "nosession" {
+		t.Errorf("ctx.Resp X-Gospy-Replay = %q, want nosession", got)
+	}
+}
+
+func TestInterceptor_HandleConnectWithSession(t *testing.T) {
+	ic, _ := newTestInterceptor(t, nil)
+	req := newRequest("CONNECT", "https://example.com:443")
+	ctx := newProxyCtx(req)
+
+	action, _ := ic.HandleConnect("example.com:443", ctx)
+
+	if action != goproxy.MitmConnect {
+		t.Errorf("action = %v, want MitmConnect", action)
+	}
+	if ctx.Resp != nil {
+		t.Error("ctx.Resp should be nil when a session is active")
 	}
 }

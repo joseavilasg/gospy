@@ -1,6 +1,7 @@
-import { setFilterText, setFocusEnabled, setAgentPreview, setAgentEnabled, setAgentExposed, agentExposed, applyFullList, setLastTimestamp, selectedId, requests, rules, setRules, setSignatureCache, visibleCount } from './state.js';
-import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch, setOnSelectedUpdated, loadMore } from './api.js';
-import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, buildResponseTab, ITEM_HEIGHT } from './render.js';
+import { setFilterText, setFocusEnabled, setAgentPreview, setAgentEnabled, setAgentExposed, agentExposed, applyFullList, setLastTimestamp, selectedId, requests, rules, setRules, setSignatureCache, visibleCount, getReplayMode, setReplayMode, setReplayServed, setReplayComplete, markReplayServed } from './state.js';
+import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch, setOnSelectedUpdated, loadMore, setOnReplayUpdate, loadReplayRuns, loadReplayEvents, loadReplayEventDetail } from './api.js';
+import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, toggleReplayPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, buildResponseTab, ITEM_HEIGHT, renderReplayFeed, renderReplayEventDetail } from './render.js';
+import { makeResizable } from './resize.js';
 import { isBodySearching, cancelBodySearch, invalidateCriteriaSave, syncCriteriaFromServer, restoreBodyFilter, setOnFilterChange, setOnListRefresh, initFilterPopover, openFilterPopover, closeFilterPopover, closeChip, openChip, getFilterChipsData, getMatchMode, setMatchMode, queueCriteriaSave } from './filters.js';
 import { initBodyTypes, editBody, saveBody, cancelBody, setBodyView, copyBody, getActiveEditor, postRenderBody } from './body-types.js';
 
@@ -20,6 +21,157 @@ document.getElementById('filterInput').addEventListener('input', (e) => {
 document.getElementById('ignoredBtn').addEventListener('click', toggleIgnoredPanel);
 document.getElementById('focusBtn').addEventListener('click', toggleFocusedPanel);
 document.getElementById('rulesBtn').addEventListener('click', toggleRulesPanel);
+
+// ── Replay mode (read-only UI over a session) ─────────────────────────────
+let _replayStreamSrc = null;
+let _activeRunId = null;
+let _pickedRun = null;
+
+function updateReplayChip(rp) {
+    const progress = document.getElementById('replayChipProgress');
+    const exhausted = document.getElementById('replayChipExhausted');
+    if (!rp || !rp.active) {
+        progress.textContent = '0/0';
+        exhausted.style.display = 'none';
+        return;
+    }
+    progress.textContent = `${rp.consumed}/${rp.total}`;
+    exhausted.style.display = rp.exhausted ? '' : 'none';
+}
+
+function applyReplayLayout() {
+    if (document.body.dataset.replayLayout) return;
+    ['focusBtn', 'focusEnabled', 'agentEnabledToggle', 'agentPreviewToggle', 'ignoredBtn', 'rulesBtn', 'sepIgnored', 'sepRules', 'agentBanner'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+    });
+    document.body.dataset.replayLayout = '1';
+}
+
+function renderFeedFor(runId) {
+    if (!runId) { renderReplayFeed([]); return; }
+    loadReplayEvents(runId).then(renderReplayFeed);
+}
+
+function syncReplay(rp) {
+    setReplayMode(!!rp);
+    if (!rp) {
+        if (_replayStreamSrc) { _replayStreamSrc.close(); _replayStreamSrc = null; }
+        _activeRunId = null;
+        document.getElementById('replayChip').style.display = 'none';
+        document.getElementById('replayPanel').classList.remove('open');
+        return;
+    }
+    applyReplayLayout();
+    document.getElementById('replayChip').style.display = '';
+    updateReplayChip(rp);
+    setReplayServed(new Set(rp.served || []));
+    setReplayComplete(!rp.active && !!rp.runId);
+    renderList();
+
+    if (rp.active && rp.runId) {
+        if (_activeRunId !== rp.runId) {
+            _activeRunId = rp.runId;
+            connectReplayStream(rp.runId);
+            renderFeedFor(_pickedRun === null ? rp.runId : _pickedRun);
+        }
+    } else if (_replayStreamSrc) {
+        _replayStreamSrc.close();
+        _replayStreamSrc = null;
+    }
+}
+
+function connectReplayStream(runId) {
+    if (_replayStreamSrc) { _replayStreamSrc.close(); _replayStreamSrc = null; }
+    const src = new EventSource(`/api/replay/events/${encodeURIComponent(runId)}/stream`);
+    _replayStreamSrc = src;
+    src.onmessage = (e) => {
+        try {
+            const ev = JSON.parse(e.data);
+            if (ev.type === 'runChanged') { src.close(); return; }
+            if (ev.result === 'hit' && ev.entryId) {
+                markReplayServed(ev.entryId);
+                renderList();
+            }
+            if (_pickedRun === null || _pickedRun === runId) {
+                loadReplayEvents(runId).then(renderReplayFeed);
+            }
+        } catch (err) {}
+    };
+    src.onerror = () => { src.close(); _replayStreamSrc = null; };
+}
+
+let _replayRuns = [];
+
+function runTimeLabel(ts) {
+    return new Date(ts).toTimeString().slice(0, 8);
+}
+
+function pluralLabel(n, word) {
+    return `${n} ${n === 1 ? word : word + 's'}`;
+}
+
+function runStatsLabel(r) {
+    const base = `${pluralLabel(r.hits, 'hit')} · ${pluralLabel(r.misses, 'miss')}`;
+    return r.exhausted > 0 ? `${base} · ${r.exhausted} exhausted` : base;
+}
+
+function updateReplayRunMeta(runId) {
+    const meta = document.getElementById('replayRunMeta');
+    if (!meta) return;
+    const r = _replayRuns.find(x => x.runId === runId);
+    meta.textContent = r
+        ? `${r.runId} · ${pluralLabel(r.hits, 'hit')} · ${pluralLabel(r.misses, 'miss')} · ${r.exhausted} exhausted · ${((r.durationMs || 0) / 1000).toFixed(1)}s`
+        : '';
+}
+
+function populateReplayRuns() {
+    return loadReplayRuns().then(runs => {
+        _replayRuns = runs;
+        const sel = document.getElementById('replayRunSelect');
+        if (!sel) return;
+        const prev = sel.value;
+        sel.innerHTML = runs.length === 0
+            ? '<option value="">No runs yet</option>'
+            : runs.map(r => `<option value="${escapeHtml(r.runId)}">${escapeHtml(runTimeLabel(r.ts))} · ${escapeHtml(runStatsLabel(r))}</option>`).join('');
+        if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+        if (runs.length > 0 && !sel.value) sel.value = runs[0].runId;
+        updateReplayRunMeta(sel.value);
+    });
+}
+
+setOnReplayUpdate(syncReplay);
+document.getElementById('replayChip').addEventListener('click', () => {
+    toggleReplayPanel();
+    if (document.getElementById('replayPanel').classList.contains('open')) {
+        const sel = document.getElementById('replayRunSelect');
+        if (!sel.value) {
+            populateReplayRuns().then(() => {
+                if (!_activeRunId && _pickedRun === null && sel.value) renderFeedFor(sel.value);
+            });
+        }
+        renderFeedFor(_pickedRun === null ? (_activeRunId || sel.value) : _pickedRun);
+    }
+});
+document.getElementById('replayPanel').addEventListener('click', (e) => {
+    if (e.target.closest('.ignored-panel-close')) { toggleReplayPanel(); return; }
+    const item = e.target.closest('[data-action="replay-event-detail"]');
+    if (item) {
+        loadReplayEventDetail(item.dataset.run, parseInt(item.dataset.seq, 10)).then(renderReplayEventDetail);
+    }
+});
+document.getElementById('replayRunSelect').addEventListener('change', (e) => {
+    const runId = e.target.value;
+    _pickedRun = runId || null;
+    updateReplayRunMeta(runId);
+    renderFeedFor(_pickedRun);
+});
+
+makeResizable(document.getElementById('replayDrag'), document.getElementById('replayPanel'), {
+    persistKey: 'gospy-replay-panel-h',
+    min: 120,
+});
+
 
 document.getElementById('refreshBtn').addEventListener('click', () => {
     setLastTimestamp('');
@@ -244,6 +396,15 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
             break;
         case 'goto-replay':
             selectRequest(btn.dataset.id);
+            break;
+        case 'replay-body':
+            fetch(`/api/replay/events/${encodeURIComponent(btn.dataset.run)}/${btn.dataset.seq}/body`)
+                .then(r => r.text())
+                .then(text => {
+                    const pre = document.querySelector('.detail-panel .body-viewer-body pre');
+                    if (pre) pre.textContent = text;
+                })
+                .catch(e => console.error('Failed to load replay body:', e));
             break;
         case 'copy-id': {
             const idSpan = btn.closest('.detail-id-group')?.querySelector('.detail-id');
@@ -720,10 +881,13 @@ if (localStorage.getItem('gospy-list-hidden') === 'true') {
     document.getElementById('toggleListBtn').innerHTML = ICON_EXPAND;
 }
 
-loadRequests();
-loadIgnored();
-loadFocused();
-loadRules();
+loadRequests().then(() => {
+    if (getReplayMode()) return;
+    loadIgnored();
+    loadFocused();
+    loadRules();
+    connectSSE();
+});
 restoreBodyFilter();
 setInterval(() => {
     if (document.getElementById('autoRefresh').checked) { loadRequests(); }
@@ -1265,4 +1429,3 @@ function connectSSE() {
         setTimeout(connectSSE, 3000);
     };
 }
-connectSSE();

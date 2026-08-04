@@ -57,30 +57,59 @@ func NewReplayStore(h *history.Store) *ReplayStore {
 func (r *ReplayStore) Dir() string { return r.h.Dir() }
 
 func (r *ReplayStore) Match(method, rawURL string, cfg *MatchConfig) (*history.Entry, MatchResult) {
+	entry, result, _, _ := r.MatchDetailed(method, rawURL, cfg)
+	return entry, result
+}
+
+// MatchDetailed is Match plus the queue context for the request: for a miss it
+// returns the recorded entries that were still unconsumed at that moment (up
+// to 50, with the total count), so a failing request can be debugged against
+// what the recording still had available.
+func (r *ReplayStore) MatchDetailed(method, rawURL string, cfg *MatchConfig) (*history.Entry, MatchResult, []UnconsumedEntry, int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	r.ensureQueue(cfg)
 	key := matchKey(method, rawURL, cfg)
-	unconsumed := false
+	var pending []UnconsumedEntry
+	pendingCount := 0
 	for i, le := range r.queue {
 		if r.consumed[i] {
 			continue
 		}
-		unconsumed = true
+		pendingCount++
 		if matchKey(le.Method, le.URL, cfg) == key {
 			r.consumed[i] = true
 			entry, err := r.h.Get(le.ID)
 			if err != nil {
-				return nil, ResultMiss
+				return nil, ResultMiss, pending, pendingCount
 			}
-			return entry, ResultHit
+			return entry, ResultHit, nil, pendingCount
+		}
+		if len(pending) < 50 {
+			pending = append(pending, UnconsumedEntry{Method: le.Method, URL: le.URL, ID: le.ID})
 		}
 	}
-	if unconsumed {
-		return nil, ResultMiss
+	if pendingCount > 0 {
+		return nil, ResultMiss, pending, pendingCount
 	}
-	return nil, ResultExhausted
+	return nil, ResultExhausted, nil, 0
+}
+
+// Progress reports how many recorded entries have been consumed, the queue
+// size, and whether the queue is fully consumed (exhausted).
+func (r *ReplayStore) Progress(cfg *MatchConfig) (consumed, total int, exhausted bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.ensureQueue(cfg)
+	for _, c := range r.consumed {
+		if c {
+			consumed++
+		}
+	}
+	total = len(r.queue)
+	return consumed, total, consumed == total
 }
 
 func matchKey(method, rawURL string, cfg *MatchConfig) string {

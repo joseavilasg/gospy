@@ -4,8 +4,10 @@ import { syncCriteriaFromServer } from './filters.js';
 
 let onSelectedUpdated = () => {};
 let loadingMore = false;
+let onReplayUpdate = () => {};
 
 export function setOnSelectedUpdated(cb) { onSelectedUpdated = cb; }
+export function setOnReplayUpdate(cb) { onReplayUpdate = cb; }
 
 export async function loadMore() {
     if (loadingMore) return;
@@ -43,6 +45,7 @@ export async function loadRequests() {
             }
             invalidateFilterCache();
             renderList();
+            if (data.replay) onReplayUpdate(data.replay);
             if (selUpdated) onSelectedUpdated(selectedId);
         } else if (data.entries) {
             const prevSel = selectedId ? requests.find(r => r.id === selectedId) : null;
@@ -55,6 +58,7 @@ export async function loadRequests() {
                 enabled: data.agentEnabled,
                 exposed: data.agentExposed,
             });
+            if (data.replay) onReplayUpdate(data.replay);
             const currSel = selectedId ? requests.find(r => r.id === selectedId) : null;
             if (prevSel && currSel && prevSel.updatedAt !== currSel.updatedAt) onSelectedUpdated(selectedId);
         }
@@ -257,5 +261,37 @@ export async function checkMatch(method, host, urlPattern, excludeId) {
     } catch (e) {
         console.error('Failed to check match:', e);
         return [];
+    }
+}
+
+export async function loadReplayRuns() {
+    try {
+        const resp = await fetch('/api/replay/runs');
+        const data = await resp.json();
+        return data.runs || [];
+    } catch (e) {
+        console.error('Failed to load replay runs:', e);
+        return [];
+    }
+}
+
+export async function loadReplayEvents(runId) {
+    try {
+        const resp = await fetch('/api/replay/events?run=' + encodeURIComponent(runId));
+        const data = await resp.json();
+        return data.events || [];
+    } catch (e) {
+        console.error('Failed to load replay events:', e);
+        return [];
+    }
+}
+
+export async function loadReplayEventDetail(runId, seq) {
+    try {
+        const resp = await fetch(`/api/replay/events/${encodeURIComponent(runId)}/${seq}`);
+        return await resp.json();
+    } catch (e) {
+        console.error('Failed to load replay event detail:', e);
+        return null;
     }
 }
