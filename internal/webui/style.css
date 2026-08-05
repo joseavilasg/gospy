@@ -2901,7 +2901,7 @@ body.resizing {
 }
 
 .replay-event:hover {
-  background: var(--bg-hover-subtle);
+  background: var(--bg-hover-accent);
 }
 
 .replay-event-result {
