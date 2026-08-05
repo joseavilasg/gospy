@@ -258,11 +258,31 @@ func TestMatchDetailedMissUnconsumed(t *testing.T) {
 	if len(pending) != 2 {
 		t.Fatalf("expected 2 unconsumed entries, got %d", len(pending))
 	}
-	if pending[0].Method != "GET" || pending[0].URL != "https://example.com/b" {
+	if pending[0].ID != "u2" {
 		t.Fatalf("unexpected pending[0]: %+v", pending[0])
 	}
-	if pending[1].URL != "https://example.com/c" {
+	if pending[1].ID != "u3" {
 		t.Fatalf("unexpected pending[1]: %+v", pending[1])
+	}
+}
+
+func TestMatchDetailedMissUnconsumedNoCap(t *testing.T) {
+	rs, h := newReplay(t)
+	base := time.Now()
+	for i := 0; i < 60; i++ {
+		id := fmt.Sprintf("u%d", i+1)
+		saveTestEntry(t, h, id, "GET", fmt.Sprintf("https://example.com/%d", i+1), 200, base.Add(time.Duration(i)*time.Second))
+	}
+
+	_, result, pending, total := rs.MatchDetailed("GET", "https://example.com/not-recorded", nil)
+	if result != ResultMiss {
+		t.Fatalf("expected miss, got %v", result)
+	}
+	if total != 60 {
+		t.Fatalf("expected 60 pending, got %d", total)
+	}
+	if len(pending) != 60 {
+		t.Fatalf("expected all 60 unconsumed entries (no 50 cap), got %d", len(pending))
 	}
 }
 

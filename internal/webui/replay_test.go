@@ -259,7 +259,7 @@ func TestReplayListAndDetail(t *testing.T) {
 
 	notify := s.ReplayNotifier()
 	notify(session.ReplayEvent{Seq: 1, RunID: "run1", Method: "GET", URL: "https://live.example.com/a", Result: "hit", Status: 200, EntryID: "e1", Consumed: 1, Total: 2})
-	notify(session.ReplayEvent{Seq: 2, RunID: "run1", Method: "GET", URL: "https://example.com/miss", Result: "miss", Status: 404, Unconsumed: []session.UnconsumedEntry{{Method: "GET", URL: "https://live.example.com/b"}}, TotalPending: 1, Consumed: 1, Total: 2})
+	notify(session.ReplayEvent{Seq: 2, RunID: "run1", Method: "GET", URL: "https://example.com/miss", Result: "miss", Status: 404, Unconsumed: []session.UnconsumedEntry{{ID: "e1"}}, TotalPending: 1, Consumed: 1, Total: 2})
 
 	full := s.fullList(0, 10)
 	if full.Replay == nil || !full.Replay.Active || full.Replay.RunID != "run1" {
@@ -313,7 +313,7 @@ func TestReplayListAndDetail(t *testing.T) {
 	if miss.Event.Result != "miss" || miss.MatchedEntry != nil {
 		t.Fatalf("expected miss without matched entry, got %+v", miss)
 	}
-	if len(miss.Event.Unconsumed) != 1 || miss.Event.Unconsumed[0].URL != "https://live.example.com/b" {
+	if len(miss.Event.Unconsumed) != 1 {
 		t.Fatalf("unexpected unconsumed %+v", miss.Event.Unconsumed)
 	}
 }
@@ -549,6 +549,43 @@ func TestReplayFeedTimestamps(t *testing.T) {
 // header: the runs endpoint exposes it, the drawer carries a dedicated label,
 // and the frontend renders it so the user always knows which session the runs
 // belong to.
+func TestReplayPendingScope(t *testing.T) {
+	if !strings.Contains(indexHTML, `id="listScopeBanner"`) {
+		t.Fatal("index.html: the list column must carry a scope banner (listScopeBanner)")
+	}
+	if !strings.Contains(renderJS, `data-action="scope-pending"`) ||
+		!strings.Contains(renderJS, "Show in list") ||
+		!strings.Contains(renderJS, "scope-link") {
+		t.Fatal("render.js: replay event details must offer Show in list as a text link scoping the pending set")
+	}
+	if strings.Contains(renderJS, "replay-event-pending") {
+		t.Fatal("render.js: the inline pending rows are removed in favor of the scoped list")
+	}
+	if !strings.Contains(renderJS, "renderListScopeBanner") {
+		t.Fatal("render.js: renderListScopeBanner must render the active scope into listScopeBanner")
+	}
+	if !strings.Contains(renderJS, "export function clearListSelection") ||
+		!strings.Contains(renderJS, "clearListSelection();") {
+		t.Fatal("render.js: opening a replay event detail must clear the list selection so no stale row stays highlighted")
+	}
+	if !strings.Contains(renderJS, "scope.url") ||
+		strings.Contains(renderJS, "scope.ids.length") {
+		t.Fatal("render.js: the scope banner anchor must show the anchored event request line without a redundant entries count")
+	}
+	if !strings.Contains(appJS, "setListScope") ||
+		!strings.Contains(appJS, "'scope-back'") ||
+		!strings.Contains(appJS, "'scope-clear'") {
+		t.Fatal("app.js: the scope banner needs its anchor (scope-back) and Clear (scope-clear) wired")
+	}
+	if !strings.Contains(appJS, "ev.unconsumed.map") {
+		t.Fatal("app.js: the pending scope must be built from the event's unconsumed ids, with no extra fetch")
+	}
+	if !strings.Contains(apiJS, "listScope") ||
+		!strings.Contains(apiJS, "params.set('ids', listScope.ids.join(','))") {
+		t.Fatal("api.js: the active scope must travel to /api/requests as the ids parameter")
+	}
+}
+
 func TestReplaySessionLabelShown(t *testing.T) {
 	if !strings.Contains(indexHTML, `id="replaySessionLabel"`) {
 		t.Fatal("index.html: the replay drawer header must carry a session label next to the run select")

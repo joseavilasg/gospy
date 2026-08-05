@@ -255,6 +255,49 @@ func TestListRequests_FocusWithFilters(t *testing.T) {
 	}
 }
 
+func TestListRequests_ScopedByIds(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	a := saveTestEntry(t, s, "a.example.com", "GET")
+	b := saveTestEntry(t, s, "b.example.com", "GET")
+	saveTestEntry(t, s, "c.example.com", "GET") // out of scope
+
+	resp := getListResponse(t, s, "/api/requests?ids="+a.ID+","+b.ID)
+	if len(resp.Entries) != 2 {
+		t.Fatalf("entries = %d, want 2", len(resp.Entries))
+	}
+	got := map[string]bool{}
+	for _, e := range resp.Entries {
+		got[e.ID] = true
+	}
+	if !got[a.ID] || !got[b.ID] {
+		t.Fatalf("scoped entries = %v, want %s and %s", got, a.ID, b.ID)
+	}
+	if resp.Total != 2 || resp.VisibleCount != 2 {
+		t.Fatalf("total=%d visible=%d, want 2/2", resp.Total, resp.VisibleCount)
+	}
+}
+
+func TestListRequests_ScopedByIdsIntersectsFilters(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	inScope := saveTestEntry(t, s, "api.example.com", "GET")
+	alsoInScope := saveTestEntry(t, s, "other.com", "POST")
+	saveTestEntry(t, s, "api.example.com", "DELETE") // out of scope
+
+	// Scope is the base set; the host filter narrows it on top.
+	body := `{"filters":{"host":["api.example.com"]},"focusEnabled":false}`
+	req := httptest.NewRequest("PUT", "/api/filters", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleSaveFilters(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d, want 200", w.Code)
+	}
+
+	resp := getListResponse(t, s, "/api/requests?ids="+inScope.ID+","+alsoInScope.ID)
+	if len(resp.Entries) != 1 || resp.Entries[0].ID != inScope.ID {
+		t.Fatalf("expected only scoped+filtered %s, got %+v", inScope.ID, resp.Entries)
+	}
+}
+
 func TestListRequests_DiffUpsert(t *testing.T) {
 	s, _, _ := newTestServer(t)
 	e1 := saveTestEntry(t, s, "api.example.com", "GET")

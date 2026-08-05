@@ -1,16 +1,25 @@
-import { requests, setRequests, upsertRequests, removeRequests, applyFullList, applyPage, applyListDiff, ignoredHosts, setIgnoredHosts, focusedHosts, setFocusedHosts, lastTimestamp, setLastTimestamp, criteriaVersion, rules, setRules, selectedId } from './state.js';
-import { renderList, renderIgnoredList, renderFocusedList, renderRulesList, invalidateFilterCache } from './render.js';
+import { requests, applyFullList, applyPage, applyListDiff, ignoredHosts, setIgnoredHosts, focusedHosts, setFocusedHosts, lastTimestamp, setLastTimestamp, criteriaVersion, setCriteriaVersion, rules, setRules, selectedId } from './state.js';
+import { renderList, renderIgnoredList, renderFocusedList, renderRulesList, invalidateFilterCache, renderListScopeBanner } from './render.js';
 import { syncCriteriaFromServer } from './filters.js';
 
 let onSelectedUpdated = () => { };
 let loadingMore = false;
 let onReplayUpdate = () => { };
+let listScope = null;
 
 export function setOnSelectedUpdated(cb) { onSelectedUpdated = cb; }
 export function setOnReplayUpdate(cb) { onReplayUpdate = cb; }
 
+export function setListScope(scope) {
+  listScope = scope;
+  renderListScopeBanner(scope);
+  setLastTimestamp('');
+  setCriteriaVersion(null);
+  loadRequests();
+}
+
 export async function loadMore() {
-  if (loadingMore) return;
+  if (loadingMore || listScope) return;
   loadingMore = true;
   try {
     const resp = await fetch('/api/requests?offset=' + requests.length + '&limit=1000');
@@ -32,6 +41,7 @@ export async function loadRequests() {
     const params = new URLSearchParams();
     if (lastTimestamp) params.set('since', lastTimestamp);
     if (criteriaVersion != null) params.set('version', criteriaVersion);
+    if (listScope) params.set('ids', listScope.ids.join(','));
     const qs = params.toString();
     const resp = await fetch('/api/requests' + (qs ? '?' + qs : ''));
     const data = await resp.json();

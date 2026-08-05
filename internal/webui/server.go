@@ -505,6 +505,18 @@ func (s *Server) matchOpts(focusEnabled bool) history.MatchOpts {
 func (s *Server) handleListRequests(w http.ResponseWriter, r *http.Request) {
 	sinceStr := r.URL.Query().Get("since")
 	verStr := r.URL.Query().Get("version")
+	idsStr := r.URL.Query().Get("ids")
+
+	if idsStr != "" {
+		ids := make(map[string]bool)
+		for _, id := range strings.Split(idsStr, ",") {
+			if id != "" {
+				ids[id] = true
+			}
+		}
+		s.writeJSON(w, s.scopedFullList(ids))
+		return
+	}
 
 	if sinceStr != "" && verStr != "" {
 		if t, err := time.Parse(time.RFC3339Nano, sinceStr); err == nil {
@@ -543,6 +555,41 @@ func (s *Server) fullList(offset, limit int) listResponse {
 		Total:        total,
 		VisibleCount: visibleCount,
 		Offset:       offset,
+		Version:      version,
+		Filters:      &filters,
+		FocusEnabled: focusEnabled,
+		AgentPreview: s.filterStore.AgentPreview(),
+		AgentEnabled: s.filterStore.AgentGate(),
+		AgentExposed: s.agentExposed(),
+		Replay:       s.replayInfo(),
+	}
+}
+
+// scopedFullList serves a full list restricted to the given entry IDs - the
+// pending set of a replay event. The scope is a view base like focus: the
+// normal visible-set logic (ignore, filters) applies on top, and the response
+// is always a full list so it never mutates the lastVisible diff ledger.
+func (s *Server) scopedFullList(ids map[string]bool) listResponse {
+	filters, focusEnabled, version := s.filterStore.Snapshot()
+	opts := s.matchOpts(focusEnabled)
+
+	all := s.listSummary()
+	scoped := make([]*history.ListEntry, 0, len(ids))
+	for _, le := range all {
+		if ids[le.ID] {
+			scoped = append(scoped, le)
+		}
+	}
+
+	page, total, visibleCount := history.PageVisibleSet(scoped,
+		func(host string) bool { return s.ignoreStore.Matches(host) },
+		func(le *history.ListEntry) bool { return filters.Matches(le, opts) },
+		nil, 0, len(scoped))
+
+	return listResponse{
+		Entries:      page,
+		Total:        total,
+		VisibleCount: visibleCount,
 		Version:      version,
 		Filters:      &filters,
 		FocusEnabled: focusEnabled,

@@ -62,9 +62,9 @@ func (r *ReplayStore) Match(method, rawURL string, cfg *MatchConfig) (*history.E
 }
 
 // MatchDetailed is Match plus the queue context for the request: for a miss it
-// returns the recorded entries that were still unconsumed at that moment (up
-// to 50, with the total count), so a failing request can be debugged against
-// what the recording still had available.
+// returns every recorded entry still unconsumed at that moment (with the total
+// count), so a failing request can be debugged against what the recording
+// still had available.
 func (r *ReplayStore) MatchDetailed(method, rawURL string, cfg *MatchConfig) (*history.Entry, MatchResult, []UnconsumedEntry, int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -86,9 +86,7 @@ func (r *ReplayStore) MatchDetailed(method, rawURL string, cfg *MatchConfig) (*h
 			}
 			return entry, ResultHit, nil, pendingCount
 		}
-		if len(pending) < 50 {
-			pending = append(pending, UnconsumedEntry{Method: le.Method, URL: le.URL, ID: le.ID})
-		}
+		pending = append(pending, UnconsumedEntry{ID: le.ID})
 	}
 	if pendingCount > 0 {
 		return nil, ResultMiss, pending, pendingCount

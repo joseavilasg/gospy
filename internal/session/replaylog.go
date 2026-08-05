@@ -14,11 +14,11 @@ import (
 )
 
 // UnconsumedEntry is a recorded entry that was still available in the replay
-// queue when a request failed to match.
+// queue when a request failed to match. Only the id is persisted - the pending
+// set is scoped into the request list by id, the run log does not need to
+// repeat the full entry.
 type UnconsumedEntry struct {
-	Method string `json:"method"`
-	URL    string `json:"url"`
-	ID     string `json:"id,omitempty"`
+	ID string `json:"id,omitempty"`
 }
 
 // ReplayEvent records one request as it reached the replay server: the

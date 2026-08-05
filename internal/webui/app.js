@@ -1,5 +1,5 @@
 import { setFilterText, setFocusEnabled, setAgentPreview, setAgentEnabled, setAgentExposed, agentExposed, applyFullList, setLastTimestamp, selectedId, requests, rules, setRules, setSignatureCache, visibleCount, getReplayMode, setReplayMode, setReplayServed, setReplayComplete, markReplayServed } from './state.js';
-import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch, setOnSelectedUpdated, loadMore, setOnReplayUpdate, loadReplayRuns, loadReplayEvents, loadReplayEventDetail } from './api.js';
+import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch, setOnSelectedUpdated, loadMore, setOnReplayUpdate, loadReplayRuns, loadReplayEvents, loadReplayEventDetail, setListScope } from './api.js';
 import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, toggleReplayPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, buildResponseTab, ITEM_HEIGHT, renderReplayFeed, appendReplayEvent, renderReplayEventDetail } from './render.js';
 import { makeResizable } from './resize.js';
 import { initHeader, setHeaderMode } from './header.js';
@@ -280,11 +280,27 @@ function populateReplayRuns() {
 }
 
 setOnReplayUpdate(syncReplay);
+let _lastReplayDetail = null;
 document.getElementById('replayPanel').addEventListener('click', (e) => {
   if (e.target.closest('.ignored-panel-close')) { toggleReplayPanel(); return; }
   const item = e.target.closest('[data-action="replay-event-detail"]');
   if (item) {
-    loadReplayEventDetail(item.dataset.run, parseInt(item.dataset.seq, 10)).then(renderReplayEventDetail);
+    loadReplayEventDetail(item.dataset.run, parseInt(item.dataset.seq, 10)).then(detail => {
+      _lastReplayDetail = detail;
+      renderReplayEventDetail(detail);
+    });
+  }
+});
+document.getElementById('listScopeBanner').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-action]');
+  if (!btn) return;
+  if (btn.dataset.action === 'scope-back') {
+    loadReplayEventDetail(btn.dataset.run, parseInt(btn.dataset.seq, 10)).then(detail => {
+      _lastReplayDetail = detail;
+      renderReplayEventDetail(detail);
+    });
+  } else if (btn.dataset.action === 'scope-clear') {
+    setListScope(null);
   }
 });
 document.getElementById('replayRunSelect').addEventListener('change', (e) => {
@@ -471,6 +487,23 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
     case 'goto-replay':
       selectRequest(btn.dataset.id);
       break;
+    case 'scope-pending': {
+      const ev = _lastReplayDetail && _lastReplayDetail.event;
+      if (ev && ev.unconsumed && ev.unconsumed.length > 0) {
+        setListScope({
+          run: ev.runId,
+          seq: ev.seq,
+          ts: ev.ts,
+          consumed: ev.consumed,
+          total: ev.total,
+          method: ev.method,
+          url: ev.url,
+          result: ev.result,
+          ids: ev.unconsumed.map(u => u.id),
+        });
+      }
+      break;
+    }
     case 'replay-body':
       fetch(`/api/replay/events/${encodeURIComponent(btn.dataset.run)}/${btn.dataset.seq}/body`)
         .then(r => r.text())

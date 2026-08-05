@@ -132,6 +132,12 @@ export function onListScroll() {
   renderVisibleItems(list, lastFiltered);
 }
 
+export function clearListSelection() {
+  const oldEl = document.querySelector('.request-item.selected');
+  if (oldEl) oldEl.classList.remove('selected');
+  setSelectedId(null);
+}
+
 export function selectRequest(id, activeTab = 'request') {
   const oldEl = document.querySelector('.request-item.selected');
   if (oldEl) oldEl.classList.remove('selected');
@@ -865,7 +871,26 @@ export function appendReplayEvent(ev) {
   feed.insertAdjacentHTML('beforeend', replayEventRow(ev));
 }
 
+export function renderListScopeBanner(scope) {
+  const el = document.getElementById('listScopeBanner');
+  if (!el) return;
+  if (!scope) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+  const time = scope.ts ? new Date(scope.ts).toLocaleTimeString() : '';
+  const line = `${(scope.result || '').toUpperCase()} ${scope.method || ''} ${scope.url || ''}`.trim();
+  const consumed = scope.consumed != null && scope.total != null ? `${scope.consumed}/${scope.total} consumed` : '';
+  el.innerHTML = `<span class="scope-label">Replay scope · pending at event</span>
+        <button class="scope-anchor" data-action="scope-back" data-run="${escapeHtml(scope.run)}" data-seq="${scope.seq}" title="seq ${scope.seq}">${escapeHtml(line)}${time ? ` · ${time}` : ''}</button>
+        ${consumed ? `<span class="scope-count">${consumed}</span>` : ''}
+        <button class="scope-clear" data-action="scope-clear">Clear</button>`;
+  el.style.display = 'flex';
+}
+
 export function renderReplayEventDetail(detail) {
+  clearListSelection();
   const panel = document.getElementById('detailPanel');
   if (!panel || !detail?.event) return;
   const ev = detail.event;
@@ -908,13 +933,14 @@ export function renderReplayEventDetail(detail) {
 
   let unconsumedHtml = '';
   if (ev.unconsumed && ev.unconsumed.length > 0) {
-    const rows = ev.unconsumed.map(u =>
-      `<div class="replay-event-pending" data-action="goto-replay" data-id="${escapeHtml(u.id)}"><span class="method method-${u.method}">${u.method}</span><span class="url">${escapeHtml(u.url)}</span></div>`
-    ).join('');
-    const more = ev.totalPending > 50 ? `<div class="replay-event-pending-more">and ${ev.totalPending - 50} more</div>` : '';
     unconsumedHtml = `<div class="section-panel">
             <div class="section-header"><span class="section-title">Entries pending at that time (${ev.totalPending})</span></div>
-            <div class="content-block">${rows}${more}</div>
+            <div class="content-block">
+                <div class="scope-actions">
+                    <span class="scope-hint">Recorded entries still unserved when this request failed to match.</span>
+                    <button class="scope-link" data-action="scope-pending">Show in list</button>
+                </div>
+            </div>
         </div>`;
   }
 

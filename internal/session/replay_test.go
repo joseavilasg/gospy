@@ -298,7 +298,7 @@ func TestReplayWritesRunLog(t *testing.T) {
 	if miss.TotalPending != 1 || len(miss.Unconsumed) != 1 {
 		t.Fatalf("expected 1 pending entry, got total=%d list=%d", miss.TotalPending, len(miss.Unconsumed))
 	}
-	if miss.Unconsumed[0].URL != "https://live.example.com/seg-1.ts" {
+	if miss.Unconsumed[0].ID != "s1" {
 		t.Fatalf("unexpected unconsumed %+v", miss.Unconsumed[0])
 	}
 	exhausted := events[3]
