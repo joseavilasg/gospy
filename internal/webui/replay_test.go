@@ -600,3 +600,12 @@ func TestReplaySessionLabelShown(t *testing.T) {
 		t.Fatal("app.js: populateReplayRuns must render the session name into replaySessionLabel")
 	}
 }
+
+func TestReplayHeaderStatsPluralization(t *testing.T) {
+	if !strings.Contains(appJS, "'es' : 's'") {
+		t.Fatal("app.js: pluralLabel must use the English sibilant plural rule (-es) so miss becomes misses, not misss")
+	}
+	if strings.Contains(appJS, "word + 's'") {
+		t.Fatal("app.js: pluralLabel must not blindly append 's' to words ending in a sibilant")
+	}
+}

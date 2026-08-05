@@ -245,7 +245,8 @@ function runTimeLabel(ts) {
 }
 
 function pluralLabel(n, word) {
-  return `${n} ${n === 1 ? word : word + 's'}`;
+  const pluralSuffix = /[sxz]$/.test(word) || /(ch|sh)$/.test(word) ? 'es' : 's';
+  return `${n} ${n === 1 ? word : word + pluralSuffix}`;
 }
 
 function runStatsLabel(r) {
