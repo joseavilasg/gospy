@@ -958,8 +958,6 @@ function refreshDetail() {
   }
 }
 
-const ICON_COLLAPSE = '<svg width="12" height="12" viewBox="0 0 12 12"><polyline points="8,2 4,6 8,10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-const ICON_EXPAND = '<svg width="12" height="12" viewBox="0 0 12 12"><polyline points="4,2 8,6 4,10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 let scrollRAF = null;
 document.getElementById('requestList').addEventListener('scroll', () => {
@@ -991,14 +989,13 @@ function maybeLoadMore() {
 document.getElementById('toggleListBtn').addEventListener('click', () => {
   const container = document.getElementById('container');
   const hidden = container.classList.toggle('list-hidden');
-  document.getElementById('toggleListBtn').innerHTML = hidden ? ICON_EXPAND : ICON_COLLAPSE;
+  document.getElementById('toggleListBtn').classList.toggle('active', !hidden);
   localStorage.setItem('gospy-list-hidden', hidden);
 });
 
-if (localStorage.getItem('gospy-list-hidden') === 'true') {
-  document.getElementById('container').classList.add('list-hidden');
-  document.getElementById('toggleListBtn').innerHTML = ICON_EXPAND;
-}
+const listHidden = localStorage.getItem('gospy-list-hidden') === 'true';
+document.getElementById('container').classList.toggle('list-hidden', listHidden);
+document.getElementById('toggleListBtn').classList.toggle('active', !listHidden);
 
 loadRequests().then(() => {
   if (getReplayMode()) return;

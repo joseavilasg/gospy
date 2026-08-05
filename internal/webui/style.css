@@ -225,7 +225,7 @@ body {
 
 header {
   background: var(--bg-header);
-  padding: var(--sp-8) var(--sp-16);
+  padding: var(--sp-8) var(--sp-20) var(--sp-8) var(--sp-6);
   border-bottom: 1px solid var(--bg-active);
   display: flex;
   align-items: center;
@@ -1540,33 +1540,28 @@ pre {
 }
 
 .list-toggle {
-  width: var(--sp-16);
-  height: var(--btn-h);
-  align-self: flex-start;
-  background: var(--bg-header);
+  background: transparent;
   border: none;
-  border-bottom: 1px solid var(--bg-active);
-  border-right: 1px solid var(--bg-active);
   color: var(--text-dim);
   cursor: pointer;
-  font-size: var(--fs-sm);
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
+  padding: var(--sp-4);
+  border-radius: var(--radius-md);
 }
 
 .list-toggle:hover {
   color: var(--text-primary);
-  background: var(--bg-active);
+  background: var(--bg-hover-accent);
+}
+
+.list-toggle.active {
+  color: var(--accent);
 }
 
 .container.list-hidden .list-column {
   display: none;
-}
-
-.container.list-hidden .list-toggle {
-  border-left: none;
 }
 
 .body-tools-group {

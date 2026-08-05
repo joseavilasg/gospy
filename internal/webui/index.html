@@ -11,6 +11,13 @@
 
 <body>
   <header>
+    <button class="list-toggle active" id="toggleListBtn" title="Toggle request list">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round">
+        <rect width="18" height="18" x="3" y="3" rx="2" />
+        <path d="M9 3v18" />
+      </svg>
+    </button>
     <h1>GOSPY</h1>
     <span class="stats" id="stats">0 requests</span>
     <div style="flex:1"></div>
@@ -69,11 +76,6 @@
         </div>
       </div>
     </div>
-    <button class="list-toggle" id="toggleListBtn" title="Toggle request list"><svg width="12" height="12"
-        viewBox="0 0 12 12">
-        <polyline points="8,2 4,6 8,10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
-          stroke-linejoin="round" />
-      </svg></button>
     <div class="detail-panel" id="detailPanel">
       <div class="empty">Select a request to view details</div>
     </div>
