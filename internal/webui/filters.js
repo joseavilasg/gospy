@@ -5,6 +5,8 @@ function escapeHtml(s) {
 }
 
 const closeSVG = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4L12 12M12 4L4 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
+const clockSVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`;
+const clearSVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>`;
 
 const filterTypes = [];
 const filterState = {};
@@ -222,6 +224,17 @@ export function initFilterPopover() {
   });
 
   modalFilterContent.addEventListener('click', (e) => {
+    const nowBtn = e.target.closest('[data-now]');
+    if (nowBtn) {
+      setInputNow(nowBtn.dataset.now);
+      return;
+    }
+    const clearBtn = e.target.closest('[data-clear]');
+    if (clearBtn) {
+      const input = document.getElementById(clearBtn.dataset.clear);
+      if (input) input.value = '';
+      return;
+    }
     const option = e.target.closest('.filter-option');
     if (!option) return;
     const value = option.dataset.value;
@@ -294,14 +307,15 @@ const STEP2_RENDERERS = {
 
   range(config) {
     const current = filterState[config.type] || [];
-    modalFilterContent.innerHTML = `<div class="filter-range-row">
-                <label>From</label>
-                <input type="datetime-local" id="modalFilterFrom" class="modal-filter-input" value="${escapeHtml(current[0] || '')}">
-            </div>
-            <div class="filter-range-row">
-                <label>To</label>
-                <input type="datetime-local" id="modalFilterTo" class="modal-filter-input" value="${escapeHtml(current[1] || '')}">
+    const row = (label, id, value) => `<div class="filter-range-row">
+                <label>${label}</label>
+                <div class="filter-range-inputs">
+                    <input type="datetime-local" id="${id}" class="modal-filter-input" value="${escapeHtml(value || '')}">
+                    <button type="button" class="filter-range-btn" data-now="${id}" title="Set to current time" aria-label="Now">${clockSVG}</button>
+                    <button type="button" class="filter-range-btn filter-range-clear" data-clear="${id}" title="Clear this value" aria-label="Clear">${clearSVG}</button>
+                </div>
             </div>`;
+    modalFilterContent.innerHTML = row('From', 'modalFilterFrom', current[0]) + row('To', 'modalFilterTo', current[1]);
     modalFilterContent.querySelector('#modalFilterFrom').focus();
   },
 
@@ -310,6 +324,14 @@ const STEP2_RENDERERS = {
     modalFilterContent.querySelector('input').focus();
   },
 };
+
+function setInputNow(id) {
+  const input = document.getElementById(id);
+  if (!input) return;
+  const pad = n => String(n).padStart(2, '0');
+  const d = new Date();
+  input.value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
 function showStep2(config) {
   activeType = config;

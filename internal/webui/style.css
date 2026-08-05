@@ -580,6 +580,50 @@ header .stats {
   margin-top: var(--sp-8);
 }
 
+.filter-range-inputs {
+  display: flex;
+  gap: var(--sp-6);
+  align-items: center;
+}
+
+.filter-range-inputs .modal-filter-input {
+  flex: 1;
+  min-width: 0;
+  height: var(--ctrl-h);
+}
+
+.filter-range-btn {
+  width: var(--ctrl-h);
+  height: var(--ctrl-h);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.filter-range-btn:hover {
+  border-color: var(--accent-hover);
+  color: var(--accent-hover);
+  background: var(--accent-bg);
+}
+
+.filter-range-clear {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.filter-range-clear:hover {
+  border-color: var(--red-error);
+  color: var(--red-error);
+  background: var(--red-bg);
+}
+
 .filter-option-list {
   max-height: var(--popover-list-max-h);
   overflow-y: auto;

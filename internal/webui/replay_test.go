@@ -481,6 +481,23 @@ func TestFilterTypeListScroll(t *testing.T) {
 	}
 }
 
+func TestDateRangeNowClear(t *testing.T) {
+	if !strings.Contains(filtersJS, "data-now") ||
+		!strings.Contains(filtersJS, "data-clear") ||
+		!strings.Contains(filtersJS, "getFullYear") {
+		t.Fatal("filters.js: the date range inputs need now/clear actions that fill the current local datetime and empty an input")
+	}
+	if !strings.Contains(filtersJS, "clockSVG") ||
+		!strings.Contains(filtersJS, "clearSVG") {
+		t.Fatal("filters.js: the now/clear range buttons must render Lucide icons")
+	}
+	if !strings.Contains(styleCSS, ".filter-range-inputs") ||
+		!strings.Contains(styleCSS, ".filter-range-btn") ||
+		!strings.Contains(styleCSS, ".filter-range-clear") {
+		t.Fatal("style.css: the range input row must lay out the input beside the now/clear buttons")
+	}
+}
+
 func TestReplayFeedSelection(t *testing.T) {
 	if !strings.Contains(renderJS, "selectReplayFeedEvent") ||
 		!strings.Contains(renderJS, "clearReplayFeedSelection") ||
