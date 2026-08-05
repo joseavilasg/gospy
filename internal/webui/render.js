@@ -139,6 +139,7 @@ export function clearListSelection() {
 }
 
 export function selectRequest(id, activeTab = 'request') {
+  clearReplayFeedSelection();
   const oldEl = document.querySelector('.request-item.selected');
   if (oldEl) oldEl.classList.remove('selected');
 
@@ -838,14 +839,15 @@ export function openRuleModalFromRequest(entry) {
   toggleResponseActionSections('real');
 }
 
-function replayEventRow(ev) {
+function replayEventRow(ev, selected) {
+  const sel = selected ? ' selected' : '';
   const icon = ev.result === 'hit' ? '✓' : ev.result === 'miss' ? '✗' : '‼';
   const status = ev.status != null ? ev.status : '';
   const time = ev.ts ? `<span class="replay-event-time">${new Date(ev.ts).toLocaleTimeString()}</span>` : '';
   const pair = ev.result === 'hit' && ev.matchedUrl
-    ? `<div class="replay-event-pair">→ matched <span class="replay-event-pair-url">${escapeHtml(ev.matchedUrl)}</span></div>`
+    ? `<div class="replay-event-pair${sel}">→ matched <span class="replay-event-pair-url">${escapeHtml(ev.matchedUrl)}</span></div>`
     : '';
-  return `<div class="replay-event replay-event-${ev.result}" data-action="replay-event-detail" data-run="${escapeHtml(ev.runId)}" data-seq="${ev.seq}" title="${new Date(ev.ts).toLocaleString()}">
+  return `<div class="replay-event replay-event-${ev.result}${sel}" data-action="replay-event-detail" data-run="${escapeHtml(ev.runId)}" data-seq="${ev.seq}" title="${new Date(ev.ts).toLocaleString()}">
             <span class="replay-event-result">${icon}</span>
             <span class="replay-event-method">${escapeHtml(ev.method)}</span>
             <span class="replay-event-url">${escapeHtml(ev.url)}</span>
@@ -860,6 +862,8 @@ let _feedHasMore = false;
 let _feedHeights = null;
 let _feedOffsets = null;
 let _feedLastRange = { start: -1, end: -1 };
+let _feedSelectedRun = null;
+let _feedSelectedSeq = null;
 let _onFeedLoadOlder = () => { };
 
 export function setOnReplayFeedLoadOlder(cb) { _onFeedLoadOlder = cb; }
@@ -936,7 +940,10 @@ export function renderReplayFeed(opts) {
   const scrollTopSave = feed.scrollTop;
   let html = `<div style="height:${totalHeight}px;position:relative">`;
   if (start > 0) html += `<div style="height:${offsets[start]}px"></div>`;
-  for (let i = start; i <= end; i++) html += replayEventRow(display[i]);
+  for (let i = start; i <= end; i++) {
+    const isSel = display[i].seq === _feedSelectedSeq && display[i].runId === _feedSelectedRun;
+    html += replayEventRow(display[i], isSel);
+  }
   if (end < display.length - 1) html += `<div style="height:${totalHeight - offsets[end + 1]}px"></div>`;
   html += '</div>';
   feed.innerHTML = html;
@@ -958,6 +965,8 @@ export function setReplayFeed(events, hasMore) {
   _feedHasMore = hasMore;
   _feedOffsets = null;
   _feedLastRange = { start: -1, end: -1 };
+  _feedSelectedRun = null;
+  _feedSelectedSeq = null;
   renderReplayFeed();
 }
 
@@ -994,7 +1003,25 @@ export function clearReplayFeed() {
   _feedHasMore = false;
   _feedOffsets = null;
   _feedLastRange = { start: -1, end: -1 };
+  _feedSelectedRun = null;
+  _feedSelectedSeq = null;
   renderReplayFeed();
+}
+
+export function selectReplayFeedEvent(run, seq) {
+  _feedSelectedRun = run;
+  _feedSelectedSeq = seq;
+  renderReplayFeed({});
+}
+
+export function clearReplayFeedSelection() {
+  const feed = document.getElementById('replayFeed');
+  if (feed) {
+    const el = feed.querySelector('.replay-event.selected, .replay-event-pair.selected');
+    if (el) el.classList.remove('selected');
+  }
+  _feedSelectedRun = null;
+  _feedSelectedSeq = null;
 }
 
 export function onReplayFeedScroll() {

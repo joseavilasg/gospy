@@ -2904,6 +2904,18 @@ body.resizing {
   background: var(--bg-hover-accent);
 }
 
+.replay-event.selected {
+  background: var(--bg-active);
+  border-left: 3px solid var(--red-strong);
+  padding-left: var(--sp-10);
+}
+
+.replay-event-pair.selected {
+  background: var(--bg-active);
+  border-left: 3px solid var(--red-strong);
+  padding-left: var(--sp-10);
+}
+
 .replay-event-result {
   flex-shrink: 0;
   width: 16px;

@@ -1,6 +1,6 @@
 import { setFilterText, setFocusEnabled, setAgentPreview, setAgentEnabled, setAgentExposed, agentExposed, applyFullList, setLastTimestamp, selectedId, requests, rules, setRules, setSignatureCache, visibleCount, getReplayMode, setReplayMode, setReplayServed, setReplayComplete, markReplayServed } from './state.js';
 import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch, setOnSelectedUpdated, loadMore, setOnReplayUpdate, loadReplayRuns, loadReplayFeed, loadReplayFeedOlder, loadReplayEventDetail, setListScope } from './api.js';
-import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, toggleReplayPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, buildResponseTab, ITEM_HEIGHT, appendReplayFeedEvent, onReplayFeedScroll, setOnReplayFeedLoadOlder, renderReplayEventDetail } from './render.js';
+import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, toggleReplayPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, buildResponseTab, ITEM_HEIGHT, appendReplayFeedEvent, onReplayFeedScroll, setOnReplayFeedLoadOlder, renderReplayEventDetail, selectReplayFeedEvent } from './render.js';
 import { makeResizable } from './resize.js';
 import { initHeader, setHeaderMode } from './header.js';
 import { isBodySearching, cancelBodySearch, invalidateCriteriaSave, syncCriteriaFromServer, restoreBodyFilter, setOnFilterChange, setOnListRefresh, initFilterPopover, openFilterPopover, closeFilterPopover, closeChip, openChip, getFilterChipsData, getMatchMode, setMatchMode, queueCriteriaSave } from './filters.js';
@@ -286,6 +286,7 @@ document.getElementById('replayPanel').addEventListener('click', (e) => {
   if (e.target.closest('.ignored-panel-close')) { toggleReplayPanel(); return; }
   const item = e.target.closest('[data-action="replay-event-detail"]');
   if (item) {
+    selectReplayFeedEvent(item.dataset.run, parseInt(item.dataset.seq, 10));
     loadReplayEventDetail(item.dataset.run, parseInt(item.dataset.seq, 10)).then(detail => {
       _lastReplayDetail = detail;
       renderReplayEventDetail(detail);
@@ -296,6 +297,7 @@ document.getElementById('listScopeBanner').addEventListener('click', (e) => {
   const btn = e.target.closest('[data-action]');
   if (!btn) return;
   if (btn.dataset.action === 'scope-back') {
+    selectReplayFeedEvent(btn.dataset.run, parseInt(btn.dataset.seq, 10));
     loadReplayEventDetail(btn.dataset.run, parseInt(btn.dataset.seq, 10)).then(detail => {
       _lastReplayDetail = detail;
       renderReplayEventDetail(detail);

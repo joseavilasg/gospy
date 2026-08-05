@@ -470,6 +470,22 @@ func TestReplayFeedVirtualization(t *testing.T) {
 	}
 }
 
+func TestReplayFeedSelection(t *testing.T) {
+	if !strings.Contains(renderJS, "selectReplayFeedEvent") ||
+		!strings.Contains(renderJS, "clearReplayFeedSelection") ||
+		!strings.Contains(renderJS, "_feedSelectedSeq") {
+		t.Fatal("render.js: the feed needs state-driven selection (selectReplayFeedEvent/clearReplayFeedSelection) that survives virtual window re-renders")
+	}
+	if !strings.Contains(appJS, "selectReplayFeedEvent(item.dataset.run") ||
+		!strings.Contains(appJS, "selectReplayFeedEvent(btn.dataset.run") {
+		t.Fatal("app.js: clicking a feed row or the scope-back anchor must select the event")
+	}
+	if !strings.Contains(styleCSS, ".replay-event.selected") ||
+		!strings.Contains(styleCSS, ".replay-event-pair.selected") {
+		t.Fatal("style.css: the selected replay event (and its hit pair line) needs the selected highlight")
+	}
+}
+
 type flushRecorder struct {
 	*httptest.ResponseRecorder
 }
