@@ -585,6 +585,11 @@ header .stats {
   overflow-y: auto;
 }
 
+.filter-type-list {
+  max-height: var(--popover-list-max-h);
+  overflow-y: auto;
+}
+
 .filter-popover-item {
   display: flex;
   align-items: center;

@@ -470,6 +470,17 @@ func TestReplayFeedVirtualization(t *testing.T) {
 	}
 }
 
+func TestFilterTypeListScroll(t *testing.T) {
+	if !strings.Contains(indexHTML, "filter-type-list") {
+		t.Fatal("index.html: the add-filter popover step 1 list needs the filter-type-list class so its height can be capped")
+	}
+	if !strings.Contains(styleCSS, ".filter-type-list") ||
+		!strings.Contains(styleCSS, "max-height: var(--popover-list-max-h)") ||
+		!strings.Contains(styleCSS, "overflow-y: auto") {
+		t.Fatal("style.css: .filter-type-list must cap its height and scroll like .filter-option-list")
+	}
+}
+
 func TestReplayFeedSelection(t *testing.T) {
 	if !strings.Contains(renderJS, "selectReplayFeedEvent") ||
 		!strings.Contains(renderJS, "clearReplayFeedSelection") ||
