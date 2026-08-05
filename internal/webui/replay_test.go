@@ -3,6 +3,7 @@ package webui
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -371,6 +372,101 @@ func TestReplayRunsEndpointFromDisk(t *testing.T) {
 	}
 	if _, err := os.Stat(runDir + "/bin/1.req.bin"); err != nil {
 		t.Fatalf("body bin not persisted: %v", err)
+	}
+}
+
+func TestReplayEventsListPaged(t *testing.T) {
+	s, _, logRoot := newReplayServer(t)
+
+	runDir, err := session.ReplayRunDir(logRoot, "bigrun")
+	if err != nil {
+		t.Fatalf("ReplayRunDir: %v", err)
+	}
+	l, err := session.OpenReplayLog(runDir, "bigrun")
+	if err != nil {
+		t.Fatalf("OpenReplayLog: %v", err)
+	}
+	for i := 0; i < 500; i++ {
+		ev := &session.ReplayEvent{
+			Timestamp: time.Now(),
+			RunID:     "bigrun",
+			Method:    "GET",
+			URL:       fmt.Sprintf("https://live.example.com/%d", i+1),
+			Result:    "hit",
+			Status:    200,
+			EntryID:   fmt.Sprintf("e%d", i+1),
+		}
+		if err := l.Append(ev, []byte("{}")); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+	if err := l.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	getPage := func(qs string) (events []session.ReplayEvent, total int, hasMore bool) {
+		rec := httptest.NewRecorder()
+		s.handleReplayEventsList(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events?run=bigrun&"+qs, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		var resp struct {
+			Events  []session.ReplayEvent `json:"events"`
+			Total   int                   `json:"total"`
+			HasMore bool                  `json:"hasMore"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return resp.Events, resp.Total, resp.HasMore
+	}
+
+	first, total, hasMore := getPage("limit=200")
+	if total != 500 || !hasMore || len(first) != 200 {
+		t.Fatalf("first page: total=%d hasMore=%v len=%d, want 500/true/200", total, hasMore, len(first))
+	}
+	if first[0].Seq != 301 || first[len(first)-1].Seq != 500 {
+		t.Fatalf("first page should be the newest 200 (seqs 301-500), got %d..%d", first[0].Seq, first[len(first)-1].Seq)
+	}
+
+	older, total, hasMore := getPage("limit=200&beforeSeq=301")
+	if total != 500 || !hasMore || len(older) != 200 {
+		t.Fatalf("older page: total=%d hasMore=%v len=%d, want 500/true/200", total, hasMore, len(older))
+	}
+	if older[0].Seq != 101 || older[len(older)-1].Seq != 300 {
+		t.Fatalf("older page should be seqs 101-300, got %d..%d", older[0].Seq, older[len(older)-1].Seq)
+	}
+
+	oldest, _, hasMore := getPage("limit=200&beforeSeq=101")
+	if hasMore || len(oldest) != 100 {
+		t.Fatalf("oldest page: len=%d hasMore=%v, want 100/false", len(oldest), hasMore)
+	}
+	if oldest[0].Seq != 1 || oldest[len(oldest)-1].Seq != 100 {
+		t.Fatalf("oldest page should be seqs 1-100, got %d..%d", oldest[0].Seq, oldest[len(oldest)-1].Seq)
+	}
+
+	all, total, hasMore := getPage("")
+	if len(all) != 500 || total != 500 || hasMore {
+		t.Fatalf("no params should serve the full run: len=%d total=%d hasMore=%v", len(all), total, hasMore)
+	}
+}
+
+func TestReplayFeedVirtualization(t *testing.T) {
+	if !strings.Contains(renderJS, "onReplayFeedScroll") ||
+		!strings.Contains(renderJS, "slice().reverse()") {
+		t.Fatal("render.js: the replay feed must render its virtual window with the newest events on top")
+	}
+	if !strings.Contains(renderJS, "setReplayFeed") ||
+		!strings.Contains(renderJS, "prependReplayFeed") ||
+		!strings.Contains(renderJS, "appendReplayFeedEvent") {
+		t.Fatal("render.js: the feed needs its page load, older-page prepend and live append entry points")
+	}
+	if !strings.Contains(apiJS, "limit=") || !strings.Contains(apiJS, "beforeSeq") {
+		t.Fatal("api.js: the feed must page with limit and load older pages via beforeSeq")
+	}
+	if !strings.Contains(appJS, "loadReplayFeedOlder") ||
+		!strings.Contains(appJS, "onReplayFeedScroll") {
+		t.Fatal("app.js: the feed scroll must be wired to the older-page loader")
 	}
 }
 

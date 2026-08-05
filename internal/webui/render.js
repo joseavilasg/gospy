@@ -854,21 +854,159 @@ function replayEventRow(ev) {
         </div>${pair}`;
 }
 
-export function renderReplayFeed(events) {
-  const feed = document.getElementById('replayFeed');
-  if (!feed) return;
-  if (!events || events.length === 0) {
-    feed.innerHTML = '<div class="replay-event-empty">No replay activity yet — requests will appear here as the replay server serves them.</div>';
-    return;
-  }
-  feed.innerHTML = events.map(replayEventRow).join('');
+const FEED_PAGE_BUFFER = 5;
+let _feedEvents = [];
+let _feedHasMore = false;
+let _feedHeights = null;
+let _feedOffsets = null;
+let _feedLastRange = { start: -1, end: -1 };
+let _onFeedLoadOlder = () => { };
+
+export function setOnReplayFeedLoadOlder(cb) { _onFeedLoadOlder = cb; }
+
+function feedBlockHeight(ev, heights) {
+  return ev.result === 'hit' && ev.matchedUrl ? heights.main + heights.pair : heights.main;
 }
 
-export function appendReplayEvent(ev) {
+function feedRowHeights() {
+  if (_feedHeights) return _feedHeights;
+  const feed = document.getElementById('replayFeed');
+  let main = 31, pair = 23;
+  if (feed) {
+    const probe = document.createElement('div');
+    probe.style.cssText = 'position:absolute;visibility:hidden;left:-9999px;top:0;pointer-events:none';
+    feed.appendChild(probe);
+    probe.innerHTML = replayEventRow({ result: 'hit', matchedUrl: 'x', method: 'GET', url: 'x', ts: null });
+    if (probe.children[0]) main = probe.children[0].getBoundingClientRect().height || main;
+    if (probe.children[1]) pair = probe.children[1].getBoundingClientRect().height || pair;
+    probe.remove();
+  }
+  _feedHeights = { main, pair };
+  return _feedHeights;
+}
+
+function feedDisplay() {
+  return _feedEvents.slice().reverse();
+}
+
+function computeFeedOffsets(display, heights) {
+  const offs = new Array(display.length + 1);
+  let acc = 0;
+  for (let i = 0; i < display.length; i++) {
+    offs[i] = acc;
+    acc += feedBlockHeight(display[i], heights);
+  }
+  offs[display.length] = acc;
+  return offs;
+}
+
+// renderReplayFeed renders the virtual window of the feed into #replayFeed.
+// opts.anchor carries {seq, vpOffset} captured before a live prepend so the
+// row the user was reading stays in place while new events arrive above; when
+// the user is at the top the feed stays pinned to 0 (the newest event).
+export function renderReplayFeed(opts) {
   const feed = document.getElementById('replayFeed');
   if (!feed) return;
-  if (feed.querySelector('.replay-event-empty')) feed.innerHTML = '';
-  feed.insertAdjacentHTML('beforeend', replayEventRow(ev));
+  if (_feedEvents.length === 0) {
+    feed.innerHTML = '<div class="replay-event-empty">No replay activity yet — requests will appear here as the replay server serves them.</div>';
+    _feedOffsets = null;
+    _feedLastRange = { start: -1, end: -1 };
+    return;
+  }
+  const heights = feedRowHeights();
+  const display = feedDisplay();
+  const offsets = computeFeedOffsets(display, heights);
+  _feedOffsets = offsets;
+  const totalHeight = offsets[offsets.length - 1];
+  const viewportHeight = feed.clientHeight || 300;
+
+  const scrollTop = feed.scrollTop;
+  const top = Math.max(0, scrollTop - FEED_PAGE_BUFFER * heights.main);
+  const bottom = scrollTop + viewportHeight + FEED_PAGE_BUFFER * heights.main;
+  let start = 0;
+  while (start < display.length && offsets[start + 1] <= top) start++;
+  let end = display.length - 1;
+  while (end >= 0 && offsets[end] >= bottom) end--;
+  end = Math.max(start, end);
+
+  const anchor = (opts && opts.anchor) || null;
+  if (!opts && start === _feedLastRange.start && end === _feedLastRange.end) return;
+  _feedLastRange = { start, end };
+
+  const scrollTopSave = feed.scrollTop;
+  let html = `<div style="height:${totalHeight}px;position:relative">`;
+  if (start > 0) html += `<div style="height:${offsets[start]}px"></div>`;
+  for (let i = start; i <= end; i++) html += replayEventRow(display[i]);
+  if (end < display.length - 1) html += `<div style="height:${totalHeight - offsets[end + 1]}px"></div>`;
+  html += '</div>';
+  feed.innerHTML = html;
+
+  if (anchor) {
+    const idx = display.findIndex(e => e.seq === anchor.seq);
+    feed.scrollTop = idx >= 0 ? Math.max(0, offsets[idx] - anchor.vpOffset) : scrollTopSave;
+  } else if (scrollTopSave <= 0) {
+    feed.scrollTop = 0;
+  } else {
+    feed.scrollTop = scrollTopSave;
+  }
+}
+
+export function setReplayFeed(events, hasMore) {
+  const feed = document.getElementById('replayFeed');
+  if (feed) feed.scrollTop = 0;
+  _feedEvents = events;
+  _feedHasMore = hasMore;
+  _feedOffsets = null;
+  _feedLastRange = { start: -1, end: -1 };
+  renderReplayFeed();
+}
+
+export function prependReplayFeed(older, hasMore) {
+  _feedEvents = older.concat(_feedEvents);
+  _feedHasMore = hasMore;
+  _feedOffsets = null;
+  _feedLastRange = { start: -1, end: -1 };
+  renderReplayFeed();
+}
+
+export function appendReplayFeedEvent(ev) {
+  const feed = document.getElementById('replayFeed');
+  let anchor = null;
+  if (feed && feed.scrollTop > 0 && _feedOffsets && _feedEvents.length > 0) {
+    const row = feed.querySelector('.replay-event');
+    if (row) {
+      const seq = parseInt(row.dataset.seq, 10);
+      if (Number.isFinite(seq)) {
+        const oldDisplay = _feedEvents.slice().reverse();
+        const idx = oldDisplay.findIndex(e => e.seq === seq);
+        if (idx >= 0) anchor = { seq, vpOffset: _feedOffsets[idx] - feed.scrollTop };
+      }
+    }
+  }
+  _feedEvents.push(ev);
+  _feedOffsets = null;
+  _feedLastRange = { start: -1, end: -1 };
+  renderReplayFeed({ anchor });
+}
+
+export function clearReplayFeed() {
+  _feedEvents = [];
+  _feedHasMore = false;
+  _feedOffsets = null;
+  _feedLastRange = { start: -1, end: -1 };
+  renderReplayFeed();
+}
+
+export function onReplayFeedScroll() {
+  const feed = document.getElementById('replayFeed');
+  if (!feed || !_feedOffsets) return;
+  renderReplayFeed();
+  if (!_feedHasMore || _feedEvents.length === 0) return;
+  const totalHeight = _feedOffsets[_feedOffsets.length - 1];
+  const viewportHeight = feed.clientHeight || 300;
+  if (feed.scrollTop + viewportHeight >= totalHeight - viewportHeight) {
+    _onFeedLoadOlder(_feedEvents[0].seq);
+  }
 }
 
 export function renderListScopeBanner(scope) {

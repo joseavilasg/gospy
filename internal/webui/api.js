@@ -1,5 +1,5 @@
 import { requests, applyFullList, applyPage, applyListDiff, ignoredHosts, setIgnoredHosts, focusedHosts, setFocusedHosts, lastTimestamp, setLastTimestamp, criteriaVersion, setCriteriaVersion, rules, setRules, selectedId } from './state.js';
-import { renderList, renderIgnoredList, renderFocusedList, renderRulesList, invalidateFilterCache, renderListScopeBanner } from './render.js';
+import { renderList, renderIgnoredList, renderFocusedList, renderRulesList, invalidateFilterCache, renderListScopeBanner, setReplayFeed, prependReplayFeed, clearReplayFeed } from './render.js';
 import { syncCriteriaFromServer } from './filters.js';
 
 let onSelectedUpdated = () => { };
@@ -285,14 +285,34 @@ export async function loadReplayRuns() {
   }
 }
 
-export async function loadReplayEvents(runId) {
+const FEED_PAGE = 200;
+let feedRunId = null;
+let feedLoadingOlder = false;
+
+export async function loadReplayFeed(runId) {
+  feedRunId = runId;
+  if (!runId) { clearReplayFeed(); return; }
   try {
-    const resp = await fetch('/api/replay/events?run=' + encodeURIComponent(runId));
+    const resp = await fetch(`/api/replay/events?run=${encodeURIComponent(runId)}&limit=${FEED_PAGE}`);
     const data = await resp.json();
-    return data.events || [];
+    setReplayFeed(data.events || [], !!data.hasMore);
   } catch (e) {
-    console.error('Failed to load replay events:', e);
-    return [];
+    console.error('Failed to load replay feed:', e);
+    clearReplayFeed();
+  }
+}
+
+export async function loadReplayFeedOlder(beforeSeq) {
+  if (!feedRunId || feedLoadingOlder || beforeSeq == null) return;
+  feedLoadingOlder = true;
+  try {
+    const resp = await fetch(`/api/replay/events?run=${encodeURIComponent(feedRunId)}&limit=${FEED_PAGE}&beforeSeq=${beforeSeq}`);
+    const data = await resp.json();
+    prependReplayFeed(data.events || [], !!data.hasMore);
+  } catch (e) {
+    console.error('Failed to load older replay events:', e);
+  } finally {
+    feedLoadingOlder = false;
   }
 }
 

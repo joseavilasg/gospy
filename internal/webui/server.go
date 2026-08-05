@@ -2340,7 +2340,50 @@ func (s *Server) handleReplayEventsList(w http.ResponseWriter, r *http.Request) 
 	if events == nil {
 		events = []session.ReplayEvent{}
 	}
-	s.writeJSON(w, map[string]any{"runId": runID, "events": events})
+
+	total := len(events)
+	limit := 0
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	beforeSeq := 0
+	if v := r.URL.Query().Get("beforeSeq"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			beforeSeq = n
+		}
+	}
+
+	// Page the events for the lazy feed: limit serves the newest `limit`
+	// events, beforeSeq restricts to events older than that seq (events are
+	// ascending, so scroll-up loads use it to fetch the previous page).
+	// hasMore reports whether older events exist beyond the returned page.
+	// Without any param the full run is served, as before.
+	page := events
+	start := 0
+	cut := total
+	if beforeSeq > 0 {
+		for i, ev := range events {
+			if ev.Seq >= beforeSeq {
+				cut = i
+				break
+			}
+		}
+	}
+	if limit > 0 {
+		start = cut - limit
+		if start < 0 {
+			start = 0
+		}
+		page = events[start:cut]
+	}
+	s.writeJSON(w, map[string]any{
+		"runId":   runID,
+		"events":  page,
+		"total":   total,
+		"hasMore": limit > 0 && start > 0,
+	})
 }
 
 // handleReplayEventsSub dispatches the per-run endpoints: <run>/stream (SSE),

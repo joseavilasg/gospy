@@ -1,6 +1,6 @@
 import { setFilterText, setFocusEnabled, setAgentPreview, setAgentEnabled, setAgentExposed, agentExposed, applyFullList, setLastTimestamp, selectedId, requests, rules, setRules, setSignatureCache, visibleCount, getReplayMode, setReplayMode, setReplayServed, setReplayComplete, markReplayServed } from './state.js';
-import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch, setOnSelectedUpdated, loadMore, setOnReplayUpdate, loadReplayRuns, loadReplayEvents, loadReplayEventDetail, setListScope } from './api.js';
-import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, toggleReplayPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, buildResponseTab, ITEM_HEIGHT, renderReplayFeed, appendReplayEvent, renderReplayEventDetail } from './render.js';
+import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch, setOnSelectedUpdated, loadMore, setOnReplayUpdate, loadReplayRuns, loadReplayFeed, loadReplayFeedOlder, loadReplayEventDetail, setListScope } from './api.js';
+import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, toggleReplayPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, buildResponseTab, ITEM_HEIGHT, appendReplayFeedEvent, onReplayFeedScroll, setOnReplayFeedLoadOlder, renderReplayEventDetail } from './render.js';
 import { makeResizable } from './resize.js';
 import { initHeader, setHeaderMode } from './header.js';
 import { isBodySearching, cancelBodySearch, invalidateCriteriaSave, syncCriteriaFromServer, restoreBodyFilter, setOnFilterChange, setOnListRefresh, initFilterPopover, openFilterPopover, closeFilterPopover, closeChip, openChip, getFilterChipsData, getMatchMode, setMatchMode, queueCriteriaSave } from './filters.js';
@@ -170,8 +170,7 @@ function applyReplayLayout() {
 }
 
 function renderFeedFor(runId) {
-  if (!runId) { renderReplayFeed([]); return; }
-  loadReplayEvents(runId).then(renderReplayFeed);
+  loadReplayFeed(runId);
 }
 
 function syncReplay(rp) {
@@ -223,7 +222,7 @@ function connectReplayStream() {
         renderList();
       }
       updateReplayChip({ active: true, consumed: ev.consumed, total: ev.total, exhausted: ev.exhausted });
-      if (_pickedRun === null && ev.runId === _activeRunId) appendReplayEvent(ev);
+      if (_pickedRun === null && ev.runId === _activeRunId) appendReplayFeedEvent(ev);
     } catch (err) { }
   };
 }
@@ -281,6 +280,7 @@ function populateReplayRuns() {
 }
 
 setOnReplayUpdate(syncReplay);
+setOnReplayFeedLoadOlder(beforeSeq => loadReplayFeedOlder(beforeSeq));
 let _lastReplayDetail = null;
 document.getElementById('replayPanel').addEventListener('click', (e) => {
   if (e.target.closest('.ignored-panel-close')) { toggleReplayPanel(); return; }
@@ -966,6 +966,15 @@ document.getElementById('requestList').addEventListener('scroll', () => {
     onListScroll();
     scrollRAF = null;
     maybeLoadMore();
+  });
+});
+
+let feedScrollRAF = null;
+document.getElementById('replayFeed').addEventListener('scroll', () => {
+  if (feedScrollRAF) return;
+  feedScrollRAF = requestAnimationFrame(() => {
+    onReplayFeedScroll();
+    feedScrollRAF = null;
   });
 });
 
