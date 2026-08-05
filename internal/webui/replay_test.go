@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -341,10 +342,14 @@ func TestReplayRunsEndpointFromDisk(t *testing.T) {
 		t.Fatalf("runs: expected 200, got %d", rec.Code)
 	}
 	var runsResp struct {
-		Runs []session.RunSummary `json:"runs"`
+		Session string               `json:"session"`
+		Runs    []session.RunSummary `json:"runs"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &runsResp); err != nil {
 		t.Fatalf("decode runs: %v", err)
+	}
+	if runsResp.Session != filepath.Base(logRoot) {
+		t.Fatalf("session: expected %q, got %q", filepath.Base(logRoot), runsResp.Session)
 	}
 	if len(runsResp.Runs) != 1 || runsResp.Runs[0].RunID != "pastrun" || runsResp.Runs[0].Hits != 1 {
 		t.Fatalf("unexpected runs %+v", runsResp.Runs)
@@ -537,5 +542,24 @@ func TestReplayFeedTimestamps(t *testing.T) {
 	}
 	if !strings.Contains(styleCSS, ".replay-event-time") {
 		t.Fatal("style.css: .replay-event-time rule is required for the feed timestamp")
+	}
+}
+
+// TestReplaySessionLabelShown locks the session name into the replay panel
+// header: the runs endpoint exposes it, the drawer carries a dedicated label,
+// and the frontend renders it so the user always knows which session the runs
+// belong to.
+func TestReplaySessionLabelShown(t *testing.T) {
+	if !strings.Contains(indexHTML, `id="replaySessionLabel"`) {
+		t.Fatal("index.html: the replay drawer header must carry a session label next to the run select")
+	}
+	if !strings.Contains(styleCSS, ".replay-session-label") {
+		t.Fatal("style.css: .replay-session-label rule is required for the session label")
+	}
+	if !strings.Contains(apiJS, "session: data.session") {
+		t.Fatal("api.js: loadReplayRuns must surface the session name from /api/replay/runs")
+	}
+	if !strings.Contains(appJS, "replaySessionLabel") {
+		t.Fatal("app.js: populateReplayRuns must render the session name into replaySessionLabel")
 	}
 }

@@ -263,8 +263,10 @@ function updateReplayRunMeta(runId) {
 }
 
 function populateReplayRuns() {
-  return loadReplayRuns().then(runs => {
+  return loadReplayRuns().then(({ runs, session }) => {
     _replayRuns = runs;
+    const label = document.getElementById('replaySessionLabel');
+    if (label) label.textContent = session || '';
     const sel = document.getElementById('replayRunSelect');
     if (!sel) return;
     const prev = sel.value;

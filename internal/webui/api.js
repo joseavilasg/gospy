@@ -268,10 +268,10 @@ export async function loadReplayRuns() {
   try {
     const resp = await fetch('/api/replay/runs');
     const data = await resp.json();
-    return data.runs || [];
+    return { runs: data.runs || [], session: data.session || '' };
   } catch (e) {
     console.error('Failed to load replay runs:', e);
-    return [];
+    return { runs: [], session: '' };
   }
 }
 

@@ -2265,7 +2265,7 @@ func (s *Server) handleReplayRuns(w http.ResponseWriter, r *http.Request) {
 	if runs == nil {
 		runs = []session.RunSummary{}
 	}
-	s.writeJSON(w, map[string]any{"runs": runs})
+	s.writeJSON(w, map[string]any{"session": filepath.Base(s.replayLogDir), "runs": runs})
 }
 
 // handleReplayEventsList returns the events of a run. run= empty selects the
