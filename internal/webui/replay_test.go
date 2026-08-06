@@ -498,6 +498,41 @@ func TestDateRangeNowClear(t *testing.T) {
 	}
 }
 
+func TestQueryParamsPrettyView(t *testing.T) {
+	if !strings.Contains(renderJS, "parseQueryString") ||
+		!strings.Contains(renderJS, "buildUrlBreakdown") ||
+		!strings.Contains(renderJS, "buildQueryTable") ||
+		!strings.Contains(renderJS, "renderUrlViewInner") ||
+		!strings.Contains(renderJS, "buildRequestUrlBlock") {
+		t.Fatal("render.js: the request section needs the query-params pretty view (parseQueryString/buildUrlBreakdown/buildQueryTable/renderUrlViewInner/buildRequestUrlBlock)")
+	}
+	if !strings.Contains(renderJS, "(hasQuery ? buildQueryTable(activeUrl) : '')") {
+		t.Fatal("render.js: the pretty url view must be available for every URL, with the query table only when the active url has params")
+	}
+	if strings.Contains(renderJS, "hasQuery ? viewMode : 'raw'") {
+		t.Fatal("render.js: the pretty url view must not be gated on the presence of query params")
+	}
+	if !strings.Contains(renderJS, "Protocol:</span>") ||
+		!strings.Contains(renderJS, "protocol = u.protocol.slice(0, -1)") ||
+		!strings.Contains(renderJS, "host = u.host") ||
+		strings.Contains(renderJS, "host = u.origin") {
+		t.Fatal("render.js: the url breakdown must split protocol and host (https + google.com), not show the origin combined")
+	}
+	if !strings.Contains(renderJS, "urlModified ? `<div class=\"divider-v\"></div><div class=\"body-tools-group\">") {
+		t.Fatal("render.js: the url toolbar must separate the pretty/raw and original/modified groups with a divider, like the body toolbar")
+	}
+	if !strings.Contains(appJS, "case 'set-url-view'") ||
+		!strings.Contains(appJS, "renderUrlViewInner(urlView.dataset") {
+		t.Fatal("app.js: the url view needs a pretty/raw toggle that re-renders the block, and set-url-content must re-render too")
+	}
+	if !strings.Contains(styleCSS, ".url-breakdown") ||
+		!strings.Contains(styleCSS, ".url-row") ||
+		!strings.Contains(styleCSS, ".query-table") ||
+		!strings.Contains(styleCSS, ".query-row") {
+		t.Fatal("style.css: the pretty url view needs the breakdown rows and the separate query table styles")
+	}
+}
+
 func TestReplayFeedSelection(t *testing.T) {
 	if !strings.Contains(renderJS, "selectReplayFeedEvent") ||
 		!strings.Contains(renderJS, "clearReplayFeedSelection") ||

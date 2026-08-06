@@ -1,6 +1,6 @@
 import { setFilterText, setFocusEnabled, setAgentPreview, setAgentEnabled, setAgentExposed, agentExposed, applyFullList, setLastTimestamp, selectedId, requests, rules, setRules, setSignatureCache, visibleCount, getReplayMode, setReplayMode, setReplayServed, setReplayComplete, markReplayServed } from './state.js';
 import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch, setOnSelectedUpdated, loadMore, setOnReplayUpdate, loadReplayRuns, loadReplayFeed, loadReplayFeedOlder, loadReplayEventDetail, setListScope } from './api.js';
-import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, toggleReplayPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, buildResponseTab, ITEM_HEIGHT, appendReplayFeedEvent, onReplayFeedScroll, setOnReplayFeedLoadOlder, renderReplayEventDetail, selectReplayFeedEvent } from './render.js';
+import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, toggleReplayPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, buildResponseTab, ITEM_HEIGHT, appendReplayFeedEvent, onReplayFeedScroll, setOnReplayFeedLoadOlder, renderReplayEventDetail, selectReplayFeedEvent, renderUrlViewInner } from './render.js';
 import { makeResizable } from './resize.js';
 import { initHeader, setHeaderMode } from './header.js';
 import { isBodySearching, cancelBodySearch, invalidateCriteriaSave, syncCriteriaFromServer, restoreBodyFilter, setOnFilterChange, setOnListRefresh, initFilterPopover, openFilterPopover, closeFilterPopover, closeChip, openChip, getFilterChipsData, getMatchMode, setMatchMode, queueCriteriaSave } from './filters.js';
@@ -550,18 +550,20 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
     case 'remove-header':
       removeHeaderRow(btn);
       break;
+    case 'set-url-view': {
+      const view = btn.dataset.view;
+      const urlView = btn.closest('.url-view');
+      if (!urlView) break;
+      urlView.dataset.viewMode = view;
+      urlView.innerHTML = renderUrlViewInner(urlView.dataset.method, urlView.dataset.urlOriginal, urlView.dataset.urlModified, view, urlView.dataset.contentMode);
+      break;
+    }
     case 'set-url-content': {
       const mode = btn.dataset.content;
-      const pre = btn.closest('.tab-content')?.querySelector('pre[data-url-original]');
-      if (!pre) break;
-      const method = pre.textContent.split(' ')[0];
-      if (mode === 'original') {
-        pre.textContent = method + ' ' + pre.dataset.urlOriginal;
-      } else {
-        pre.textContent = method + ' ' + pre.dataset.urlModified;
-      }
-      btn.closest('.body-tools-group')?.querySelectorAll('.body-tool').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
+      const urlView = btn.closest('.url-view');
+      if (!urlView) break;
+      urlView.dataset.contentMode = mode;
+      urlView.innerHTML = renderUrlViewInner(urlView.dataset.method, urlView.dataset.urlOriginal, urlView.dataset.urlModified, urlView.dataset.viewMode, mode);
       break;
     }
     case 'set-header-content': {

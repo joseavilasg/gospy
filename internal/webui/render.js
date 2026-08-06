@@ -167,6 +167,89 @@ function buildHeaderRows(headers) {
     : '<div style="color:#666">No headers</div>';
 }
 
+function parseUrlParts(url) {
+  let candidate = url;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) {
+    candidate = url;
+  } else if (url.startsWith('//')) {
+    candidate = 'http:' + url;
+  } else {
+    candidate = 'http://' + url;
+  }
+  try {
+    return new URL(candidate);
+  } catch {
+    try {
+      return new URL(url, 'http://gospy.invalid');
+    } catch {
+      return null;
+    }
+  }
+}
+
+export function parseQueryString(url) {
+  const u = parseUrlParts(url);
+  if (!u) return [];
+  const rows = [];
+  u.searchParams.forEach((value, key) => rows.push({ key, value }));
+  return rows;
+}
+
+function buildUrlBreakdown(method, url) {
+  let protocol = '';
+  let host = '';
+  let path = '';
+  const u = parseUrlParts(url);
+  if (u) {
+    protocol = u.protocol.slice(0, -1);
+    host = u.host;
+    path = u.pathname;
+  } else {
+    path = url.split('?')[0].split('#')[0];
+  }
+  return `<div class="url-breakdown">
+      <div class="url-row"><span class="url-key">Method:</span><span class="url-value">${escapeHtml(method)}</span></div>
+      <div class="url-row"><span class="url-key">Protocol:</span><span class="url-value">${escapeHtml(protocol)}</span></div>
+      <div class="url-row"><span class="url-key">Host:</span><span class="url-value">${escapeHtml(host)}</span></div>
+      <div class="url-row"><span class="url-key">Path:</span><span class="url-value">${escapeHtml(path)}</span></div>
+    </div>`;
+}
+
+function buildQueryTable(url) {
+  const rows = parseQueryString(url);
+  const rowsHtml = rows.length > 0
+    ? rows.map(r => `<div class="query-row"><span class="query-key">${escapeHtml(r.key)}:</span><span class="query-value">${escapeHtml(r.value)}</span></div>`).join('')
+    : '<div class="query-empty">No query params</div>';
+  return `<div class="query-table"><div class="query-title">Query params (${rows.length})</div>${rowsHtml}</div>`;
+}
+
+export function renderUrlViewInner(method, urlOriginal, urlModified, viewMode, contentMode) {
+  const activeUrl = contentMode === 'modified' && urlModified ? urlModified : urlOriginal;
+  const hasQuery = parseQueryString(activeUrl).length > 0;
+  const toolbar = `
+      <div class="content-toolbar">
+        <div class="toolbar-left">
+          <div class="body-tools-group">
+            <button class="body-tool body-view${viewMode === 'pretty' ? ' active' : ''}" data-action="set-url-view" data-view="pretty">Pretty</button>
+            <button class="body-tool body-view${viewMode === 'raw' ? ' active' : ''}" data-action="set-url-view" data-view="raw">Raw</button>
+          </div>
+          ${urlModified ? `<div class="divider-v"></div><div class="body-tools-group">
+            <button class="body-tool body-content${contentMode === 'original' ? ' active' : ''}" data-action="set-url-content" data-content="original">Original</button>
+            <button class="body-tool body-content${contentMode === 'modified' ? ' active' : ''}" data-action="set-url-content" data-content="modified">Modified</button>
+          </div>` : ''}
+        </div>
+      </div>`;
+  const viewHtml = viewMode === 'pretty'
+    ? buildUrlBreakdown(method, activeUrl) + (hasQuery ? buildQueryTable(activeUrl) : '')
+    : `<pre>${escapeHtml(method)} ${escapeHtml(activeUrl)}</pre>`;
+  return toolbar + viewHtml;
+}
+
+export function buildRequestUrlBlock(method, urlOriginal, urlModified) {
+  const contentMode = urlModified ? 'modified' : 'original';
+  return `<div class="url-view" data-method="${escapeHtml(method)}" data-url-original="${escapeHtml(urlOriginal)}" data-url-modified="${escapeHtml(urlModified)}" data-view-mode="pretty" data-content-mode="${contentMode}">${renderUrlViewInner(method, urlOriginal, urlModified, 'pretty', contentMode)}</div>`;
+}
+
 function buildBodyViewer(target, entry, body, rawBody, compression, hasEdited, editedBody, contentType, isModified, modifiedBody, modifiedContentType, isMocked, mockedBody, mockedContentType, canEdit, bodyFile, bodySize, entryId, isBinaryBody, stream) {
   const badges = [];
   if (compression) badges.push(`<span class="body-badge body-badge-compression">${escapeHtml(compression)}</span>`);
@@ -424,7 +507,6 @@ export function renderDetail(req, activeTab = 'request') {
         </div>
 
         <div id="tab-request" class="tab-content" style="${activeTab !== 'request' ? 'display:none' : ''}">
-            ${isModified && req.serverRequest ? `
             <div class="section-panel">
                 <div class="section-header">
                     <span class="section-title">Request</span>
@@ -436,31 +518,13 @@ export function renderDetail(req, activeTab = 'request') {
                     </div>
                 </div>
                 <div class="content-block">
-                    <div class="content-toolbar">
-                        <div class="toolbar-left">
-                            <div class="body-tools-group">
-                                <button class="body-tool body-content" data-action="set-url-content" data-content="original">Original</button>
-                                <button class="body-tool body-content active" data-action="set-url-content" data-content="modified">Modified</button>
-                            </div>
-                        </div>
-                    </div>
-                    <pre data-url-original="${escapeHtml(req.request.url || req.request.host)}" data-url-modified="${escapeHtml(req.serverRequest ? (req.serverRequest.url || req.serverRequest.host) : '')}">${escapeHtml(req.request.method)} ${isModified && req.serverRequest ? escapeHtml(req.serverRequest.url || req.serverRequest.host) : escapeHtml(req.request.url || req.request.host)}</pre>
+                  ${buildRequestUrlBlock(
+    req.request.method,
+    req.request.url || req.request.host,
+    isModified && req.serverRequest ? (req.serverRequest.url || req.serverRequest.host) : ''
+  )}
                 </div>
-            </div>` : `
-            <div class="section-panel">
-                <div class="section-header">
-                    <span class="section-title">Request</span>
-                    <div class="kebab" data-action="toggle-menu">
-                        ⋮
-                        <div class="kebab-menu">
-                            <div class="menu-item" data-action="copy-curl">⎘ Copy as cURL</div>
-                        </div>
-                    </div>
-                </div>
-                <div class="content-block">
-                    <pre data-url-original="${escapeHtml(req.request.url || req.request.host)}" data-url-modified="">${escapeHtml(req.request.method)} ${escapeHtml(req.request.url || req.request.host)}</pre>
-                </div>
-            </div>`}
+            </div>
 
             <div class="section-panel">
                 <div class="section-header">
