@@ -988,11 +988,21 @@ function maybeLoadMore() {
   }
 }
 
+let savedListScrollTop = 0;
 document.getElementById('toggleListBtn').addEventListener('click', () => {
   const container = document.getElementById('container');
-  const hidden = container.classList.toggle('list-hidden');
-  document.getElementById('toggleListBtn').classList.toggle('active', !hidden);
-  localStorage.setItem('gospy-list-hidden', hidden);
+  const list = document.getElementById('requestList');
+  const willHide = !container.classList.contains('list-hidden');
+  if (willHide) {
+    savedListScrollTop = list.scrollTop;
+  }
+  container.classList.toggle('list-hidden');
+  if (!willHide) {
+    list.scrollTop = savedListScrollTop;
+    onListScroll();
+  }
+  document.getElementById('toggleListBtn').classList.toggle('active', !willHide);
+  localStorage.setItem('gospy-list-hidden', willHide);
 });
 
 const listHidden = localStorage.getItem('gospy-list-hidden') === 'true';

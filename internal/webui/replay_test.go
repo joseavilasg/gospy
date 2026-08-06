@@ -38,6 +38,15 @@ func saveEntry(t *testing.T, h *history.Store, id, method, url string) {
 	}
 }
 
+func TestListToggleScrollRestore(t *testing.T) {
+	if !strings.Contains(appJS, "savedListScrollTop = list.scrollTop") ||
+		!strings.Contains(appJS, "list.scrollTop = savedListScrollTop") ||
+		!strings.Contains(appJS, "willHide") ||
+		!strings.Contains(appJS, "onListScroll()") {
+		t.Fatal("app.js: toggling the list must save the scroll position before hiding and restore it on re-open, re-rendering the virtual window so a hidden poll that rendered the wrong window (scrollTop reads 0 while display:none) never leaves the list empty")
+	}
+}
+
 func TestReplaySessionStartConflict(t *testing.T) {
 	s, _, _ := newReplayServer(t)
 
