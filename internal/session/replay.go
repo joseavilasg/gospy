@@ -18,14 +18,15 @@ import (
 )
 
 type ReplayServer struct {
-	addr     string
-	proxy    *goproxy.ProxyHttpServer
-	session  *ReplayStore
-	cfg      *MatchConfig
-	logRoot  string
-	logMu    sync.Mutex
-	log      *ReplayLog
-	notifier func(ReplayEvent)
+	addr           string
+	proxy          *goproxy.ProxyHttpServer
+	session        *ReplayStore
+	cfg            *MatchConfig
+	logRoot        string
+	logMu          sync.Mutex
+	log            *ReplayLog
+	notifier       func(ReplayEvent)
+	originResolver OriginResolver
 }
 
 func NewReplayServer(addr string, caCert *ca.CA, session *ReplayStore, cfg *MatchConfig) *ReplayServer {
@@ -64,6 +65,19 @@ func (rs *ReplayServer) SetReplayNotifier(fn func(ReplayEvent)) {
 	rs.notifier = fn
 }
 
+// SetMatchConfig replaces the match config used for matching and persisted as
+// the run's snapshot. Takes effect immediately.
+func (rs *ReplayServer) SetMatchConfig(cfg *MatchConfig) {
+	rs.cfg = cfg
+}
+
+// SetOriginResolver registers a callback that resolves the client process of
+// an incoming request from its remote TCP address, captured into the event so
+// the UI can show who made the replay request.
+func (rs *ReplayServer) SetOriginResolver(fn OriginResolver) {
+	rs.originResolver = fn
+}
+
 // Close finalizes the active run log.
 func (rs *ReplayServer) Close() error {
 	rs.logMu.Lock()
@@ -76,6 +90,17 @@ func (rs *ReplayServer) Close() error {
 
 func (rs *ReplayServer) ListenAndServe() error {
 	return http.ListenAndServe(rs.addr, rs.proxy)
+}
+
+// MissBody returns the body of a synthetic miss response, shared by the replay
+// server and the UI that previews it.
+func MissBody(method, url string) string {
+	return "no recording for " + method + " " + url
+}
+
+// ExhaustedBody returns the body of a synthetic exhausted response.
+func ExhaustedBody() string {
+	return "replay exhausted: all recorded requests have been served"
 }
 
 func (rs *ReplayServer) handleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
@@ -93,6 +118,15 @@ func (rs *ReplayServer) handleRequest(req *http.Request, ctx *goproxy.ProxyCtx) 
 		URL:       url,
 		Request:   rec,
 		Result:    result.String(),
+	}
+
+	if rs.originResolver != nil {
+		if info := rs.originResolver(req.RemoteAddr); info != nil {
+			ev.ClientProcess = info.Name
+			ev.ClientPath = info.Path
+			ev.ClientPID = info.PID
+			ev.ClientDisplayName = info.DisplayName
+		}
 	}
 
 	var resp *http.Response
@@ -120,7 +154,7 @@ func (rs *ReplayServer) handleRequest(req *http.Request, ctx *goproxy.ProxyCtx) 
 		ev.Status = http.StatusNotFound
 		ev.Unconsumed = unconsumed
 		ev.TotalPending = totalPending
-		missText := "no recording for " + req.Method + " " + url
+		missText := MissBody(req.Method, url)
 		resp = &http.Response{
 			StatusCode:    http.StatusNotFound,
 			Header:        http.Header{"X-Gospy-Replay": {"miss"}},
@@ -131,7 +165,7 @@ func (rs *ReplayServer) handleRequest(req *http.Request, ctx *goproxy.ProxyCtx) 
 		LogReplayMiss(req.Method, url)
 	default:
 		ev.Status = http.StatusGone
-		exhaustedText := "replay exhausted: all recorded requests have been served"
+		exhaustedText := ExhaustedBody()
 		resp = &http.Response{
 			StatusCode:    http.StatusGone,
 			Header:        http.Header{"X-Gospy-Replay": {"exhausted"}},
@@ -176,6 +210,9 @@ func (rs *ReplayServer) ensureLog() (*ReplayLog, error) {
 	log, err := OpenReplayLog(runDir, filepath.Base(runDir))
 	if err != nil {
 		return nil, err
+	}
+	if err := WriteMatchConfig(runDir, rs.cfg); err != nil {
+		fmt.Printf("[REPLAY] warn: write match config: %v\n", err)
 	}
 	rs.log = log
 	return log, nil

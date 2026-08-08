@@ -40,6 +40,11 @@ type ReplayEvent struct {
 	Consumed     int                   `json:"consumed"`
 	Total        int                   `json:"total"`
 	Exhausted    bool                  `json:"exhausted"`
+
+	ClientProcess     string `json:"clientProcess,omitempty"`
+	ClientPath        string `json:"clientPath,omitempty"`
+	ClientPID         uint32 `json:"clientPid,omitempty"`
+	ClientDisplayName string `json:"clientDisplayName,omitempty"`
 }
 
 // ReplayLog persists the events of a single replay run as JSONL under
@@ -191,4 +196,37 @@ func ReplayRunDir(root, runID string) (string, error) {
 		return "", fmt.Errorf("invalid run id %q", runID)
 	}
 	return filepath.Join(root, runID), nil
+}
+
+// matchConfigFile is the sidecar file recording the MatchConfig a run was
+// served under, so the UI can reproduce the match decisions of a past run.
+const matchConfigFile = "match-config.json"
+
+// WriteMatchConfig persists the match config snapshot for a run.
+func WriteMatchConfig(runDir string, cfg *MatchConfig) error {
+	if cfg == nil {
+		cfg = &MatchConfig{}
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(runDir, matchConfigFile), data, 0o644)
+}
+
+// ReadMatchConfig loads the match config a run was served under. A missing
+// file (runs recorded before the snapshot was added) yields an empty config.
+func ReadMatchConfig(runDir string) (*MatchConfig, error) {
+	data, err := os.ReadFile(filepath.Join(runDir, matchConfigFile))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &MatchConfig{}, nil
+		}
+		return nil, err
+	}
+	var cfg MatchConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return &MatchConfig{}, nil
+	}
+	return &cfg, nil
 }

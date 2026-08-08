@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -549,12 +550,11 @@ func TestReplayFeedSelection(t *testing.T) {
 		t.Fatal("render.js: the feed needs state-driven selection (selectReplayFeedEvent/clearReplayFeedSelection) that survives virtual window re-renders")
 	}
 	if !strings.Contains(appJS, "selectReplayFeedEvent(item.dataset.run") ||
-		!strings.Contains(appJS, "selectReplayFeedEvent(btn.dataset.run") {
-		t.Fatal("app.js: clicking a feed row or the scope-back anchor must select the event")
+		!strings.Contains(appJS, "selectReplayFeedEvent(ev.runId") {
+		t.Fatal("app.js: clicking a feed row or the breadcrumb back must select the event")
 	}
-	if !strings.Contains(styleCSS, ".replay-event.selected") ||
-		!strings.Contains(styleCSS, ".replay-event-pair.selected") {
-		t.Fatal("style.css: the selected replay event (and its hit pair line) needs the selected highlight")
+	if !strings.Contains(styleCSS, ".replay-event.selected") {
+		t.Fatal("style.css: the selected replay event needs the selected highlight")
 	}
 }
 
@@ -733,40 +733,257 @@ func TestReplayFeedTimestamps(t *testing.T) {
 // header: the runs endpoint exposes it, the drawer carries a dedicated label,
 // and the frontend renders it so the user always knows which session the runs
 // belong to.
-func TestReplayPendingScope(t *testing.T) {
-	if !strings.Contains(indexHTML, `id="listScopeBanner"`) {
-		t.Fatal("index.html: the list column must carry a scope banner (listScopeBanner)")
+// TestReplayMatchTab locks the match tab into the replay event detail: four
+// tabs (Request/Response/Origin/Match), the unified candidate list with state
+// tags, the View full entry breadcrumb, and the removal of the legacy Show in
+// list scope machinery.
+func TestReplayMatchTab(t *testing.T) {
+	if strings.Contains(indexHTML, "listScopeBanner") {
+		t.Fatal("index.html: the list scope banner is removed; navigation lives in the Match tab")
 	}
-	if !strings.Contains(renderJS, `data-action="scope-pending"`) ||
-		!strings.Contains(renderJS, "Show in list") ||
-		!strings.Contains(renderJS, "scope-link") {
-		t.Fatal("render.js: replay event details must offer Show in list as a text link scoping the pending set")
+	for _, probe := range []string{`data-tab="request"`, `data-tab="response"`, `data-tab="origin"`, `data-tab="match"`} {
+		if !strings.Contains(renderJS, probe) {
+			t.Fatalf("render.js: the replay event detail must render a %s tab", probe)
+		}
 	}
-	if strings.Contains(renderJS, "replay-event-pending") {
-		t.Fatal("render.js: the inline pending rows are removed in favor of the scoped list")
+	if !strings.Contains(renderJS, "renderReplayMatch") ||
+		!strings.Contains(renderJS, "match-candidate-row") ||
+		!strings.Contains(renderJS, "replay-candidate") ||
+		!strings.Contains(renderJS, "replay-scope") ||
+		!strings.Contains(renderJS, "match-search") ||
+		!strings.Contains(renderJS, "match-scope-seg") ||
+		!strings.Contains(renderJS, "match-scope-btn") ||
+		!strings.Contains(renderJS, "match-candidate-url") ||
+		!strings.Contains(renderJS, "shortUrl") {
+		t.Fatal("render.js: the match tab needs the candidate list, the segmented scope control, the search input and the short-url helper")
 	}
-	if !strings.Contains(renderJS, "renderListScopeBanner") {
-		t.Fatal("render.js: renderListScopeBanner must render the active scope into listScopeBanner")
+	if strings.Contains(renderJS, "match-chip") ||
+		strings.Contains(renderJS, "match-scope-chips") {
+		t.Fatal("render.js: the scope selector must be a segmented control, not standalone chips")
 	}
-	if !strings.Contains(renderJS, "export function clearListSelection") ||
-		!strings.Contains(renderJS, "clearListSelection();") {
-		t.Fatal("render.js: opening a replay event detail must clear the list selection so no stale row stays highlighted")
+	if !strings.Contains(renderJS, "replay-tag-served") ||
+		!strings.Contains(renderJS, "consumed by seq") {
+		t.Fatal("render.js: candidates must carry state tags (matched / consumed by seq / diffs)")
 	}
-	if !strings.Contains(renderJS, "scope.url") ||
-		strings.Contains(renderJS, "scope.ids.length") {
-		t.Fatal("render.js: the scope banner anchor must show the anchored event request line without a redundant entries count")
+	if !strings.Contains(renderJS, "replay-full-entry") ||
+		!strings.Contains(renderJS, "replay-back-event") {
+		t.Fatal("render.js: the detail must offer View full entry and a breadcrumb back to the event")
 	}
-	if !strings.Contains(appJS, "setListScope") ||
-		!strings.Contains(appJS, "'scope-back'") ||
-		!strings.Contains(appJS, "'scope-clear'") {
-		t.Fatal("app.js: the scope banner needs its anchor (scope-back) and Clear (scope-clear) wired")
+	if !strings.Contains(renderJS, "Viewing recorded entry") ||
+		!strings.Contains(renderJS, "read-only") {
+		t.Fatal("render.js: the full-entry breadcrumb must read 'Viewing recorded entry · entry N · read-only'")
 	}
-	if !strings.Contains(appJS, "ev.unconsumed.map") {
-		t.Fatal("app.js: the pending scope must be built from the event's unconsumed ids, with no extra fetch")
+	if strings.Contains(renderJS, "renderListScopeBanner") ||
+		strings.Contains(renderJS, "scope-pending") {
+		t.Fatal("render.js: the Show in list scope machinery is removed")
 	}
-	if !strings.Contains(apiJS, "listScope") ||
-		!strings.Contains(apiJS, "params.set('ids', listScope.ids.join(','))") {
-		t.Fatal("api.js: the active scope must travel to /api/requests as the ids parameter")
+	if !strings.Contains(appJS, "loadReplayCandidates") ||
+		!strings.Contains(appJS, "loadReplayCandidateDiff") {
+		t.Fatal("app.js: the match tab must load candidates and on-demand diffs")
+	}
+	if !strings.Contains(appJS, "_matchResp.selectedEntryId") {
+		t.Fatal("app.js: View full entry must navigate to the candidate selected in the frontend")
+	}
+	if strings.Contains(appJS, "setListScope") ||
+		strings.Contains(appJS, "'scope-back'") ||
+		strings.Contains(appJS, "'scope-clear'") {
+		t.Fatal("app.js: the list scope handlers are removed")
+	}
+	if strings.Contains(apiJS, "listScope") {
+		t.Fatal("api.js: the ids list-scope parameter is removed")
+	}
+	if strings.Contains(renderJS, `title="${incoming}"`) ||
+		strings.Contains(renderJS, `title="${recorded}"`) ||
+		!strings.Contains(renderJS, "diff-empty") {
+		t.Fatal("render.js: missing diff values must render a bare diff-empty placeholder, never HTML inside the title attribute")
+	}
+	for _, en := range []string{"Select a candidate to compare", "No candidate shares this host+path", "This key was already consumed by", "out-of-order request", "Comparing against entry", "Select a candidate to see its diff"} {
+		if !strings.Contains(renderJS, en) {
+			t.Fatalf("render.js: the match tab text must be English, missing %q", en)
+		}
+	}
+	matchRowWhite := regexp.MustCompile(`\.diff-row-match \.diff-side \{\r?\n  color: var\(--text-primary\);\r?\n\}`)
+	if !matchRowWhite.MatchString(styleCSS) {
+		t.Fatal("style.css: matched diff rows must use white letters (green does not contrast on the panel background)")
+	}
+	alignStatus := regexp.MustCompile(`\.diff-header-row\s*>\s*span:last-child \{\r?\n  text-align: right;\r?\n\}`)
+	if !alignStatus.MatchString(styleCSS) {
+		t.Fatal("style.css: the Status header must right-align with its values")
+	}
+	if got := strings.Count(styleCSS, "var(--bg-surface-alt)"); got != 1 {
+		t.Fatalf("style.css: only the modal may use the neutral gray --bg-surface-alt, got %d uses", got)
+	}
+	if got := strings.Count(styleCSS, "var(--bg-header)"); got < 4 {
+		t.Fatalf("style.css: the match tab headers (breadcrumb, chips, diff) must use --bg-header like the proto table, got %d uses", got)
+	}
+	diffSideWrap := regexp.MustCompile(`\.diff-side \{\r?\n  color: var\(--key\);\r?\n  white-space: normal;\r?\n  overflow-wrap: anywhere;\r?\n\}`)
+	if !diffSideWrap.MatchString(styleCSS) {
+		t.Fatal("style.css: diff param names must wrap, never truncate with ellipsis")
+	}
+	diffValWrap := regexp.MustCompile(`\.diff-incoming,\r?\n\.diff-recorded \{\r?\n  white-space: normal;\r?\n  overflow-wrap: anywhere;\r?\n  min-width: 0;\r?\n\}`)
+	if !diffValWrap.MatchString(styleCSS) {
+		t.Fatal("style.css: diff values must wrap (overflow-wrap: anywhere), never truncate with ellipsis")
+	}
+	if !strings.Contains(styleCSS, ".match-candidate-row") ||
+		!strings.Contains(styleCSS, ".diff-row") ||
+		!strings.Contains(styleCSS, ".diff-header-row") ||
+		!strings.Contains(styleCSS, ".replay-warn-box") ||
+		!strings.Contains(styleCSS, ".replay-breadcrumb") ||
+		!strings.Contains(styleCSS, ".replay-tag-served") ||
+		!strings.Contains(styleCSS, ".match-layout") ||
+		!strings.Contains(styleCSS, ".match-list-col") ||
+		!strings.Contains(styleCSS, ".replay-section-title") ||
+		!strings.Contains(styleCSS, ".replay-badge-hit") ||
+		!strings.Contains(styleCSS, ".replay-badge-miss") {
+		t.Fatal("style.css: the match tab needs candidate rows, diff table, warn box, breadcrumb and badge styles")
+	}
+	if !strings.Contains(styleCSS, ".match-scope-seg") ||
+		!strings.Contains(styleCSS, ".match-scope-btn") ||
+		strings.Contains(styleCSS, ".match-scope-chips") {
+		t.Fatal("style.css: the scope selector must be a segmented control, not standalone chips")
+	}
+	if !strings.Contains(styleCSS, ".match-candidate-row.served") ||
+		!strings.Contains(styleCSS, ".match-candidate-row.consumed") ||
+		!strings.Contains(styleCSS, "flex: 0 0 300px") {
+		t.Fatal("style.css: candidate rows need a state left-border and the 300px rail")
+	}
+	servedBorder := regexp.MustCompile(`\.match-candidate-row\.served \{\r?\n  border-left-color: var\(--green\);\r?\n\}`)
+	if !servedBorder.MatchString(styleCSS) {
+		t.Fatal("style.css: the served row must carry a green left border")
+	}
+	consumedBorder := regexp.MustCompile(`\.match-candidate-row\.consumed \{\r?\n  border-left-color: var\(--orange\);\r?\n\}`)
+	if !consumedBorder.MatchString(styleCSS) {
+		t.Fatal("style.css: the consumed row must carry an amber left border")
+	}
+	if tagBase := regexp.MustCompile(`\.replay-tag \{\r?\n  align-self: flex-start;\r?\n  font-size: var\(--fs-sm\);\r?\n  white-space: nowrap;\r?\n\}`); !tagBase.MatchString(styleCSS) {
+		t.Fatal("style.css: state tags must hug their content (align-self: flex-start), never stretch across the rail")
+	}
+	if urlSmall := regexp.MustCompile(`\.match-candidate-url \{\r?\n  color: var\(--text-dim\);\r?\n  font-size: var\(--fs-sm\);\r?\n  font-family: var\(--font-mono\)`); !urlSmall.MatchString(styleCSS) {
+		t.Fatal("style.css: the pending-row URL line must run at 15px (--fs-sm), smaller than the entry name")
+	}
+	servedPill := regexp.MustCompile(`\.replay-tag-served \{\r?\n  color: var\(--green\);\r?\n  background: var\(--green-bg\);\r?\n  border: 1px solid var\(--green-dark\);\r?\n  border-radius: var\(--radius-md\);\r?\n  padding: var\(--sp-1\) var\(--sp-6\);\r?\n\}`)
+	if !servedPill.MatchString(styleCSS) {
+		t.Fatal("style.css: only the served tag keeps the pill (bg, radius, padding)")
+	}
+	consumedText := regexp.MustCompile(`\.replay-tag-consumed \{\r?\n  color: var\(--orange\);\r?\n\}`)
+	if !consumedText.MatchString(styleCSS) {
+		t.Fatal("style.css: the consumed tag must be plain amber text, no pill")
+	}
+	pendingText := regexp.MustCompile(`\.replay-tag-pending \{\r?\n  color: var\(--text-secondary\);\r?\n\}`)
+	if !pendingText.MatchString(styleCSS) {
+		t.Fatal("style.css: the pending tag must be plain gray text, no pill")
+	}
+	if sharedGray := regexp.MustCompile(`\.replay-tag-consumed,\s*\r?\n\s*\.replay-tag-pending`); sharedGray.MatchString(styleCSS) {
+		t.Fatal("style.css: consumed and pending tags must not share a selector")
+	}
+	if matchStart := strings.Index(styleCSS, ".match-layout"); matchStart >= 0 {
+		matchRegion := styleCSS[matchStart:]
+		if strings.Contains(matchRegion, "font-size: var(--fs-xs)") {
+			t.Fatal("style.css: the match tab must never drop below 15px (--fs-sm); the 14px fs-xs scale is not allowed in the match region")
+		}
+	}
+}
+
+// TestReplayCandidatesEndpoint exercises the unified candidates + diff
+// endpoints: a miss whose exact key was already consumed is selected by
+// default and carries the already-consumed warning, the all-pending scope
+// reflects the pending queue remaining after the event, and the on-demand diff
+// endpoint serves per-entry diffs.
+func TestReplayCandidatesEndpoint(t *testing.T) {
+	s, hist, _ := newReplayServer(t)
+	saveEntry(t, hist, "e1", "GET", "https://x.com/a?id=1")
+	saveEntry(t, hist, "e2", "GET", "https://x.com/a?id=2")
+
+	notify := s.ReplayNotifier()
+	notify(session.ReplayEvent{Seq: 1, RunID: "run1", Method: "GET", URL: "https://x.com/a?id=1", Result: "hit", Status: 200, EntryID: "e1", Consumed: 1, Total: 2})
+	notify(session.ReplayEvent{Seq: 2, RunID: "run1", Method: "GET", URL: "https://x.com/a?id=1", Result: "miss", Status: 404, Unconsumed: []session.UnconsumedEntry{{ID: "e2"}}, TotalPending: 1, Consumed: 1, Total: 2})
+	notify(session.ReplayEvent{Seq: 3, RunID: "run1", Method: "GET", URL: "https://x.com/a?id=2", Result: "hit", Status: 200, EntryID: "e2", Consumed: 2, Total: 2})
+
+	rec := httptest.NewRecorder()
+	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?scope=matching", nil), "run1", 2)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("candidates: expected 200, got %d", rec.Code)
+	}
+	var resp replayCandidatesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Entries) != 2 {
+		t.Fatalf("expected 2 matching candidates, got %d", len(resp.Entries))
+	}
+	if resp.SelectedID != "e1" {
+		t.Fatalf("miss with an already-consumed exact key must select it, got %q", resp.SelectedID)
+	}
+	if resp.Consumed == nil || resp.Consumed.ConsumedBySeq != 1 || resp.Consumed.Entry != 1 {
+		t.Fatalf("expected consumed info for e1 by seq 1, got %+v", resp.Consumed)
+	}
+	if resp.Diff == nil || resp.Diff.DiffCount != 0 || !resp.Diff.HostPath.Match {
+		t.Fatalf("the consumed e1 diff must be all-green, got %+v", resp.Diff)
+	}
+	if resp.Total["pending"] != 1 {
+		t.Fatalf("expected 1 pending at the event's time, got %v", resp.Total)
+	}
+	byID := map[string]replayCandidate{}
+	for _, c := range resp.Entries {
+		byID[c.EntryID] = c
+	}
+	if byID["e1"].Tag != "consumed" || byID["e1"].ConsumedBySeq != 1 {
+		t.Fatalf("e1 must be tagged consumed by seq 1, got %+v", byID["e1"])
+	}
+	if byID["e2"].Tag != "pending" || byID["e2"].DiffCount != 1 {
+		t.Fatalf("e2 must be pending with 1 diff, got %+v", byID["e2"])
+	}
+
+	rec = httptest.NewRecorder()
+	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?scope=all", nil), "run1", 2)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode all: %v", err)
+	}
+	if len(resp.Entries) != 1 || resp.Entries[0].EntryID != "e2" {
+		t.Fatalf("all pending must hold only the unconsumed e2, got %+v", resp.Entries)
+	}
+
+	rec = httptest.NewRecorder()
+	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/3/candidates?scope=matching", nil), "run1", 3)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode hit matching: %v", err)
+	}
+	if resp.SelectedID != "e2" || resp.Entries[0].Tag != "served" {
+		t.Fatalf("the hit must select its served entry first, got selected=%q first=%+v", resp.SelectedID, resp.Entries)
+	}
+	if resp.Total["pending"] != 0 {
+		t.Fatalf("after the last hit nothing remains pending, got %v", resp.Total)
+	}
+
+	rec = httptest.NewRecorder()
+	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/3/candidates?scope=all", nil), "run1", 3)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode hit all: %v", err)
+	}
+	if len(resp.Entries) != 0 {
+		t.Fatalf("all pending must exclude the entry just served by the hit, got %+v", resp.Entries)
+	}
+
+	rec = httptest.NewRecorder()
+	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?scope=matching&q=id%3D2", nil), "run1", 2)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode q: %v", err)
+	}
+	if len(resp.Entries) != 1 || resp.Entries[0].EntryID != "e2" || resp.SelectedID != "e2" {
+		t.Fatalf("q filter must narrow to e2 and select it, got %+v", resp.Entries)
+	}
+
+	rec = httptest.NewRecorder()
+	s.handleReplayCandidateDiff(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates/e1", nil), "run1", 2, "e1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("diff: expected 200, got %d", rec.Code)
+	}
+	var diffResp replayCandidateDiffResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &diffResp); err != nil {
+		t.Fatalf("decode diff: %v", err)
+	}
+	if diffResp.Entry.EntryID != "e1" || diffResp.Diff == nil || diffResp.Diff.DiffCount != 0 {
+		t.Fatalf("e1 diff must be all-green, got %+v", diffResp)
 	}
 }
 

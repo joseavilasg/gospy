@@ -255,46 +255,31 @@ func TestListRequests_FocusWithFilters(t *testing.T) {
 	}
 }
 
-func TestListRequests_ScopedByIds(t *testing.T) {
+// TestListScopeRemoved locks the replay scope removal: the ids list-scope
+// parameter no longer exists end-to-end - /api/requests ignores it and the
+// frontend dropped the Show in list machinery in favor of the Match tab.
+func TestListScopeRemoved(t *testing.T) {
 	s, _, _ := newTestServer(t)
 	a := saveTestEntry(t, s, "a.example.com", "GET")
 	b := saveTestEntry(t, s, "b.example.com", "GET")
-	saveTestEntry(t, s, "c.example.com", "GET") // out of scope
+	saveTestEntry(t, s, "c.example.com", "GET")
 
 	resp := getListResponse(t, s, "/api/requests?ids="+a.ID+","+b.ID)
-	if len(resp.Entries) != 2 {
-		t.Fatalf("entries = %d, want 2", len(resp.Entries))
-	}
-	got := map[string]bool{}
-	for _, e := range resp.Entries {
-		got[e.ID] = true
-	}
-	if !got[a.ID] || !got[b.ID] {
-		t.Fatalf("scoped entries = %v, want %s and %s", got, a.ID, b.ID)
-	}
-	if resp.Total != 2 || resp.VisibleCount != 2 {
-		t.Fatalf("total=%d visible=%d, want 2/2", resp.Total, resp.VisibleCount)
-	}
-}
-
-func TestListRequests_ScopedByIdsIntersectsFilters(t *testing.T) {
-	s, _, _ := newTestServer(t)
-	inScope := saveTestEntry(t, s, "api.example.com", "GET")
-	alsoInScope := saveTestEntry(t, s, "other.com", "POST")
-	saveTestEntry(t, s, "api.example.com", "DELETE") // out of scope
-
-	// Scope is the base set; the host filter narrows it on top.
-	body := `{"filters":{"host":["api.example.com"]},"focusEnabled":false}`
-	req := httptest.NewRequest("PUT", "/api/filters", strings.NewReader(body))
-	w := httptest.NewRecorder()
-	s.handleSaveFilters(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("PUT status = %d, want 200", w.Code)
+	if len(resp.Entries) != 3 {
+		t.Fatalf("the ids list-scope parameter must be ignored; entries = %d, want 3", len(resp.Entries))
 	}
 
-	resp := getListResponse(t, s, "/api/requests?ids="+inScope.ID+","+alsoInScope.ID)
-	if len(resp.Entries) != 1 || resp.Entries[0].ID != inScope.ID {
-		t.Fatalf("expected only scoped+filtered %s, got %+v", inScope.ID, resp.Entries)
+	if strings.Contains(apiJS, "listScope") {
+		t.Fatal("api.js: the ids list-scope parameter is removed from loadRequests")
+	}
+	if strings.Contains(appJS, "setListScope") {
+		t.Fatal("app.js: the list scope handler is removed")
+	}
+	if strings.Contains(renderJS, "renderListScopeBanner") {
+		t.Fatal("render.js: the list scope banner is removed")
+	}
+	if strings.Contains(indexHTML, "listScopeBanner") {
+		t.Fatal("index.html: the list scope banner element is removed")
 	}
 }
 
@@ -640,7 +625,7 @@ func TestListRequests_AgentViewSwitchesActiveProfile(t *testing.T) {
 		t.Fatalf("expected the host-filtered api.example.com entry, got %+v", resp.Entries)
 	}
 
-	// Enable agent preview: response is the agent profile (empty criteria) — full list.
+	// Enable agent preview: response is the agent profile (empty criteria) - full list.
 	req2 := httptest.NewRequest("PUT", "/api/agent/view", strings.NewReader(`{"preview":true}`))
 	w2 := httptest.NewRecorder()
 	s.handleAgentView(w2, req2)

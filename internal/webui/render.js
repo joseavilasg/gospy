@@ -187,6 +187,11 @@ function parseUrlParts(url) {
   }
 }
 
+function shortUrl(url) {
+  const u = parseUrlParts(url);
+  return u ? u.pathname + u.search : url;
+}
+
 export function parseQueryString(url) {
   const u = parseUrlParts(url);
   if (!u) return [];
@@ -389,10 +394,23 @@ export function buildResponseTab(req) {
     `;
 }
 
+let _replayEntryView = null;
+export function setReplayEntryView(view) { _replayEntryView = view; }
+
+function replayBreadcrumbHtml(view) {
+  return `<div class="replay-breadcrumb" data-action="replay-back-event" title="Back to the replay event">
+    <span class="replay-breadcrumb-back">← Back to replay (seq ${view.seq}, Match tab)</span>
+    <span class="replay-breadcrumb-sep">·</span>
+    <span class="replay-breadcrumb-muted">Viewing recorded entry · entry ${view.entry} · read-only</span>
+  </div>`;
+}
+
 export function renderDetail(req, activeTab = 'request') {
   document.body.classList.remove('fullscreen-active');
   document.querySelectorAll('.section-panel.fullscreen-mode').forEach(p => p.classList.remove('fullscreen-mode'));
   const panel = document.getElementById('detailPanel');
+  const replayEntryView = _replayEntryView;
+  _replayEntryView = null;
   const host = req.request.host || '';
   const isIgnored = ignoredHosts.includes(host);
   const isFocused = focusedHosts.includes(host);
@@ -486,6 +504,7 @@ export function renderDetail(req, activeTab = 'request') {
 
   panel.innerHTML = `
         ${actionBanner}
+        ${replayEntryView ? replayBreadcrumbHtml(replayEntryView) : ''}
         ${getReplayMode() ? '' : `
         <div class="detail-toolbar">
             ${ignoreBtn}
@@ -906,18 +925,14 @@ export function openRuleModalFromRequest(entry) {
 function replayEventRow(ev, selected) {
   const sel = selected ? ' selected' : '';
   const icon = ev.result === 'hit' ? '✓' : ev.result === 'miss' ? '✗' : '‼';
-  const status = ev.status != null ? ev.status : '';
   const time = ev.ts ? `<span class="replay-event-time">${new Date(ev.ts).toLocaleTimeString()}</span>` : '';
-  const pair = ev.result === 'hit' && ev.matchedUrl
-    ? `<div class="replay-event-pair${sel}">→ matched <span class="replay-event-pair-url">${escapeHtml(ev.matchedUrl)}</span></div>`
-    : '';
   return `<div class="replay-event replay-event-${ev.result}${sel}" data-action="replay-event-detail" data-run="${escapeHtml(ev.runId)}" data-seq="${ev.seq}" title="${new Date(ev.ts).toLocaleString()}">
             <span class="replay-event-result">${icon}</span>
             <span class="replay-event-method">${escapeHtml(ev.method)}</span>
             <span class="replay-event-url">${escapeHtml(ev.url)}</span>
-            <span class="replay-event-status">${status}</span>
+            <span class="replay-event-seq">seq ${ev.seq}</span>
             ${time}
-        </div>${pair}`;
+        </div>`;
 }
 
 const FEED_PAGE_BUFFER = 5;
@@ -933,23 +948,22 @@ let _onFeedLoadOlder = () => { };
 export function setOnReplayFeedLoadOlder(cb) { _onFeedLoadOlder = cb; }
 
 function feedBlockHeight(ev, heights) {
-  return ev.result === 'hit' && ev.matchedUrl ? heights.main + heights.pair : heights.main;
+  return heights.main;
 }
 
 function feedRowHeights() {
   if (_feedHeights) return _feedHeights;
   const feed = document.getElementById('replayFeed');
-  let main = 31, pair = 23;
+  let main = 31;
   if (feed) {
     const probe = document.createElement('div');
     probe.style.cssText = 'position:absolute;visibility:hidden;left:-9999px;top:0;pointer-events:none';
     feed.appendChild(probe);
-    probe.innerHTML = replayEventRow({ result: 'hit', matchedUrl: 'x', method: 'GET', url: 'x', ts: null });
+    probe.innerHTML = replayEventRow({ result: 'hit', method: 'GET', url: 'x', ts: null, seq: 1 });
     if (probe.children[0]) main = probe.children[0].getBoundingClientRect().height || main;
-    if (probe.children[1]) pair = probe.children[1].getBoundingClientRect().height || pair;
     probe.remove();
   }
-  _feedHeights = { main, pair };
+  _feedHeights = { main };
   return _feedHeights;
 }
 
@@ -1081,7 +1095,7 @@ export function selectReplayFeedEvent(run, seq) {
 export function clearReplayFeedSelection() {
   const feed = document.getElementById('replayFeed');
   if (feed) {
-    const el = feed.querySelector('.replay-event.selected, .replay-event-pair.selected');
+    const el = feed.querySelector('.replay-event.selected');
     if (el) el.classList.remove('selected');
   }
   _feedSelectedRun = null;
@@ -1100,26 +1114,9 @@ export function onReplayFeedScroll() {
   }
 }
 
-export function renderListScopeBanner(scope) {
-  const el = document.getElementById('listScopeBanner');
-  if (!el) return;
-  if (!scope) {
-    el.style.display = 'none';
-    el.innerHTML = '';
-    return;
-  }
-  const time = scope.ts ? new Date(scope.ts).toLocaleTimeString() : '';
-  const line = `${(scope.result || '').toUpperCase()} ${scope.method || ''} ${scope.url || ''}`.trim();
-  const consumed = scope.consumed != null && scope.total != null ? `${scope.consumed}/${scope.total} consumed` : '';
-  el.innerHTML = `<span class="scope-label">Replay scope · pending at event</span>
-        <button class="scope-anchor" data-action="scope-back" data-run="${escapeHtml(scope.run)}" data-seq="${scope.seq}" title="seq ${scope.seq}">${escapeHtml(line)}${time ? ` · ${time}` : ''}</button>
-        ${consumed ? `<span class="scope-count">${consumed}</span>` : ''}
-        <button class="scope-clear" data-action="scope-clear">Clear</button>`;
-  el.style.display = 'flex';
-}
-
 export function renderReplayEventDetail(detail) {
   clearListSelection();
+  _replayEntryView = null;
   const panel = document.getElementById('detailPanel');
   if (!panel || !detail?.event) return;
   const ev = detail.event;
@@ -1127,77 +1124,254 @@ export function renderReplayEventDetail(detail) {
   const headers = req.headers || {};
 
   const icon = ev.result === 'hit' ? '✓' : ev.result === 'miss' ? '✗' : '‼';
-  const statusHtml = ev.status != null
-    ? `<span class="status ${ev.status < 300 ? 'status-2xx' : ev.status < 400 ? 'status-3xx' : ev.status < 500 ? 'status-4xx' : 'status-5xx'}">${ev.status}</span>`
-    : '';
 
-  let bodyHtml = '';
-  if (req.body) {
-    bodyHtml = `<div class="body-viewer-body"><pre>${escapeHtml(req.body)}</pre></div>`;
-  } else if (req.bodyFile) {
-    bodyHtml = `<div class="body-viewer-body"><a class="replay-event-body-link" data-action="replay-body" data-run="${escapeHtml(ev.runId)}" data-seq="${ev.seq}" href="#">Load body (${req.bodySize || ''} bytes)</a></div>`;
-  } else if (req.isBinaryBody) {
-    bodyHtml = `<div class="body-viewer-body"><pre>Binary body — ${req.bodySize || ''} bytes</pre></div>`;
-  }
-
-  let matchedHtml = '';
-  if (ev.result === 'hit') {
-    const m = detail.matchedEntry;
-    if (m) {
-      const mUrl = m.request?.url || m.url || m.host || '';
-      matchedHtml = `<div class="section-panel">
-                <div class="section-header"><span class="section-title">Matched entry (recorded)</span></div>
-                <div class="content-block">
-                    <pre>${escapeHtml(m.method)} ${escapeHtml(mUrl)}</pre>
-                    <button class="btn-active" data-action="goto-replay" data-id="${escapeHtml(m.id)}">Open in list</button>
-                </div>
-            </div>`;
-    } else {
-      matchedHtml = `<div class="section-panel">
-                <div class="section-header"><span class="section-title">Matched entry (recorded)</span></div>
-                <div class="content-block"><span class="replay-event-empty">Entry ${escapeHtml(ev.entryId || '')} not available.</span></div>
-            </div>`;
+  const requestBodyHtml = (() => {
+    if (req.body) return `<pre>${escapeHtml(req.body)}</pre>`;
+    if (req.bodyFile) {
+      if (ev.entryId) {
+        return `<a class="replay-entry-link" data-action="replay-entry-body" data-run="${escapeHtml(ev.runId)}" data-id="${escapeHtml(ev.entryId)}" data-target="request" href="#">Load body (${req.bodySize || ''} bytes)</a>`;
+      }
+      return `<a class="replay-entry-link" data-action="replay-body" data-run="${escapeHtml(ev.runId)}" data-seq="${ev.seq}" href="#">Load body (${req.bodySize || ''} bytes)</a>`;
     }
-  }
-
-  let unconsumedHtml = '';
-  if (ev.unconsumed && ev.unconsumed.length > 0) {
-    unconsumedHtml = `<div class="section-panel">
-            <div class="section-header"><span class="section-title">Entries pending at that time (${ev.totalPending})</span></div>
-            <div class="content-block">
-                <div class="scope-actions">
-                    <span class="scope-hint">Recorded entries still unserved when this request failed to match.</span>
-                    <button class="scope-link" data-action="scope-pending">Show in list</button>
-                </div>
-            </div>
-        </div>`;
-  }
+    if (req.isBinaryBody) return `<pre>Binary body — ${req.bodySize || ''} bytes</pre>`;
+    return '<div class="replay-event-empty">No body</div>';
+  })();
 
   panel.innerHTML = `
-        <div class="detail-header">
-            <div class="detail-title">[${icon} ${escapeHtml(ev.result.toUpperCase())}] ${escapeHtml(ev.method)} ${escapeHtml(ev.url)} ${statusHtml}</div>
-            <div class="detail-subtitle">${escapeHtml(ev.runId)} · seq ${ev.seq} · ${new Date(ev.ts).toLocaleString()}</div>
-        </div>
         <div class="tabs-row">
-            <div class="tabs"><button class="tab active">Incoming request</button></div>
-            <div class="detail-id-group"><span class="detail-id">replay event</span></div>
+            <div class="tabs">
+                <button class="tab" data-action="tab" data-tab="request">Request</button>
+                <button class="tab" data-action="tab" data-tab="response">Response</button>
+                <button class="tab" data-action="tab" data-tab="origin">Origin</button>
+                <button class="tab active" data-action="tab" data-tab="match">Match</button>
+            </div>
+            <div class="detail-id-group"><span class="replay-badge replay-badge-${ev.result || 'exhausted'}">${icon} ${escapeHtml((ev.result || '').toUpperCase())}</span></div>
         </div>
-        <div class="tab-content">
+
+        <div id="tab-request" class="tab-content" style="display:none">
             <div class="section-panel">
-                <div class="section-header"><span class="section-title">Incoming request</span></div>
+                <div class="section-header"><span class="section-title">Request</span></div>
                 <div class="content-block">
-                    <pre>${escapeHtml(ev.method)} ${escapeHtml(req.url || req.host || '')}</pre>
+                    <div class="url-view" data-method="${escapeHtml(ev.method)}" data-url-original="${escapeHtml(ev.url)}" data-url-modified="" data-view-mode="pretty" data-content-mode="original">${renderUrlViewInner(ev.method, ev.url, '', 'pretty', 'original')}</div>
                 </div>
             </div>
             <div class="section-panel">
                 <div class="section-header"><span class="section-title">Headers</span></div>
                 <div class="content-block"><div class="headers-container">${buildHeaderRows(headers)}</div></div>
             </div>
-            ${bodyHtml ? `<div class="section-panel">
+            ${req.body || req.bodyFile || req.isBinaryBody ? `<div class="section-panel">
                 <div class="section-header"><span class="section-title">Body</span></div>
-                <div class="content-block">${bodyHtml}</div>
+                <div class="content-block">${requestBodyHtml}</div>
             </div>` : ''}
-            ${matchedHtml}
-            ${unconsumedHtml}
+        </div>
+
+        <div id="tab-response" class="tab-content" style="display:none">
+            ${buildReplayResponseTab(detail)}
+        </div>
+
+        <div id="tab-origin" class="tab-content" style="display:none">
+            <div class="section-panel">
+                <div class="section-header"><span class="section-title">Origin</span></div>
+                <div class="content-block">
+                    <div class="origin-info">
+                        <div class="origin-row">
+                            <span class="origin-label">Program:</span>
+                            <span class="origin-value" id="originProgram">${escapeHtml(ev.clientProcess || 'Unknown')}</span>
+                        </div>
+                        <div class="origin-row">
+                            <span class="origin-label">PID:</span>
+                            <span class="origin-value" id="originPID">${ev.clientPid || 'N/A'}</span>
+                        </div>
+                        <div class="origin-row">
+                            <span class="origin-label">Path:</span>
+                            <span class="origin-value origin-path" id="originPath" title="${escapeHtml(ev.clientPath || '')}">${escapeHtml(ev.clientPath || 'N/A')}</span>
+                        </div>
+                        <div class="origin-row">
+                            <span class="origin-label">Signed:</span>
+                            <span class="origin-value" id="originSigned">
+                                ${ev.clientPath ? '<span class="origin-status analyzing">Analyzing...</span>' : 'N/A'}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="tab-match" class="tab-content">
+            <div id="replayMatchContainer"><div class="replay-event-empty">Loading candidates…</div></div>
         </div>`;
+}
+
+function buildReplayResponseTab(detail) {
+  const ev = detail.event;
+  const status = ev.status != null ? ev.status : '—';
+  const res = detail.matchedEntry?.response;
+
+  let statusHtml = `<pre>${status}</pre>`;
+  if (ev.result === 'miss') statusHtml = `<pre>${status} — replay miss</pre>`;
+  if (ev.result === 'exhausted') statusHtml = `<pre>${status} — replay exhausted</pre>`;
+
+  let headersHtml;
+  if (ev.result === 'hit' && res) {
+    const resHeaders = res.headers || {};
+    headersHtml = buildHeaderRows(resHeaders) +
+      `<div class="header-row"><span class="header-key">X-Gospy-Replay:</span><span class="header-value">hit</span></div>`;
+  } else {
+    headersHtml = `<div class="header-row"><span class="header-key">X-Gospy-Replay:</span><span class="header-value">${escapeHtml(ev.result)}</span></div>`;
+  }
+
+  let bodyHtml;
+  if (ev.result === 'hit' && res) {
+    if (res.body) bodyHtml = `<pre>${escapeHtml(res.body)}</pre>`;
+    else if (res.bodyFile && ev.entryId) bodyHtml = `<a class="replay-entry-link" data-action="replay-entry-body" data-run="${escapeHtml(ev.runId)}" data-id="${escapeHtml(ev.entryId)}" data-target="response" href="#">Download body (${res.bodySize || ''} bytes)</a>`;
+    else bodyHtml = '<div class="replay-event-empty">Empty body</div>';
+  } else {
+    bodyHtml = `<pre>${escapeHtml(detail.syntheticBody || '')}</pre>`;
+  }
+
+  return `
+        <div class="section-panel">
+            <div class="section-header"><span class="section-title">Status</span></div>
+            <div class="content-block">${statusHtml}</div>
+        </div>
+        <div class="section-panel">
+            <div class="section-header"><span class="section-title">Headers</span></div>
+            <div class="content-block"><div class="headers-container">${headersHtml}</div></div>
+        </div>
+        <div class="section-panel">
+            <div class="section-header"><span class="section-title">Body</span></div>
+            <div class="content-block">${bodyHtml}</div>
+        </div>`;
+}
+
+export function renderReplayMatch(resp, ctx) {
+  const container = document.getElementById('replayMatchContainer');
+  if (!container) return;
+  if (!resp || !resp.entries) {
+    container.innerHTML = '<div class="replay-event-empty">No candidates available for this event.</div>';
+    return;
+  }
+
+  const total = resp.total || {};
+  const result = (ctx && ctx.result) || '';
+  const seq = (ctx && ctx.seq) || 0;
+  const selected = resp.entries.find(c => c.entryId === resp.selectedEntryId);
+  const ignored = (resp.matchConfig && resp.matchConfig.ignore_query_params) || [];
+
+  let title = 'Select a candidate to compare';
+  if (result === 'hit') title = `Matched · seq ${seq} · recorded`;
+  else if (total.matching === 0 && resp.scope === 'all') title = 'No candidate shares this host+path — showing all pending';
+
+  const ignoredNote = ignored.length > 0
+    ? `<span class="replay-config-note" title="ignore_query_params used for this run">ignoring: ${escapeHtml(ignored.join(', '))}</span>`
+    : '';
+
+  const segHtml = `
+    <div class="match-scope-head">
+        <div class="match-scope-seg">
+            <span class="match-scope-btn${resp.scope !== 'all' ? ' active' : ''}" data-action="replay-scope" data-scope="matching">Matching (${total.matching ?? 0})</span>
+            <span class="match-scope-btn${resp.scope === 'all' ? ' active' : ''}" data-action="replay-scope" data-scope="all">All pending (${total.pending ?? 0})</span>
+        </div>
+    </div>`;
+
+  const rowsHtml = resp.entries.map(c => {
+    const rowClass = c.entryId === resp.selectedEntryId ? ' selected' : '';
+    const stateClass = resp.scope !== 'all' && c.tag ? ` ${c.tag}` : '';
+    const secondLine = resp.scope === 'all'
+      ? `<span class="match-candidate-url" title="${escapeHtml(c.url)}">${escapeHtml(shortUrl(c.url))}</span>`
+      : replayCandidateTag(c);
+    return `<div class="match-candidate-row${rowClass}${stateClass}" data-action="replay-candidate" data-entry="${escapeHtml(c.entryId)}" title="${escapeHtml(c.url)}">
+        <span class="match-candidate-name">entry ${c.entry}</span>
+        ${secondLine}
+    </div>`;
+  }).join('');
+
+  const listHtml = `
+    <div class="match-list-col">
+        ${segHtml}
+        <input class="match-search" type="search" data-action="replay-search" placeholder="Search by seq, url..." value="${escapeHtml(resp.q || '')}">
+        <div class="match-candidate-list">${rowsHtml || '<div class="match-empty">No candidates.</div>'}</div>
+    </div>`;
+
+  const consumedHtml = resp.consumed
+    ? `<div class="replay-warn-box">
+        <span class="replay-warn-icon">⚠</span>
+        <p class="replay-warn-text">This key was already consumed by <b>seq ${resp.consumed.consumedBySeq}</b>. Likely a duplicate or out-of-order request — not an ignore_query_params issue.
+        <br><span class="replay-warn-link" data-action="replay-full-entry">View that entry (seq ${resp.consumed.consumedBySeq}) →</span></p>
+    </div>`
+    : '';
+
+  const compareLine = selected
+    ? `<div class="match-compare-line">
+        <span class="match-compare-label">Comparing against entry ${selected.entry} · ${escapeHtml(replayCandidateTagText(selected))}</span>
+        <span class="nav-link" data-action="replay-full-entry">View full entry →</span>
+    </div>`
+    : '';
+
+  const diffHtml = resp.diff
+    ? renderReplayDiff(resp.diff, selected)
+    : '<div class="replay-event-empty">Select a candidate to see its diff.</div>';
+
+  container.innerHTML = `
+        <div class="replay-section-title">${escapeHtml(title)}${ignoredNote}</div>
+        ${consumedHtml}
+        <div class="match-layout">
+            ${listHtml}
+            <div class="match-diff-col">
+                ${compareLine}
+                ${diffHtml}
+            </div>
+        </div>`;
+}
+
+function replayCandidateTagText(c) {
+  if (c.tag === 'served') return '✓ matched';
+  if (c.tag === 'consumed') return `consumed by seq ${c.consumedBySeq}`;
+  if (c.diffCount != null && c.diffCount > 0) return `${c.diffCount} diff${c.diffCount === 1 ? '' : 's'}`;
+  if (c.diffCount != null) return 'exact match';
+  return 'pending';
+}
+
+function replayCandidateTag(c) {
+  let cls = 'replay-tag-pending';
+  if (c.tag === 'served') cls = 'replay-tag-served';
+  else if (c.tag === 'consumed') cls = 'replay-tag-consumed';
+  return `<span class="replay-tag ${cls}">${escapeHtml(replayCandidateTagText(c))}</span>`;
+}
+
+export function renderReplayDiff(diff, selected) {
+  if (!diff) return '<div class="replay-event-empty">No diff available.</div>';
+  const headerCol = selected ? `entry ${selected.entry}` : 'Recorded';
+  const headerRow = `<div class="diff-header-row"><span>Param</span><span>Incoming</span><span>${escapeHtml(headerCol)}</span><span>Status</span></div>`;
+
+  const hp = diff.hostPath || {};
+  const hpClass = hp.match ? 'match' : 'mismatch';
+  const hostPathRow = `<div class="diff-row diff-row-${hpClass}">
+      <span class="diff-side">host+path</span>
+      <span class="diff-incoming" title="${escapeHtml(hp.incoming || '')}">${escapeHtml(hp.incoming || '—')}</span>
+      <span class="diff-recorded" title="${escapeHtml(hp.recorded || '')}">${escapeHtml(hp.recorded || '—')}</span>
+      <span class="diff-status diff-status-${hpClass}">${hp.match ? '✓ match' : '✗ mismatch'}</span>
+  </div>`;
+
+  const paramsHtml = (diff.params || []).map(p => {
+    const cls = p.status === 'match' ? 'match' : p.status === 'ignored' ? 'ignored' : 'mismatch';
+    const incoming = p.incoming != null ? escapeHtml(p.incoming) : null;
+    const recorded = p.recorded != null ? escapeHtml(p.recorded) : null;
+    const cell = (v, c) => v != null
+      ? `<span class="${c}" title="${v}">${v}</span>`
+      : `<span class="${c}"><span class="diff-empty">—</span></span>`;
+    let statusText = '✓ match';
+    if (p.status === 'mismatch') statusText = '✗ mismatch';
+    else if (p.status === 'missing_in_incoming') statusText = 'missing in incoming';
+    else if (p.status === 'missing_in_recorded') statusText = 'missing in recorded';
+    else if (p.status === 'ignored') statusText = 'ignored by config';
+    return `<div class="diff-row diff-row-${cls}">
+        <span class="diff-side">${escapeHtml(p.key)}</span>
+        ${cell(incoming, 'diff-incoming')}
+        ${cell(recorded, 'diff-recorded')}
+        <span class="diff-status diff-status-${cls}">${statusText}</span>
+    </div>`;
+  }).join('');
+
+  return `<div class="diff-table">${headerRow}${hostPathRow}${paramsHtml}</div>`;
 }

@@ -305,6 +305,16 @@ func runReplay(caCert *ca.CA, addr, sessionDir, matchConfig, uiAddr, dataDir str
 	fmt.Printf("Replay server listening on %s\n", addr)
 	fmt.Println("WARNING: All requests are served from recording, no network calls will be made")
 
+	resolver := proxy.NewClientResolver(addr)
+	defer resolver.Stop()
+	srv.SetOriginResolver(func(remoteAddr string) *session.ClientOrigin {
+		pi := resolver.Resolve(remoteAddr)
+		if pi == nil {
+			return nil
+		}
+		return &session.ClientOrigin{Name: pi.Name, Path: pi.Path, PID: pi.PID}
+	})
+
 	if uiAddr != "" {
 		replayRoot := filepath.Join(dataDir, "replay", filepath.Base(sessionDir))
 		srv.SetReplayLogRoot(replayRoot)
@@ -326,7 +336,8 @@ func runReplay(caCert *ca.CA, addr, sessionDir, matchConfig, uiAddr, dataDir str
 		ruleEngine.Load(rulesStore.GetRules())
 		filterStore := webui.NewFilterStore(filepath.Join(uiBase, "filters.json"))
 
-		webSrv := webui.NewServer(uiAddr, hist, ignoreStore, focusStore, rulesStore, ruleEngine, addr, nil, nil, filterStore)
+		sigCache := proxy.NewSignatureCache(filepath.Join(uiBase, "signatures"))
+		webSrv := webui.NewServer(uiAddr, hist, ignoreStore, focusStore, rulesStore, ruleEngine, addr, nil, sigCache, filterStore)
 		webSrv.SetReplayMode(true)
 		webSrv.SetReplayLogDir(replayRoot)
 		srv.SetReplayNotifier(webSrv.ReplayNotifier())

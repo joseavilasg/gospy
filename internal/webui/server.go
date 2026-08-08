@@ -505,18 +505,6 @@ func (s *Server) matchOpts(focusEnabled bool) history.MatchOpts {
 func (s *Server) handleListRequests(w http.ResponseWriter, r *http.Request) {
 	sinceStr := r.URL.Query().Get("since")
 	verStr := r.URL.Query().Get("version")
-	idsStr := r.URL.Query().Get("ids")
-
-	if idsStr != "" {
-		ids := make(map[string]bool)
-		for _, id := range strings.Split(idsStr, ",") {
-			if id != "" {
-				ids[id] = true
-			}
-		}
-		s.writeJSON(w, s.scopedFullList(ids))
-		return
-	}
 
 	if sinceStr != "" && verStr != "" {
 		if t, err := time.Parse(time.RFC3339Nano, sinceStr); err == nil {
@@ -555,41 +543,6 @@ func (s *Server) fullList(offset, limit int) listResponse {
 		Total:        total,
 		VisibleCount: visibleCount,
 		Offset:       offset,
-		Version:      version,
-		Filters:      &filters,
-		FocusEnabled: focusEnabled,
-		AgentPreview: s.filterStore.AgentPreview(),
-		AgentEnabled: s.filterStore.AgentGate(),
-		AgentExposed: s.agentExposed(),
-		Replay:       s.replayInfo(),
-	}
-}
-
-// scopedFullList serves a full list restricted to the given entry IDs - the
-// pending set of a replay event. The scope is a view base like focus: the
-// normal visible-set logic (ignore, filters) applies on top, and the response
-// is always a full list so it never mutates the lastVisible diff ledger.
-func (s *Server) scopedFullList(ids map[string]bool) listResponse {
-	filters, focusEnabled, version := s.filterStore.Snapshot()
-	opts := s.matchOpts(focusEnabled)
-
-	all := s.listSummary()
-	scoped := make([]*history.ListEntry, 0, len(ids))
-	for _, le := range all {
-		if ids[le.ID] {
-			scoped = append(scoped, le)
-		}
-	}
-
-	page, total, visibleCount := history.PageVisibleSet(scoped,
-		func(host string) bool { return s.ignoreStore.Matches(host) },
-		func(le *history.ListEntry) bool { return filters.Matches(le, opts) },
-		nil, 0, len(scoped))
-
-	return listResponse{
-		Entries:      page,
-		Total:        total,
-		VisibleCount: visibleCount,
 		Version:      version,
 		Filters:      &filters,
 		FocusEnabled: focusEnabled,
@@ -2421,14 +2374,25 @@ func (s *Server) handleReplayEventsSub(w http.ResponseWriter, r *http.Request) {
 		s.handleReplayBody(w, r, runID, seq)
 		return
 	}
+	if len(parts) == 3 && parts[2] == "candidates" {
+		s.handleReplayCandidates(w, r, runID, seq)
+		return
+	}
+	if len(parts) == 4 && parts[2] == "candidates" {
+		s.handleReplayCandidateDiff(w, r, runID, seq, parts[3])
+		return
+	}
 	s.handleReplayEventDetail(w, r, runID, seq)
 }
 
 // replayDetailResponse pairs a replay event with the recorded entry it hit (if
-// any), so the frontend can compare the incoming request against the match.
+// any), the synthetic body of a miss/exhausted response, and the match config
+// the run was served under, so the frontend can render the match tab.
 type replayDetailResponse struct {
-	Event        session.ReplayEvent `json:"event"`
-	MatchedEntry *history.Entry      `json:"matchedEntry,omitempty"`
+	Event         session.ReplayEvent  `json:"event"`
+	MatchedEntry  *history.Entry       `json:"matchedEntry,omitempty"`
+	SyntheticBody string               `json:"syntheticBody,omitempty"`
+	MatchConfig   *session.MatchConfig `json:"matchConfig,omitempty"`
 }
 
 func (s *Server) handleReplayEventDetail(w http.ResponseWriter, r *http.Request, runID string, seq int) {
@@ -2448,13 +2412,18 @@ func (s *Server) handleReplayEventDetail(w http.ResponseWriter, r *http.Request,
 		http.NotFound(w, r)
 		return
 	}
-	var matched *history.Entry
+	resp := replayDetailResponse{Event: *ev, MatchConfig: s.runMatchConfig(runID)}
 	if ev.Result == "hit" && ev.EntryID != "" {
 		if e, err := s.hist().Get(ev.EntryID); err == nil {
-			matched = e
+			resp.MatchedEntry = e
 		}
 	}
-	s.writeJSON(w, replayDetailResponse{Event: *ev, MatchedEntry: matched})
+	if ev.Result == "miss" {
+		resp.SyntheticBody = session.MissBody(ev.Method, ev.URL)
+	} else if ev.Result == "exhausted" {
+		resp.SyntheticBody = session.ExhaustedBody()
+	}
+	s.writeJSON(w, resp)
 }
 
 // handleReplayBody serves the stored raw body of a replay event's request.
