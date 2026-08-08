@@ -286,13 +286,23 @@ let _matchState = null;
 let _matchResp = null;
 let _matchEventCtx = null;
 let _matchSearchTimer = null;
+let _matchQueries = {};
+
+function currentMatchQuery() {
+  const input = document.querySelector('.match-search');
+  return input ? input.value : (_matchState && _matchState.q ? _matchState.q : '');
+}
 
 function loadMatchTab(run, seq, scope, q, rowsOnly) {
+  if (!_matchState || _matchState.run !== run || _matchState.seq !== seq) {
+    _matchQueries = {};
+  }
   _matchState = { run, seq, scope, q: q || '' };
   _matchEventCtx = { result: (_lastReplayDetail && _lastReplayDetail.event ? _lastReplayDetail.event.result : '') || '', seq };
   loadReplayCandidates(run, seq, scope, q || '').then(resp => {
     if (scope === 'matching' && resp && resp.total && resp.total.matching === 0 && !(resp.entries && resp.entries.length)) {
       _matchState.scope = 'all';
+      _matchQueries['all'] = q || '';
       loadMatchTab(run, seq, 'all', q || '');
       return;
     }
@@ -307,7 +317,7 @@ function selectMatchCandidate(entryId) {
   const c = _matchResp.entries.find(e => e.entryId === entryId);
   if (!c) return;
   loadReplayCandidateDiff(_matchState.run, _matchState.seq, entryId).then(dr => {
-    const resp = { ..._matchResp, selectedEntryId: entryId, diff: dr && dr.diff ? dr.diff : null };
+    const resp = { ..._matchResp, q: currentMatchQuery(), selectedEntryId: entryId, diff: dr && dr.diff ? dr.diff : null };
     if (c.tag === 'consumed') {
       resp.consumed = { entry: c.entry, consumedBySeq: c.consumedBySeq };
     } else {
@@ -463,7 +473,10 @@ document.getElementById('detailPanel').addEventListener('input', (e) => {
   if (wrap) wrap.querySelector('.match-search-clear')?.classList.toggle('hidden', !e.target.value);
   clearTimeout(_matchSearchTimer);
   _matchSearchTimer = setTimeout(() => {
-    if (_matchState) loadMatchTab(_matchState.run, _matchState.seq, _matchState.scope, e.target.value || '', true);
+    if (_matchState) {
+      _matchQueries[_matchState.scope] = e.target.value || '';
+      loadMatchTab(_matchState.run, _matchState.seq, _matchState.scope, e.target.value || '', true);
+    }
   }, 250);
 });
 
@@ -564,16 +577,25 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
     case 'replay-candidate':
       selectMatchCandidate(btn.dataset.entry);
       break;
-    case 'replay-scope':
-      if (_matchState) loadMatchTab(_matchState.run, _matchState.seq, btn.dataset.scope, '');
+    case 'replay-scope': {
+      if (!_matchState) break;
+      clearTimeout(_matchSearchTimer);
+      const input = document.querySelector('.match-search');
+      if (input) _matchQueries[_matchState.scope] = input.value;
+      const scope = btn.dataset.scope;
+      loadMatchTab(_matchState.run, _matchState.seq, scope, _matchQueries[scope] || '');
       break;
+    }
     case 'replay-search-clear': {
       const wrap = btn.closest('.match-search-wrap');
       const input = wrap?.querySelector('.match-search');
       if (input) {
         input.value = '';
         btn.classList.add('hidden');
-        if (_matchState) loadMatchTab(_matchState.run, _matchState.seq, _matchState.scope, '', true);
+        if (_matchState) {
+          _matchQueries[_matchState.scope] = '';
+          loadMatchTab(_matchState.run, _matchState.seq, _matchState.scope, '', true);
+        }
         input.focus();
       }
       break;

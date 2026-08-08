@@ -920,6 +920,16 @@ func TestReplayMatchTab(t *testing.T) {
 		!strings.Contains(appJS, "input.focus()") {
 		t.Fatal("app.js: the match search needs a always-visible clear button toggled by value and a clear action that reloads with an empty query and refocuses")
 	}
+	if !strings.Contains(appJS, "let _matchQueries = {}") ||
+		!strings.Contains(appJS, "_matchQueries[_matchState.scope] = e.target.value || ''") ||
+		!strings.Contains(appJS, "_matchQueries[_matchState.scope] = input.value") ||
+		!strings.Contains(appJS, "loadMatchTab(_matchState.run, _matchState.seq, scope, _matchQueries[scope] || '')") ||
+		!strings.Contains(appJS, "_matchState.run !== run || _matchState.seq !== seq") ||
+		!strings.Contains(appJS, "_matchQueries[_matchState.scope] = ''") ||
+		!strings.Contains(appJS, "q: currentMatchQuery()") ||
+		strings.Contains(appJS, "btn.dataset.scope, ''") {
+		t.Fatal("app.js: each match scope must keep its own search query (per-scope _matchQueries, reset on event change) and selecting a candidate must keep the live query")
+	}
 }
 
 // TestReplayCandidatesEndpoint exercises the unified candidates + diff
