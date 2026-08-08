@@ -1,6 +1,6 @@
 import { setFilterText, setFocusEnabled, setAgentPreview, setAgentEnabled, setAgentExposed, agentExposed, applyFullList, setLastTimestamp, selectedId, requests, rules, setRules, setSignatureCache, visibleCount, getReplayMode, setReplayMode, setReplayServed, setReplayComplete, markReplayServed } from './state.js';
 import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch, setOnSelectedUpdated, loadMore, setOnReplayUpdate, loadReplayRuns, loadReplayFeed, loadReplayFeedOlder, loadReplayEventDetail, loadReplayCandidates, loadReplayCandidateDiff } from './api.js';
-import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, toggleReplayPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, buildResponseTab, ITEM_HEIGHT, appendReplayFeedEvent, onReplayFeedScroll, setOnReplayFeedLoadOlder, renderReplayEventDetail, renderReplayMatch, selectReplayFeedEvent, setReplayEntryView, renderUrlViewInner } from './render.js';
+import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, toggleReplayPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, buildResponseTab, ITEM_HEIGHT, appendReplayFeedEvent, onReplayFeedScroll, setOnReplayFeedLoadOlder, renderReplayEventDetail, renderReplayMatch, renderMatchCandidates, selectReplayFeedEvent, setReplayEntryView, renderUrlViewInner } from './render.js';
 import { makeResizable } from './resize.js';
 import { initHeader, setHeaderMode } from './header.js';
 import { isBodySearching, cancelBodySearch, invalidateCriteriaSave, syncCriteriaFromServer, restoreBodyFilter, setOnFilterChange, setOnListRefresh, initFilterPopover, openFilterPopover, closeFilterPopover, closeChip, openChip, getFilterChipsData, getMatchMode, setMatchMode, queueCriteriaSave } from './filters.js';
@@ -287,7 +287,7 @@ let _matchResp = null;
 let _matchEventCtx = null;
 let _matchSearchTimer = null;
 
-function loadMatchTab(run, seq, scope, q) {
+function loadMatchTab(run, seq, scope, q, rowsOnly) {
   _matchState = { run, seq, scope, q: q || '' };
   _matchEventCtx = { result: (_lastReplayDetail && _lastReplayDetail.event ? _lastReplayDetail.event.result : '') || '', seq };
   loadReplayCandidates(run, seq, scope, q || '').then(resp => {
@@ -296,8 +296,9 @@ function loadMatchTab(run, seq, scope, q) {
       loadMatchTab(run, seq, 'all', q || '');
       return;
     }
-    _matchResp = resp;
-    renderReplayMatch(resp, _matchEventCtx);
+    _matchResp = { ...resp, q: q || '' };
+    if (rowsOnly) renderMatchCandidates(_matchResp, _matchEventCtx);
+    else renderReplayMatch(_matchResp, _matchEventCtx);
   });
 }
 
@@ -460,7 +461,7 @@ document.getElementById('detailPanel').addEventListener('input', (e) => {
   if (!e.target.dataset || e.target.dataset.action !== 'replay-search') return;
   clearTimeout(_matchSearchTimer);
   _matchSearchTimer = setTimeout(() => {
-    if (_matchState) loadMatchTab(_matchState.run, _matchState.seq, _matchState.scope, e.target.value || '');
+    if (_matchState) loadMatchTab(_matchState.run, _matchState.seq, _matchState.scope, e.target.value || '', true);
   }, 250);
 });
 

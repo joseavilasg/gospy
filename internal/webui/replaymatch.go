@@ -275,9 +275,7 @@ func (s *Server) handleReplayCandidates(w http.ResponseWriter, r *http.Request, 
 	if q != "" {
 		filtered := make([]replayCandidate, 0, len(pool))
 		for _, c := range pool {
-			if strings.Contains(strings.ToLower(c.URL), q) ||
-				strings.Contains(strings.ToLower(c.Method), q) ||
-				strings.Contains(strconv.Itoa(c.Entry), q) {
+			if strings.Contains(candidateSearchText(c), q) {
 				filtered = append(filtered, c)
 			}
 		}
@@ -305,6 +303,38 @@ func (s *Server) handleReplayCandidates(w http.ResponseWriter, r *http.Request, 
 	}
 	resp.MatchConfig = cfg
 	s.writeJSON(w, resp)
+}
+
+// candidateSearchText builds the searchable surface of a candidate - the
+// "entry N" label, method, URL and the state tag as displayed in the match
+// tab - so the query filter matches what the user sees in the list. Lowercased
+// once so a single contains check covers every field.
+func candidateSearchText(c replayCandidate) string {
+	var b strings.Builder
+	b.WriteString("entry ")
+	b.WriteString(strconv.Itoa(c.Entry))
+	b.WriteByte(' ')
+	b.WriteString(c.Method)
+	b.WriteByte(' ')
+	b.WriteString(c.URL)
+	switch c.Tag {
+	case "served":
+		b.WriteString(" matched")
+	case "consumed":
+		b.WriteString(" consumed")
+		if c.ConsumedBySeq > 0 {
+			b.WriteString(" by seq ")
+			b.WriteString(strconv.Itoa(c.ConsumedBySeq))
+		}
+	case "pending":
+		b.WriteString(" pending")
+		if c.DiffCount > 0 {
+			b.WriteString(" diffs")
+		} else {
+			b.WriteString(" exact match")
+		}
+	}
+	return strings.ToLower(b.String())
 }
 
 // handleReplayCandidateDiff serves the diff of one recorded entry against the

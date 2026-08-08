@@ -855,8 +855,8 @@ func TestReplayMatchTab(t *testing.T) {
 	if !consumedBorder.MatchString(styleCSS) {
 		t.Fatal("style.css: the consumed row must carry an amber left border")
 	}
-	if tagBase := regexp.MustCompile(`\.replay-tag \{\r?\n  align-self: flex-start;\r?\n  font-size: var\(--fs-sm\);\r?\n  white-space: nowrap;\r?\n\}`); !tagBase.MatchString(styleCSS) {
-		t.Fatal("style.css: state tags must hug their content (align-self: flex-start), never stretch across the rail")
+	if tagBase := regexp.MustCompile(`\.replay-tag \{\r?\n  align-self: center;\r?\n  font-size: var\(--fs-sm\);\r?\n  white-space: nowrap;\r?\n\}`); !tagBase.MatchString(styleCSS) {
+		t.Fatal("style.css: state tags must hug their content (align-self: center), never stretch across the rail")
 	}
 	if urlSmall := regexp.MustCompile(`\.match-candidate-url \{\r?\n  color: var\(--text-dim\);\r?\n  font-size: var\(--fs-sm\);\r?\n  font-family: var\(--font-mono\)`); !urlSmall.MatchString(styleCSS) {
 		t.Fatal("style.css: the pending-row URL line must run at 15px (--fs-sm), smaller than the entry name")
@@ -889,6 +889,20 @@ func TestReplayMatchTab(t *testing.T) {
 	}
 	if !strings.Contains(appJS, "renderReplayMatch(resp, _matchEventCtx, true)") {
 		t.Fatal("app.js: selecting a candidate must re-render with keepScroll so the list does not jump to the top")
+	}
+	if !strings.Contains(renderJS, "function buildCandidateRows(entries, scope, selectedId)") ||
+		!strings.Contains(renderJS, "function renderMatchCandidates(resp, ctx)") ||
+		!strings.Contains(renderJS, "match-candidate-top") {
+		t.Fatal("render.js: the match tab needs a rows-only candidate renderer (buildCandidateRows/renderMatchCandidates) so search does not rebuild the input and lose its text and focus")
+	}
+	if !strings.Contains(appJS, "renderMatchCandidates(_matchResp, _matchEventCtx)") {
+		t.Fatal("app.js: the search path must re-render only the candidate rows, not the whole match tab")
+	}
+	if !strings.Contains(appJS, "_matchResp = { ...resp, q: q || '' }") {
+		t.Fatal("app.js: the applied query must be echoed into the response so full re-renders keep the search text in the input")
+	}
+	if !strings.Contains(styleCSS, ".match-candidate-top") {
+		t.Fatal("style.css: .match-candidate-top is required for the unified row layout (entry + tag on one line, URL below)")
 	}
 }
 
@@ -979,6 +993,24 @@ func TestReplayCandidatesEndpoint(t *testing.T) {
 	}
 	if len(resp.Entries) != 1 || resp.Entries[0].EntryID != "e2" || resp.SelectedID != "e2" {
 		t.Fatalf("q filter must narrow to e2 and select it, got %+v", resp.Entries)
+	}
+
+	rec = httptest.NewRecorder()
+	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?scope=matching&q=consumed", nil), "run1", 2)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode q=consumed: %v", err)
+	}
+	if len(resp.Entries) != 1 || resp.Entries[0].EntryID != "e1" {
+		t.Fatalf("q=consumed must narrow to the consumed e1, got %+v", resp.Entries)
+	}
+
+	rec = httptest.NewRecorder()
+	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?scope=matching&q=entry%202", nil), "run1", 2)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode q=entry 2: %v", err)
+	}
+	if len(resp.Entries) != 1 || resp.Entries[0].EntryID != "e2" {
+		t.Fatalf("the entry N label must be searchable: q=entry 2 must narrow to e2, got %+v", resp.Entries)
 	}
 
 	rec = httptest.NewRecorder()

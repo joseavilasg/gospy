@@ -3234,6 +3234,14 @@ body.resizing {
   background: var(--bg-active);
 }
 
+.match-candidate-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+
 .match-candidate-name {
   color: var(--text-secondary);
   font-size: var(--fs-base);
@@ -3265,7 +3273,7 @@ body.resizing {
 }
 
 .replay-tag {
-  align-self: flex-start;
+  align-self: center;
   font-size: var(--fs-sm);
   white-space: nowrap;
 }

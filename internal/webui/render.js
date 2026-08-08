@@ -1277,23 +1277,13 @@ export function renderReplayMatch(resp, ctx, keepScroll) {
         </div>
     </div>`;
 
-  const rowsHtml = resp.entries.map(c => {
-    const rowClass = c.entryId === resp.selectedEntryId ? ' selected' : '';
-    const stateClass = resp.scope !== 'all' && c.tag ? ` ${c.tag}` : '';
-    const secondLine = resp.scope === 'all'
-      ? `<span class="match-candidate-url" title="${escapeHtml(c.url)}">${escapeHtml(shortUrl(c.url))}</span>`
-      : replayCandidateTag(c);
-    return `<div class="match-candidate-row${rowClass}${stateClass}" data-action="replay-candidate" data-entry="${escapeHtml(c.entryId)}" title="${escapeHtml(c.url)}">
-        <span class="match-candidate-name">entry ${c.entry}</span>
-        ${secondLine}
-    </div>`;
-  }).join('');
+  const rowsHtml = buildCandidateRows(resp.entries, resp.scope, resp.selectedEntryId);
 
   const listHtml = `
     <div class="match-list-col">
         ${segHtml}
-        <input class="match-search" type="search" data-action="replay-search" placeholder="Search by seq, url..." value="${escapeHtml(resp.q || '')}">
-        <div class="match-candidate-list">${rowsHtml || '<div class="match-empty">No candidates.</div>'}</div>
+        <input class="match-search" type="search" data-action="replay-search" placeholder="Search by entry, url..." value="${escapeHtml(resp.q || '')}">
+        <div class="match-candidate-list">${rowsHtml}</div>
     </div>`;
 
   const consumedHtml = resp.consumed
@@ -1330,6 +1320,35 @@ export function renderReplayMatch(resp, ctx, keepScroll) {
     const newList = container.querySelector('.match-candidate-list');
     if (newList) newList.scrollTop = scrollPos;
   }
+}
+
+function buildCandidateRows(entries, scope, selectedId) {
+  if (!entries || entries.length === 0) return '<div class="match-empty">No candidates.</div>';
+  return entries.map(c => {
+    const rowClass = c.entryId === selectedId ? ' selected' : '';
+    const stateClass = scope !== 'all' && c.tag ? ` ${c.tag}` : '';
+    const tagHtml = scope !== 'all' && c.tag ? replayCandidateTag(c) : '';
+    return `<div class="match-candidate-row${rowClass}${stateClass}" data-action="replay-candidate" data-entry="${escapeHtml(c.entryId)}" title="${escapeHtml(c.url)}">
+        <div class="match-candidate-top">
+            <span class="match-candidate-name">entry ${c.entry}</span>
+            ${tagHtml}
+        </div>
+        <span class="match-candidate-url" title="${escapeHtml(c.url)}">${escapeHtml(shortUrl(c.url))}</span>
+    </div>`;
+  }).join('');
+}
+
+// renderMatchCandidates re-renders only the candidate rows, leaving the search
+// input and scope control untouched - the search path must not rebuild static
+// chrome or the input would lose its text and focus. Falls back to the full
+// render when the list is not mounted yet.
+export function renderMatchCandidates(resp, ctx) {
+  const list = document.querySelector('.match-candidate-list');
+  if (!list) {
+    renderReplayMatch(resp, ctx);
+    return;
+  }
+  list.innerHTML = buildCandidateRows(resp.entries, resp.scope, resp.selectedEntryId);
 }
 
 function replayCandidateTagText(c) {
