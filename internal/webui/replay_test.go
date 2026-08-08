@@ -882,6 +882,14 @@ func TestReplayMatchTab(t *testing.T) {
 			t.Fatal("style.css: the match tab must never drop below 15px (--fs-sm); the 14px fs-xs scale is not allowed in the match region")
 		}
 	}
+	if !strings.Contains(renderJS, "function renderReplayMatch(resp, ctx, keepScroll)") ||
+		!strings.Contains(renderJS, "scrollPos = keepScroll && listEl ? listEl.scrollTop : 0") ||
+		!strings.Contains(renderJS, "newList.scrollTop = scrollPos") {
+		t.Fatal("render.js: renderReplayMatch must preserve the candidate list scroll across selection re-renders (keepScroll)")
+	}
+	if !strings.Contains(appJS, "renderReplayMatch(resp, _matchEventCtx, true)") {
+		t.Fatal("app.js: selecting a candidate must re-render with keepScroll so the list does not jump to the top")
+	}
 }
 
 // TestReplayCandidatesEndpoint exercises the unified candidates + diff

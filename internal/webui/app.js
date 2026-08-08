@@ -312,7 +312,7 @@ function selectMatchCandidate(entryId) {
     } else {
       resp.consumed = null;
     }
-    renderReplayMatch(resp, _matchEventCtx);
+    renderReplayMatch(resp, _matchEventCtx, true);
   });
 }
 

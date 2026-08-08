@@ -1244,13 +1244,16 @@ function buildReplayResponseTab(detail) {
         </div>`;
 }
 
-export function renderReplayMatch(resp, ctx) {
+export function renderReplayMatch(resp, ctx, keepScroll) {
   const container = document.getElementById('replayMatchContainer');
   if (!container) return;
   if (!resp || !resp.entries) {
     container.innerHTML = '<div class="replay-event-empty">No candidates available for this event.</div>';
     return;
   }
+
+  const listEl = container.querySelector('.match-candidate-list');
+  const scrollPos = keepScroll && listEl ? listEl.scrollTop : 0;
 
   const total = resp.total || {};
   const result = (ctx && ctx.result) || '';
@@ -1322,6 +1325,11 @@ export function renderReplayMatch(resp, ctx) {
                 ${diffHtml}
             </div>
         </div>`;
+
+  if (scrollPos > 0) {
+    const newList = container.querySelector('.match-candidate-list');
+    if (newList) newList.scrollTop = scrollPos;
+  }
 }
 
 function replayCandidateTagText(c) {
