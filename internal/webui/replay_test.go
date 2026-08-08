@@ -191,6 +191,25 @@ func TestReplayDetailToolbarGated(t *testing.T) {
 	}
 }
 
+// TestReplayDetailEditActionsGated locks the replay read-only gate around the
+// detail's edit affordances: canEdit (which drives the ✎ Edit kebab items and
+// the body viewer edit kebab) must exclude replay mode in both renderDetail
+// and buildResponseTab, and the header ↩ Revert must hide too - otherwise the
+// read-only recorded-entry view still offers mutations that the server rejects
+// (replayReadOnly 404s them) and the kebab lies about what is possible.
+func TestReplayDetailEditActionsGated(t *testing.T) {
+	render := strings.ReplaceAll(renderJS, "\r\n", "\n")
+	for _, want := range []string{
+		"const canEdit = !isModified && !isMocked && !isDropped && !getReplayMode()",
+		"const canEdit = !isModified && !isMocked && !isDropped && !req?.response?.stream && !getReplayMode()",
+		"reqHasEditedHeaders && !getReplayMode()",
+	} {
+		if !strings.Contains(render, want) {
+			t.Fatalf("render.js: edit affordances must exclude replay mode (missing %q) - the read-only recorded-entry view must not offer mutations that the replayReadOnly guard 404s", want)
+		}
+	}
+}
+
 // TestReplayDetailPanelTopPadding locks the replay-specific top padding of the
 // detail panel. With the action toolbar absent in replay, the panel must fall
 // back to the toolbar's own margin gap (--sp-12) instead of the full panel

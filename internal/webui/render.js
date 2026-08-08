@@ -316,7 +316,7 @@ export function buildResponseTab(req) {
   const isModified = req.appliedAction === 'modify';
   const isDropped = req.appliedAction === 'drop';
   const isMocked = req.appliedAction === 'mock' || req.appliedAction === 'response_mock';
-  const canEdit = !isModified && !isMocked && !isDropped && !req?.response?.stream;
+  const canEdit = !isModified && !isMocked && !isDropped && !req?.response?.stream && !getReplayMode();
 
   const serverRespBody = req.serverResponse ? (req.serverResponse.body || '') : '';
   const serverRespHeaders = req.serverResponse ? (req.serverResponse.headers || {}) : {};
@@ -464,7 +464,7 @@ export function renderDetail(req, activeTab = 'request') {
   const serverReqBody = req.serverRequest ? (req.serverRequest.body || '') : '';
   const serverReqContentType = req.serverRequest?.headers?.['content-type']?.[0] || req.serverRequest?.headers?.['Content-Type']?.[0] || '';
 
-  const canEdit = !isModified && !isMocked && !isDropped;
+  const canEdit = !isModified && !isMocked && !isDropped && !getReplayMode();
 
   const reqBodyFile = req.request.bodyFile || '';
   const reqBodySize = req.request.bodySize || 0;
@@ -553,7 +553,7 @@ export function renderDetail(req, activeTab = 'request') {
                         <div class="kebab-menu">
                             <div class="menu-item" data-action="copy-headers" data-target="request">⧉ Copy</div>
                             ${canEdit ? `<div class="menu-item" data-action="edit-headers">✎ Edit</div>` : ''}
-                            ${reqHasEditedHeaders ? `<div class="menu-item" data-action="revert-headers">↩ Revert</div>` : ''}
+                            ${reqHasEditedHeaders && !getReplayMode() ? `<div class="menu-item" data-action="revert-headers">↩ Revert</div>` : ''}
                         </div>
                     </div>
                 </div>
