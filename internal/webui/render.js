@@ -1292,8 +1292,8 @@ export function renderReplayMatch(resp, ctx, keepScroll) {
   const consumedHtml = resp.consumed
     ? `<div class="replay-warn-box">
         <span class="replay-warn-icon">⚠</span>
-        <p class="replay-warn-text">This key was already consumed by <b>seq ${resp.consumed.consumedBySeq}</b>. Likely a duplicate or out-of-order request — not an ignore_query_params issue.
-        <br><span class="replay-warn-link" data-action="replay-full-entry">View that entry (seq ${resp.consumed.consumedBySeq}) →</span></p>
+        <p class="replay-warn-text">The entry ${resp.consumed.entry} was already consumed by <b>seq ${resp.consumed.consumedBySeq}</b>. Likely a duplicate or out-of-order request — not an ignore_query_params issue.
+        <br><span class="replay-warn-link" data-action="replay-warn-entry">View that entry (seq ${resp.consumed.consumedBySeq}) →</span></p>
     </div>`
     : '';
 

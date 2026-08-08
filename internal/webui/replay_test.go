@@ -797,7 +797,7 @@ func TestReplayMatchTab(t *testing.T) {
 		!strings.Contains(renderJS, "diff-empty") {
 		t.Fatal("render.js: missing diff values must render a bare diff-empty placeholder, never HTML inside the title attribute")
 	}
-	for _, en := range []string{"Select a candidate to compare", "No candidate shares this host+path", "This key was already consumed by", "out-of-order request", "Comparing against entry", "Select a candidate to see its diff"} {
+	for _, en := range []string{"Select a candidate to compare", "No candidate shares this host+path", "The entry ${resp.consumed.entry} was already consumed by", "out-of-order request", "Comparing against entry", "Select a candidate to see its diff"} {
 		if !strings.Contains(renderJS, en) {
 			t.Fatalf("render.js: the match tab text must be English, missing %q", en)
 		}
@@ -930,6 +930,19 @@ func TestReplayMatchTab(t *testing.T) {
 		strings.Contains(appJS, "btn.dataset.scope, ''") {
 		t.Fatal("app.js: each match scope must keep its own search query (per-scope _matchQueries, reset on event change) and selecting a candidate must keep the live query")
 	}
+
+	if strings.Contains(appJS, "resp.consumed") {
+		t.Fatal("app.js: the consumed warning must be event-level - the selection path must not re-derive it from the clicked row (that toggles the banner and shifts the layout)")
+	}
+	if !strings.Contains(renderJS, `data-action="replay-warn-entry"`) || !strings.Contains(renderJS, "View that entry (seq ${resp.consumed.consumedBySeq})") {
+		t.Fatal("render.js: the consumed banner must link to the consumed entry (replay-warn-entry), not to the selection")
+	}
+	if !strings.Contains(appJS, "case 'replay-warn-entry'") || !strings.Contains(appJS, "const ci = _matchResp && _matchResp.consumed") {
+		t.Fatal("app.js: replay-warn-entry must open the consumed entry's full entry, not the selected candidate")
+	}
+	if !strings.Contains(styleCSS, ".replay-warn-link") {
+		t.Fatal("style.css: the .replay-warn-link rule must style the banner's View that entry link")
+	}
 }
 
 // TestReplayCandidatesEndpoint exercises the unified candidates + diff
@@ -984,6 +997,7 @@ func TestReplayCandidatesEndpoint(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?scope=all", nil), "run1", 2)
+	resp = replayCandidatesResponse{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode all: %v", err)
 	}
@@ -993,6 +1007,7 @@ func TestReplayCandidatesEndpoint(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/3/candidates?scope=matching", nil), "run1", 3)
+	resp = replayCandidatesResponse{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode hit matching: %v", err)
 	}
@@ -1002,9 +1017,13 @@ func TestReplayCandidatesEndpoint(t *testing.T) {
 	if resp.Total["pending"] != 0 {
 		t.Fatalf("after the last hit nothing remains pending, got %v", resp.Total)
 	}
+	if resp.Consumed != nil {
+		t.Fatalf("a hit must never carry the already-consumed warning even with a consumed sibling (e1) in its pool, got %+v", resp.Consumed)
+	}
 
 	rec = httptest.NewRecorder()
 	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/3/candidates?scope=all", nil), "run1", 3)
+	resp = replayCandidatesResponse{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode hit all: %v", err)
 	}
@@ -1014,15 +1033,20 @@ func TestReplayCandidatesEndpoint(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?scope=matching&q=id%3D2", nil), "run1", 2)
+	resp = replayCandidatesResponse{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode q: %v", err)
 	}
 	if len(resp.Entries) != 1 || resp.Entries[0].EntryID != "e2" || resp.SelectedID != "e2" {
 		t.Fatalf("q filter must narrow to e2 and select it, got %+v", resp.Entries)
 	}
+	if resp.Consumed == nil || resp.Consumed.EntryID != "e1" {
+		t.Fatalf("the consumed warning is event-level: it must survive a q filter that removes the consumed row, got %+v", resp.Consumed)
+	}
 
 	rec = httptest.NewRecorder()
 	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?scope=matching&q=consumed", nil), "run1", 2)
+	resp = replayCandidatesResponse{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode q=consumed: %v", err)
 	}
@@ -1032,6 +1056,7 @@ func TestReplayCandidatesEndpoint(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?scope=matching&q=entry%202", nil), "run1", 2)
+	resp = replayCandidatesResponse{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode q=entry 2: %v", err)
 	}
@@ -1041,6 +1066,7 @@ func TestReplayCandidatesEndpoint(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?scope=matching&q=2", nil), "run1", 2)
+	resp = replayCandidatesResponse{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode q=2: %v", err)
 	}
@@ -1050,6 +1076,7 @@ func TestReplayCandidatesEndpoint(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?scope=matching&q=9", nil), "run1", 2)
+	resp = replayCandidatesResponse{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode q=9: %v", err)
 	}

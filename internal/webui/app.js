@@ -314,15 +314,9 @@ function loadMatchTab(run, seq, scope, q, rowsOnly) {
 
 function selectMatchCandidate(entryId) {
   if (!_matchResp || !_matchState) return;
-  const c = _matchResp.entries.find(e => e.entryId === entryId);
-  if (!c) return;
+  if (!_matchResp.entries.some(e => e.entryId === entryId)) return;
   loadReplayCandidateDiff(_matchState.run, _matchState.seq, entryId).then(dr => {
     const resp = { ..._matchResp, q: currentMatchQuery(), selectedEntryId: entryId, diff: dr && dr.diff ? dr.diff : null };
-    if (c.tag === 'consumed') {
-      resp.consumed = { entry: c.entry, consumedBySeq: c.consumedBySeq };
-    } else {
-      resp.consumed = null;
-    }
     renderReplayMatch(resp, _matchEventCtx, true);
   });
 }
@@ -562,6 +556,14 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
       if (c && _matchState) {
         setReplayEntryView({ seq: _matchState.seq, entry: c.entry });
         selectRequest(c.entryId);
+      }
+      break;
+    }
+    case 'replay-warn-entry': {
+      const ci = _matchResp && _matchResp.consumed;
+      if (ci && _matchState) {
+        setReplayEntryView({ seq: _matchState.seq, entry: ci.entry });
+        selectRequest(ci.entryId);
       }
       break;
     }

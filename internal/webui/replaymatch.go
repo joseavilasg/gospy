@@ -203,6 +203,20 @@ func (s *Server) buildReplayCandidates(ev *session.ReplayEvent, events []session
 	return matching, allPending
 }
 
+// consumedExactCandidate returns the pool entry whose match key equals the
+// incoming request exactly and was already consumed by an earlier event, or
+// the zero candidate when there is none. It is the event-level diagnosis for a
+// miss: the key that should have matched was taken by a prior request.
+func consumedExactCandidate(ev *session.ReplayEvent, pool []replayCandidate, cfg *session.MatchConfig) replayCandidate {
+	incomingKey := session.MatchKey(ev.Method, ev.URL, cfg)
+	for _, c := range pool {
+		if c.Tag == "consumed" && session.MatchKey(c.Method, c.URL, cfg) == incomingKey {
+			return c
+		}
+	}
+	return replayCandidate{}
+}
+
 // selectReplayCandidate picks the default candidate for an event: the served
 // entry on a hit, else the consumed-before entry with the exact same match key
 // (the already-consumed diagnosis: its key matches the incoming exactly but a
@@ -215,11 +229,8 @@ func selectReplayCandidate(ev *session.ReplayEvent, pool []replayCandidate, cfg 
 			return c
 		}
 	}
-	incomingKey := session.MatchKey(ev.Method, ev.URL, cfg)
-	for _, c := range pool {
-		if c.Tag == "consumed" && session.MatchKey(c.Method, c.URL, cfg) == incomingKey {
-			return c
-		}
+	if c := consumedExactCandidate(ev, pool, cfg); c.EntryID != "" {
+		return c
 	}
 	best := -1
 	bestDiff := 1 << 30
@@ -244,9 +255,10 @@ func selectReplayCandidate(ev *session.ReplayEvent, pool []replayCandidate, cfg 
 // handleReplayCandidates serves the unified candidate list of a replay event:
 // scope=matching (entries sharing host+path, diff-ranked) or scope=all (the
 // pending queue remaining after the event), with an optional q substring filter. The
-// response carries the default selection, its diff and the consumed info that
-// drives the already-consumed warning when the selected entry was consumed by
-// an earlier event.
+// response carries the default selection, its diff, and — only when the event
+// itself is a miss whose exact match key was already consumed — the consumed
+// info that drives the already-consumed warning (an event property, not tied
+// to the selected row).
 func (s *Server) handleReplayCandidates(w http.ResponseWriter, r *http.Request, runID string, seq int) {
 	events, err := s.replayEventsFor(runID)
 	if err != nil {
@@ -287,12 +299,20 @@ func (s *Server) handleReplayCandidates(w http.ResponseWriter, r *http.Request, 
 	if selected.EntryID != "" {
 		resp.SelectedID = selected.EntryID
 		resp.Diff = session.DiffURL(ev.URL, selected.URL, cfg)
-		if ci, ok := consumed[selected.EntryID]; ok {
-			resp.Consumed = &replayConsumedInfo{
-				EntryID:       ci.EntryID,
-				Entry:         selected.Entry,
-				ConsumedBySeq: ci.ConsumedBySeq,
-				ConsumedAt:    ci.ConsumedAt,
+	}
+	// The already-consumed warning diagnoses the event, not the selection: it
+	// appears only when a miss failed because its exact match key was consumed
+	// by an earlier request. Hits never carry it, no matter which candidate is
+	// inspected, and its presence never changes with the selected row.
+	if ev.Result == "miss" {
+		if c := consumedExactCandidate(ev, matching, cfg); c.EntryID != "" {
+			if ci, ok := consumed[c.EntryID]; ok {
+				resp.Consumed = &replayConsumedInfo{
+					EntryID:       ci.EntryID,
+					Entry:         c.Entry,
+					ConsumedBySeq: ci.ConsumedBySeq,
+					ConsumedAt:    ci.ConsumedAt,
+				}
 			}
 		}
 	}
