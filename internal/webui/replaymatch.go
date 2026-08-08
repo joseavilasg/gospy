@@ -2,6 +2,7 @@ package webui
 
 import (
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -273,13 +274,7 @@ func (s *Server) handleReplayCandidates(w http.ResponseWriter, r *http.Request, 
 		pool = allPending
 	}
 	if q != "" {
-		filtered := make([]replayCandidate, 0, len(pool))
-		for _, c := range pool {
-			if strings.Contains(candidateSearchText(c), q) {
-				filtered = append(filtered, c)
-			}
-		}
-		pool = filtered
+		pool = filterReplayCandidates(pool, q)
 	}
 
 	selected := selectReplayCandidate(ev, pool, cfg)
@@ -305,6 +300,53 @@ func (s *Server) handleReplayCandidates(w http.ResponseWriter, r *http.Request, 
 	s.writeJSON(w, resp)
 }
 
+// filterReplayCandidates applies the match search query to a candidate pool.
+// A pure numeric query matches the entry number exactly first; when no entry
+// carries that number it falls back to the substring search over the visible
+// surface, so "19" targets entry 19 while "5000" can still find media_5000.
+func filterReplayCandidates(pool []replayCandidate, q string) []replayCandidate {
+	if q == "" {
+		return pool
+	}
+	q = strings.ToLower(q)
+	if n, err := strconv.Atoi(q); err == nil {
+		exact := make([]replayCandidate, 0, len(pool))
+		for _, c := range pool {
+			if c.Entry == n {
+				exact = append(exact, c)
+			}
+		}
+		if len(exact) > 0 {
+			return exact
+		}
+	}
+	out := make([]replayCandidate, 0, len(pool))
+	for _, c := range pool {
+		if strings.Contains(candidateSearchText(c), q) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// searchURL returns the path+query of a recorded URL, the same fragment the
+// match tab renders in its candidate rows (scheme and host are never shown), so
+// the search surface matches what the user can actually see. Mirrors the
+// frontend shortUrl() prefixing rules for scheme-less values.
+func searchURL(raw string) string {
+	candidate := raw
+	if strings.HasPrefix(raw, "//") {
+		candidate = "http:" + raw
+	} else if !strings.Contains(raw, "://") {
+		candidate = "http://" + raw
+	}
+	u, err := url.Parse(candidate)
+	if err != nil {
+		return raw
+	}
+	return u.RequestURI()
+}
+
 // candidateSearchText builds the searchable surface of a candidate - the
 // "entry N" label, method, URL and the state tag as displayed in the match
 // tab - so the query filter matches what the user sees in the list. Lowercased
@@ -316,7 +358,7 @@ func candidateSearchText(c replayCandidate) string {
 	b.WriteByte(' ')
 	b.WriteString(c.Method)
 	b.WriteByte(' ')
-	b.WriteString(c.URL)
+	b.WriteString(searchURL(c.URL))
 	switch c.Tag {
 	case "served":
 		b.WriteString(" matched")
