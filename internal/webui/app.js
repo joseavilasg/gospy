@@ -459,6 +459,8 @@ document.getElementById('requestList').addEventListener('click', (e) => {
 
 document.getElementById('detailPanel').addEventListener('input', (e) => {
   if (!e.target.dataset || e.target.dataset.action !== 'replay-search') return;
+  const wrap = e.target.closest('.match-search-wrap');
+  if (wrap) wrap.querySelector('.match-search-clear')?.classList.toggle('hidden', !e.target.value);
   clearTimeout(_matchSearchTimer);
   _matchSearchTimer = setTimeout(() => {
     if (_matchState) loadMatchTab(_matchState.run, _matchState.seq, _matchState.scope, e.target.value || '', true);
@@ -565,6 +567,17 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
     case 'replay-scope':
       if (_matchState) loadMatchTab(_matchState.run, _matchState.seq, btn.dataset.scope, '');
       break;
+    case 'replay-search-clear': {
+      const wrap = btn.closest('.match-search-wrap');
+      const input = wrap?.querySelector('.match-search');
+      if (input) {
+        input.value = '';
+        btn.classList.add('hidden');
+        if (_matchState) loadMatchTab(_matchState.run, _matchState.seq, _matchState.scope, '', true);
+        input.focus();
+      }
+      break;
+    }
     case 'copy-id': {
       const idSpan = btn.closest('.detail-id-group')?.querySelector('.detail-id');
       if (idSpan) {

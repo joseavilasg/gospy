@@ -1282,7 +1282,10 @@ export function renderReplayMatch(resp, ctx, keepScroll) {
   const listHtml = `
     <div class="match-list-col">
         ${segHtml}
-        <input class="match-search" type="search" data-action="replay-search" placeholder="Search by entry, url..." value="${escapeHtml(resp.q || '')}">
+        <div class="match-search-wrap">
+            <input class="match-search" type="search" data-action="replay-search" placeholder="Search by entry, url..." value="${escapeHtml(resp.q || '')}">
+            <button class="match-search-clear${resp.q ? '' : ' hidden'}" data-action="replay-search-clear" title="Clear search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+        </div>
         <div class="match-candidate-list">${rowsHtml}</div>
     </div>`;
 

@@ -904,6 +904,22 @@ func TestReplayMatchTab(t *testing.T) {
 	if !strings.Contains(styleCSS, ".match-candidate-top") {
 		t.Fatal("style.css: .match-candidate-top is required for the unified row layout (entry + tag on one line, URL below)")
 	}
+	if !strings.Contains(renderJS, "match-search-wrap") ||
+		!strings.Contains(renderJS, "match-search-clear") ||
+		!strings.Contains(renderJS, "match-search-clear${resp.q ? '' : ' hidden'}") ||
+		!strings.Contains(renderJS, "M18 6 6 18") {
+		t.Fatal("render.js: the match search needs a custom clear button (always present, lucide x icon) toggled by the query")
+	}
+	if !strings.Contains(styleCSS, ".match-search::-webkit-search-cancel-button") ||
+		!strings.Contains(styleCSS, ".match-search-clear.hidden") ||
+		!strings.Contains(styleCSS, "padding: var(--sp-4) var(--sp-20) var(--sp-4) var(--sp-8);") {
+		t.Fatal("style.css: the match search needs the native clear button hidden and a custom one with room to the right (sp-20) so long text does not run into the x")
+	}
+	if !strings.Contains(appJS, "classList.toggle('hidden', !e.target.value)") ||
+		!strings.Contains(appJS, "case 'replay-search-clear'") ||
+		!strings.Contains(appJS, "input.focus()") {
+		t.Fatal("app.js: the match search needs a always-visible clear button toggled by value and a clear action that reloads with an empty query and refocuses")
+	}
 }
 
 // TestReplayCandidatesEndpoint exercises the unified candidates + diff
