@@ -131,6 +131,12 @@ func (s *Server) buildReplayCandidates(ev *session.ReplayEvent, events []session
 	refs := s.sessionEntryRefs()
 	consumed := consumedBefore(events, ev.Seq)
 
+	// Guarantee both lists are non-nil so empty scopes serialize as
+	// "entries":[], never null - a null entries blanks the whole match tab
+	// on the frontend (it branches on the entries key).
+	matching = make([]replayCandidate, 0)
+	allPending = make([]replayCandidate, 0)
+
 	incomingHP := session.HostPathKey(ev.URL, cfg)
 
 	for _, r := range refs {
@@ -255,8 +261,8 @@ func selectReplayCandidate(ev *session.ReplayEvent, pool []replayCandidate, cfg 
 // handleReplayCandidates serves the unified candidate list of a replay event:
 // scope=matching (entries sharing host+path, diff-ranked) or scope=all (the
 // pending queue remaining after the event), with an optional q substring filter. The
-// response carries the default selection, its diff, and — only when the event
-// itself is a miss whose exact match key was already consumed — the consumed
+// response carries the default selection, its diff, and - only when the event
+// itself is a miss whose exact match key was already consumed - the consumed
 // info that drives the already-consumed warning (an event property, not tied
 // to the selected row).
 func (s *Server) handleReplayCandidates(w http.ResponseWriter, r *http.Request, runID string, seq int) {

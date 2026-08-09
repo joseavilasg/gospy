@@ -1247,18 +1247,19 @@ function buildReplayResponseTab(detail) {
 export function renderReplayMatch(resp, ctx, keepScroll) {
   const container = document.getElementById('replayMatchContainer');
   if (!container) return;
-  if (!resp || !resp.entries) {
+  if (!resp) {
     container.innerHTML = '<div class="replay-event-empty">No candidates available for this event.</div>';
     return;
   }
 
+  const entries = resp.entries || [];
   const listEl = container.querySelector('.match-candidate-list');
   const scrollPos = keepScroll && listEl ? listEl.scrollTop : 0;
 
   const total = resp.total || {};
   const result = (ctx && ctx.result) || '';
   const seq = (ctx && ctx.seq) || 0;
-  const selected = resp.entries.find(c => c.entryId === resp.selectedEntryId);
+  const selected = entries.find(c => c.entryId === resp.selectedEntryId);
   const ignored = (resp.matchConfig && resp.matchConfig.ignore_query_params) || [];
 
   let title = 'Select a candidate to compare';
@@ -1277,7 +1278,7 @@ export function renderReplayMatch(resp, ctx, keepScroll) {
         </div>
     </div>`;
 
-  const rowsHtml = buildCandidateRows(resp.entries, resp.scope, resp.selectedEntryId);
+  const rowsHtml = buildCandidateRows(entries, resp.scope, resp.selectedEntryId);
 
   const listHtml = `
     <div class="match-list-col">

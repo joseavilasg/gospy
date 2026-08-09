@@ -941,6 +941,9 @@ func TestReplayMatchTab(t *testing.T) {
 		!strings.Contains(renderJS, "match-candidate-top") {
 		t.Fatal("render.js: the match tab needs a rows-only candidate renderer (buildCandidateRows/renderMatchCandidates) so search does not rebuild the input and lose its text and focus")
 	}
+	if !strings.Contains(renderJS, "const entries = resp.entries || []") || strings.Contains(renderJS, "!resp.entries") {
+		t.Fatal("render.js: an empty candidate scope (entries null/absent) must render the full match tab chrome with an empty list; only a failed request (!resp) may show the 'No candidates available' fallback")
+	}
 	if !strings.Contains(appJS, "renderMatchCandidates(_matchResp, _matchEventCtx)") {
 		t.Fatal("app.js: the search path must re-render only the candidate rows, not the whole match tab")
 	}
@@ -1075,6 +1078,14 @@ func TestReplayCandidatesEndpoint(t *testing.T) {
 	}
 	if len(resp.Entries) != 0 {
 		t.Fatalf("all pending must exclude the entry just served by the hit, got %+v", resp.Entries)
+	}
+	// The JSON shape is the contract, not the decoded struct: a nil slice
+	// unmarshals to len 0 too, but serializes as "entries":null, which blanks
+	// the whole match tab on the frontend (it branches on the entries key).
+	// An empty scope must always emit a real array.
+	rawAll := rec.Body.String()
+	if !strings.Contains(rawAll, `"entries":[]`) || strings.Contains(rawAll, `"entries":null`) {
+		t.Fatalf("an empty candidate scope must serialize entries as [] (never null): %s", rawAll)
 	}
 
 	rec = httptest.NewRecorder()
