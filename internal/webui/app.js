@@ -139,7 +139,7 @@ initHeader('headerActions', [
   {
     id: 'replayChip',
     hiddenIn: ['normal'],
-    html: '<button class="btn replay-chip" id="replayChip" title="Replay activity"><span class="replay-chip-label">REPLAY</span> <span class="badge" id="replayChipProgress">0/0</span><span class="replay-chip-exhausted" id="replayChipExhausted" style="display:none">EXHAUSTED</span></button>',
+    html: '<button class="btn replay-chip" id="replayChip" title="Replay activity (Ctrl+J)"><span class="replay-chip-label">REPLAY</span> <span class="badge" id="replayChipProgress">0/0</span><span class="replay-chip-exhausted" id="replayChipExhausted" style="display:none">EXHAUSTED</span></button>',
     events: { click: replayChipClick },
   },
 ]);
@@ -1614,6 +1614,18 @@ document.addEventListener('click', (e) => {
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closeFilterPopover();
+
+  if (e.repeat || !e.ctrlKey || e.shiftKey || e.altKey) return;
+  if (e.target.closest && e.target.closest('.monaco-editor')) return;
+  const k = e.key.toLowerCase();
+  if (k === 'b') {
+    e.preventDefault();
+    document.getElementById('toggleListBtn')?.click();
+  } else if (k === 'j') {
+    if (!document.getElementById('replayChip')) return;
+    e.preventDefault();
+    replayChipClick();
+  }
 });
 
 renderFilterChips();

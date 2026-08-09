@@ -210,6 +210,33 @@ func TestReplayDetailEditActionsGated(t *testing.T) {
 	}
 }
 
+// TestReplayKeyboardShortcuts locks the Ctrl+B / Ctrl+J document shortcuts.
+// Ctrl+B toggles the request list by reusing the exact toggleListBtn click
+// handler (toggle + active class + localStorage persistence), Ctrl+J toggles
+// the replay panel via the same replayChipClick the chip uses - but only when
+// the chip exists (replay mode): outside replay the shortcut returns without
+// preventDefault, so the browser keeps Ctrl+J as Downloads. The handler must
+// skip auto-repeat and Monaco editors (the rule modal owns its own keys).
+func TestReplayKeyboardShortcuts(t *testing.T) {
+	app := strings.ReplaceAll(appJS, "\r\n", "\n")
+	for _, want := range []string{
+		"document.getElementById('toggleListBtn')?.click()",
+		"if (!document.getElementById('replayChip')) return;",
+		"replayChipClick()",
+		"e.key.toLowerCase()",
+		"e.repeat",
+		"closest('.monaco-editor')",
+		"Replay activity (Ctrl+J)",
+	} {
+		if !strings.Contains(app, want) {
+			t.Fatalf("app.js: keyboard shortcuts lost %q - Ctrl+B must toggle the request list and Ctrl+J the replay panel, with the replay shortcut returning early (no preventDefault) when the replay chip is absent so browser Ctrl+J keeps opening Downloads", want)
+		}
+	}
+	if !strings.Contains(indexHTML, "Toggle request list (Ctrl+B)") {
+		t.Fatal("index.html: the toggleListBtn title must advertise the Ctrl+B shortcut")
+	}
+}
+
 // TestReplayDetailPanelTopPadding locks the replay-specific top padding of the
 // detail panel. With the action toolbar absent in replay, the panel must fall
 // back to the toolbar's own margin gap (--sp-12) instead of the full panel
