@@ -1,6 +1,7 @@
-import { setFilterText, setFocusEnabled, setAgentPreview, setAgentEnabled, setAgentExposed, agentExposed, applyFullList, setLastTimestamp, selectedId, requests, rules, setRules, setSignatureCache, visibleCount, getReplayMode, setReplayMode, setReplayServed, setReplayComplete, markReplayServed } from './state.js';
+import { setFilterText, setFocusEnabled, setAgentPreview, setAgentEnabled, setAgentExposed, agentExposed, applyFullList, setLastTimestamp, selectedId, setSelectedId, requests, rules, setRules, setSignatureCache, visibleCount, getReplayMode, setReplayMode, setReplayServed, setReplayComplete, markReplayServed } from './state.js';
 import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch, setOnSelectedUpdated, loadMore, setOnReplayUpdate, loadReplayRuns, loadReplayFeed, loadReplayFeedOlder, loadReplayEventDetail, loadReplayCandidates, loadReplayCandidateDiff } from './api.js';
-import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, toggleReplayPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, buildResponseTab, ITEM_HEIGHT, appendReplayFeedEvent, onReplayFeedScroll, setOnReplayFeedLoadOlder, renderReplayEventDetail, renderReplayMatch, renderMatchCandidates, selectReplayFeedEvent, setReplayEntryView, renderUrlViewInner } from './render.js';
+import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, toggleReplayPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, buildResponseTab, ITEM_HEIGHT, appendReplayFeedEvent, onReplayFeedScroll, setOnReplayFeedLoadOlder, renderReplayEventDetail, renderReplayMatch, renderMatchCandidates, selectReplayFeedEvent, setReplayEntryView, renderUrlViewInner, loadSignatureInfo } from './render.js';
+import { parseRoute, buildHash } from './routes.js';
 import { makeResizable } from './resize.js';
 import { initHeader, setHeaderMode } from './header.js';
 import { isBodySearching, cancelBodySearch, invalidateCriteriaSave, syncCriteriaFromServer, restoreBodyFilter, setOnFilterChange, setOnListRefresh, initFilterPopover, openFilterPopover, closeFilterPopover, closeChip, openChip, getFilterChipsData, getMatchMode, setMatchMode, queueCriteriaSave } from './filters.js';
@@ -287,6 +288,8 @@ let _matchResp = null;
 let _matchEventCtx = null;
 let _matchSearchTimer = null;
 let _matchQueries = {};
+let _matchSelectedId = null;
+let _currentView = null;
 
 function currentMatchQuery() {
   const input = document.querySelector('.match-search');
@@ -299,16 +302,23 @@ function loadMatchTab(run, seq, scope, q, rowsOnly) {
   }
   _matchState = { run, seq, scope, q: q || '' };
   _matchEventCtx = { result: (_lastReplayDetail && _lastReplayDetail.event ? _lastReplayDetail.event.result : '') || '', seq };
-  loadReplayCandidates(run, seq, scope, q || '').then(resp => {
+  return loadReplayCandidates(run, seq, scope, q || '').then(resp => {
     if (scope === 'matching' && resp && resp.total && resp.total.matching === 0 && !(resp.entries && resp.entries.length)) {
       _matchState.scope = 'all';
       _matchQueries['all'] = q || '';
-      loadMatchTab(run, seq, 'all', q || '');
-      return;
+      if (_currentView && _currentView.kind === 'replay' && _currentView.run === run && _currentView.seq === seq) {
+        _currentView = { ..._currentView, scope: 'all' };
+        history.replaceState(null, '', buildHash(_currentView));
+      }
+      return loadMatchTab(run, seq, 'all', q || '');
     }
     _matchResp = { ...resp, q: q || '' };
-    if (rowsOnly) renderMatchCandidates(_matchResp, _matchEventCtx);
-    else renderReplayMatch(_matchResp, _matchEventCtx);
+    if (rowsOnly) {
+      renderMatchCandidates(_matchResp, _matchEventCtx);
+    } else {
+      _matchSelectedId = null;
+      renderReplayMatch(_matchResp, _matchEventCtx);
+    }
   });
 }
 
@@ -316,28 +326,139 @@ function selectMatchCandidate(entryId) {
   if (!_matchResp || !_matchState) return;
   if (!_matchResp.entries.some(e => e.entryId === entryId)) return;
   loadReplayCandidateDiff(_matchState.run, _matchState.seq, entryId).then(dr => {
+    _matchSelectedId = entryId;
     const resp = { ..._matchResp, q: currentMatchQuery(), selectedEntryId: entryId, diff: dr && dr.diff ? dr.diff : null };
     renderReplayMatch(resp, _matchEventCtx, true);
   });
 }
 
-function showReplayDetail(detail) {
+function showReplayDetail(detail, activeTab) {
   _lastReplayDetail = detail;
   _lastDetailEntry = null;
-  renderReplayEventDetail(detail);
+  renderReplayEventDetail(detail, activeTab);
 }
+
+// ── Browser history routing ────────────────────────────────────────────────
+// The hash (#/...) is the single source of truth for the detail view: every
+// navigation handler only calls navigate(), and applyRoute() — wired to
+// hashchange — reproduces the view from the URL. Back/forward therefore
+// re-apply a previous route instead of relying on in-memory state, and a
+// refresh deep-links back into the exact view.
+function navigate(route) {
+  const h = buildHash(route);
+  if (location.hash === h) return;
+  location.hash = h;
+}
+
+function sameIdentity(a, b) {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === 'entry') return a.id === b.id;
+  if (a.kind === 'replay') return a.run === b.run && a.seq === b.seq;
+  if (a.kind === 'replay-entry') return a.run === b.run && a.seq === b.seq && a.entryId === b.entryId;
+  return false;
+}
+
+function switchTabInPlace(tab) {
+  const btn = document.querySelector(`#detailPanel .tab[data-tab="${tab}"]`);
+  if (!btn) return;
+  showTab(btn, tab);
+  syncStreamView(tab);
+}
+
+function clearDetailView() {
+  setSelectedId(null);
+  document.querySelectorAll('.request-item.selected').forEach(el => el.classList.remove('selected'));
+  const panel = document.getElementById('detailPanel');
+  if (panel) panel.innerHTML = '';
+}
+
+function ensureReplayFeedView(run) {
+  _pickedRun = run;
+  const sel = document.getElementById('replayRunSelect');
+  if (!sel || sel.options.length === 0) {
+    return populateReplayRuns().then(() => {
+      const s = document.getElementById('replayRunSelect');
+      if (s) s.value = run;
+      return loadReplayFeed(run);
+    });
+  }
+  if (sel.value !== run) sel.value = run;
+  return loadReplayFeed(run);
+}
+
+function applyRouteFull(route) {
+  switch (route.kind) {
+    case 'entry':
+      selectRequest(route.id, route.tab);
+      if (route.tab === 'origin') loadSignatureInfo();
+      break;
+    case 'replay': {
+      const panel = document.getElementById('replayPanel');
+      if (panel && !panel.classList.contains('open')) toggleReplayPanel();
+      ensureReplayFeedView(route.run).then(() => selectReplayFeedEvent(route.run, route.seq));
+      loadReplayEventDetail(route.run, route.seq).then(detail => {
+        showReplayDetail(detail, route.tab);
+        if (detail && detail.event) {
+          const scope = route.scope || 'matching';
+          return loadMatchTab(route.run, route.seq, scope, _matchQueries[scope] || '').then(() => {
+            if (route.candidate) selectMatchCandidate(route.candidate);
+          });
+        }
+      });
+      break;
+    }
+    case 'replay-entry':
+      setReplayEntryView({ seq: route.seq, entry: route.n });
+      selectRequest(route.entryId, route.tab);
+      if (route.tab === 'origin') loadSignatureInfo();
+      break;
+  }
+}
+
+function applyRouteDiff(prev, route) {
+  if (route.tab !== prev.tab) switchTabInPlace(route.tab);
+  if (route.kind === 'replay' && route.tab === 'match') {
+    if (route.scope !== prev.scope) {
+      loadMatchTab(route.run, route.seq, route.scope, _matchQueries[route.scope] || '').then(() => {
+        if (route.candidate) selectMatchCandidate(route.candidate);
+      });
+    } else if (route.candidate !== prev.candidate) {
+      if (route.candidate) {
+        selectMatchCandidate(route.candidate);
+      } else if (_matchSelectedId && _matchResp) {
+        _matchSelectedId = null;
+        const resp = { ..._matchResp, q: currentMatchQuery(), selectedEntryId: null, diff: null };
+        renderReplayMatch(resp, _matchEventCtx, true);
+      }
+    }
+  }
+}
+
+function applyRoute() {
+  const route = parseRoute(location.hash);
+  if (!route) {
+    _currentView = null;
+    clearDetailView();
+    return;
+  }
+  if ((route.kind === 'replay' || route.kind === 'replay-entry') && !getReplayMode()) return;
+  const prev = _currentView;
+  if (prev && sameIdentity(prev, route)) {
+    applyRouteDiff(prev, route);
+  } else {
+    applyRouteFull(route);
+  }
+  _currentView = route;
+}
+
+window.addEventListener('hashchange', applyRoute);
+
 
 document.getElementById('replayPanel').addEventListener('click', (e) => {
   if (e.target.closest('.ignored-panel-close')) { toggleReplayPanel(); return; }
   const item = e.target.closest('[data-action="replay-event-detail"]');
   if (item) {
-    selectReplayFeedEvent(item.dataset.run, parseInt(item.dataset.seq, 10));
-    loadReplayEventDetail(item.dataset.run, parseInt(item.dataset.seq, 10)).then(detail => {
-      showReplayDetail(detail);
-      if (detail && detail.event) {
-        loadMatchTab(detail.event.runId, detail.event.seq, 'matching', '');
-      }
-    });
+    navigate({ kind: 'replay', run: item.dataset.run, seq: parseInt(item.dataset.seq, 10) });
   }
 });
 document.getElementById('replayRunSelect').addEventListener('change', (e) => {
@@ -457,7 +578,7 @@ document.getElementById('rulesPanel').addEventListener('click', (e) => {
 document.getElementById('requestList').addEventListener('click', (e) => {
   const item = e.target.closest('.request-item');
   if (item && item.dataset.id) {
-    selectRequest(item.dataset.id);
+    navigate({ kind: 'entry', id: item.dataset.id });
   }
 });
 
@@ -493,10 +614,11 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
     case 'unfocus':
       confirmUnfocusHost(btn.dataset.host);
       break;
-    case 'tab':
-      showTab(btn, btn.dataset.tab);
-      syncStreamView(btn.dataset.tab);
+    case 'tab': {
+      const v = _currentView;
+      if (v) navigate({ ...v, tab: btn.dataset.tab });
       break;
+    }
     case 'set-view':
       setBodyView(btn.dataset.target, btn.dataset.view);
       break;
@@ -535,7 +657,7 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
       revertBody(btn.dataset.target);
       break;
     case 'goto-replay':
-      selectRequest(btn.dataset.id);
+      navigate({ kind: 'entry', id: btn.dataset.id });
       break;
     case 'replay-body':
       fetch(`/api/replay/events/${encodeURIComponent(btn.dataset.run)}/${btn.dataset.seq}/body`)
@@ -554,38 +676,35 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
         ? _matchResp.entries.find(e => e.entryId === _matchResp.selectedEntryId)
         : null;
       if (c && _matchState) {
-        setReplayEntryView({ seq: _matchState.seq, entry: c.entry });
-        selectRequest(c.entryId);
+        navigate({ kind: 'replay-entry', run: _matchState.run, seq: _matchState.seq, entryId: c.entryId, n: c.entry });
       }
       break;
     }
     case 'replay-warn-entry': {
       const ci = _matchResp && _matchResp.consumed;
       if (ci && _matchState) {
-        setReplayEntryView({ seq: _matchState.seq, entry: ci.entry });
-        selectRequest(ci.entryId);
+        navigate({ kind: 'replay-entry', run: _matchState.run, seq: _matchState.seq, entryId: ci.entryId, n: ci.entry });
       }
       break;
     }
     case 'replay-back-event': {
       const ev = _lastReplayDetail && _lastReplayDetail.event;
       if (ev) {
-        selectReplayFeedEvent(ev.runId, ev.seq);
-        showReplayDetail(_lastReplayDetail);
-        loadMatchTab(ev.runId, ev.seq, 'matching', '');
+        navigate({ kind: 'replay', run: ev.runId, seq: ev.seq });
       }
       break;
     }
     case 'replay-candidate':
-      selectMatchCandidate(btn.dataset.entry);
+      if (_matchState) {
+        navigate({ kind: 'replay', run: _matchState.run, seq: _matchState.seq, tab: 'match', scope: _matchState.scope, candidate: btn.dataset.entry });
+      }
       break;
     case 'replay-scope': {
       if (!_matchState) break;
       clearTimeout(_matchSearchTimer);
       const input = document.querySelector('.match-search');
       if (input) _matchQueries[_matchState.scope] = input.value;
-      const scope = btn.dataset.scope;
-      loadMatchTab(_matchState.run, _matchState.seq, scope, _matchQueries[scope] || '');
+      navigate({ kind: 'replay', run: _matchState.run, seq: _matchState.seq, tab: 'match', scope: btn.dataset.scope });
       break;
     }
     case 'replay-search-clear': {
@@ -1096,6 +1215,7 @@ document.getElementById('container').classList.toggle('list-hidden', listHidden)
 document.getElementById('toggleListBtn').classList.toggle('active', !listHidden);
 
 loadRequests().then(() => {
+  applyRoute();
   if (getReplayMode()) return;
   loadIgnored();
   loadFocused();

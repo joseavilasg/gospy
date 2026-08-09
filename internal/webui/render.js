@@ -650,7 +650,7 @@ export function showTab(btn, tab) {
   }
 }
 
-function loadSignatureInfo() {
+export function loadSignatureInfo() {
   const pathEl = document.getElementById('originPath');
   if (!pathEl) return;
   const filePath = pathEl.getAttribute('title');
@@ -1114,7 +1114,7 @@ export function onReplayFeedScroll() {
   }
 }
 
-export function renderReplayEventDetail(detail) {
+export function renderReplayEventDetail(detail, activeTab = 'match') {
   clearListSelection();
   _replayEntryView = null;
   const panel = document.getElementById('detailPanel');
@@ -1140,15 +1140,15 @@ export function renderReplayEventDetail(detail) {
   panel.innerHTML = `
         <div class="tabs-row">
             <div class="tabs">
-                <button class="tab" data-action="tab" data-tab="request">Request</button>
-                <button class="tab" data-action="tab" data-tab="response">Response</button>
-                <button class="tab" data-action="tab" data-tab="origin">Origin</button>
-                <button class="tab active" data-action="tab" data-tab="match">Match</button>
+                <button class="tab${activeTab === 'request' ? ' active' : ''}" data-action="tab" data-tab="request">Request</button>
+                <button class="tab${activeTab === 'response' ? ' active' : ''}" data-action="tab" data-tab="response">Response</button>
+                <button class="tab${activeTab === 'origin' ? ' active' : ''}" data-action="tab" data-tab="origin">Origin</button>
+                <button class="tab${activeTab === 'match' ? ' active' : ''}" data-action="tab" data-tab="match">Match</button>
             </div>
             <div class="detail-id-group"><span class="replay-badge replay-badge-${ev.result || 'exhausted'}">${icon} ${escapeHtml((ev.result || '').toUpperCase())}</span></div>
         </div>
 
-        <div id="tab-request" class="tab-content" style="display:none">
+        <div id="tab-request" class="tab-content" style="${activeTab === 'request' ? '' : 'display:none'}">
             <div class="section-panel">
                 <div class="section-header"><span class="section-title">Request</span></div>
                 <div class="content-block">
@@ -1165,11 +1165,11 @@ export function renderReplayEventDetail(detail) {
             </div>` : ''}
         </div>
 
-        <div id="tab-response" class="tab-content" style="display:none">
+        <div id="tab-response" class="tab-content" style="${activeTab === 'response' ? '' : 'display:none'}">
             ${buildReplayResponseTab(detail)}
         </div>
 
-        <div id="tab-origin" class="tab-content" style="display:none">
+        <div id="tab-origin" class="tab-content" style="${activeTab === 'origin' ? '' : 'display:none'}">
             <div class="section-panel">
                 <div class="section-header"><span class="section-title">Origin</span></div>
                 <div class="content-block">
@@ -1197,7 +1197,7 @@ export function renderReplayEventDetail(detail) {
             </div>
         </div>
 
-        <div id="tab-match" class="tab-content">
+        <div id="tab-match" class="tab-content" style="${activeTab === 'match' ? '' : 'display:none'}">
             <div id="replayMatchContainer"><div class="replay-event-empty">Loading candidates…</div></div>
         </div>`;
 }

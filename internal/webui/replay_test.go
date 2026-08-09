@@ -595,12 +595,53 @@ func TestReplayFeedSelection(t *testing.T) {
 		!strings.Contains(renderJS, "_feedSelectedSeq") {
 		t.Fatal("render.js: the feed needs state-driven selection (selectReplayFeedEvent/clearReplayFeedSelection) that survives virtual window re-renders")
 	}
-	if !strings.Contains(appJS, "selectReplayFeedEvent(item.dataset.run") ||
-		!strings.Contains(appJS, "selectReplayFeedEvent(ev.runId") {
-		t.Fatal("app.js: clicking a feed row or the breadcrumb back must select the event")
+	if !strings.Contains(appJS, "selectReplayFeedEvent(route.run, route.seq)") {
+		t.Fatal("app.js: the router must select the feed event when reproducing a replay route (feed click and breadcrumb back both route through applyRoute)")
 	}
 	if !strings.Contains(styleCSS, ".replay-event.selected") {
 		t.Fatal("style.css: the selected replay event needs the selected highlight")
+	}
+}
+
+func TestReplayBrowserHistory(t *testing.T) {
+	if !strings.Contains(routesJS, "export function parseRoute") ||
+		!strings.Contains(routesJS, "export function buildHash") {
+		t.Fatal("routes.js: must export parseRoute/buildHash for hash-based history")
+	}
+	for _, probe := range []string{"kind: 'entry'", "kind: 'replay'", "kind: 'replay-entry'", "'matching'", "'all'"} {
+		if !strings.Contains(routesJS, probe) {
+			t.Fatalf("routes.js: must model the %s view", probe)
+		}
+	}
+	app := strings.ReplaceAll(appJS, "\r\n", "\n")
+	if !strings.Contains(app, "addEventListener('hashchange'") ||
+		!strings.Contains(app, "function applyRoute(") {
+		t.Fatal("app.js: the router must react to hashchange (browser back/forward)")
+	}
+	for _, probe := range []string{
+		"navigate({ kind: 'entry',",
+		"navigate({ kind: 'replay',",
+		"navigate({ kind: 'replay-entry',",
+		"function sameIdentity(",
+		"function applyRouteFull(",
+		"function applyRouteDiff(",
+		"selectMatchCandidate(route.candidate)",
+		"renderReplayEventDetail(detail, activeTab)",
+	} {
+		if !strings.Contains(app, probe) {
+			t.Fatalf("app.js: the router must %s", probe)
+		}
+	}
+	if !strings.Contains(renderJS, "renderReplayEventDetail(detail, activeTab") {
+		t.Fatal("render.js: renderReplayEventDetail must accept the active tab from the route")
+	}
+	src, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatalf("reading server.go: %v", err)
+	}
+	if !strings.Contains(string(src), "//go:embed routes.js") ||
+		!strings.Contains(string(src), `mux.HandleFunc("/routes.js"`) {
+		t.Fatal("server.go: routes.js must be embedded and served so the browser can load the router module")
 	}
 }
 
@@ -972,7 +1013,7 @@ func TestReplayMatchTab(t *testing.T) {
 	if !strings.Contains(appJS, "let _matchQueries = {}") ||
 		!strings.Contains(appJS, "_matchQueries[_matchState.scope] = e.target.value || ''") ||
 		!strings.Contains(appJS, "_matchQueries[_matchState.scope] = input.value") ||
-		!strings.Contains(appJS, "loadMatchTab(_matchState.run, _matchState.seq, scope, _matchQueries[scope] || '')") ||
+		!strings.Contains(appJS, "loadMatchTab(route.run, route.seq, route.scope, _matchQueries[route.scope] || '')") ||
 		!strings.Contains(appJS, "_matchState.run !== run || _matchState.seq !== seq") ||
 		!strings.Contains(appJS, "_matchQueries[_matchState.scope] = ''") ||
 		!strings.Contains(appJS, "q: currentMatchQuery()") ||
