@@ -10,6 +10,7 @@ import (
 
 	"gospy/internal/ca"
 	"gospy/internal/history"
+	"gospy/internal/rules"
 )
 
 func TestBuildResponseBody(t *testing.T) {
@@ -442,5 +443,289 @@ func TestReplayNotifierWithLog(t *testing.T) {
 	}
 	if len(summaries) != 1 {
 		t.Fatalf("expected 1 run in log, got %d", len(summaries))
+	}
+}
+
+func replayWithRule(t *testing.T, rule *rules.Rule) (*ReplayServer, *history.Store) {
+	t.Helper()
+	rs, h := newReplayServer(t)
+	engine := rules.NewEngine()
+	engine.AddRule(rule)
+	rs.SetRulesEngine(engine)
+	return rs, h
+}
+
+func captureReplayEvents(t *testing.T, rs *ReplayServer) func() []ReplayEvent {
+	t.Helper()
+	var mu sync.Mutex
+	var events []ReplayEvent
+	rs.SetReplayNotifier(func(ev ReplayEvent) {
+		mu.Lock()
+		events = append(events, ev)
+		mu.Unlock()
+	})
+	return func() []ReplayEvent {
+		mu.Lock()
+		defer mu.Unlock()
+		return events
+	}
+}
+
+func assertServedResponse(t *testing.T, ev *ReplayEvent, wantStatus int, wantHeaders map[string]string, wantBody string) {
+	t.Helper()
+	if ev.ServedResponse == nil {
+		t.Fatal("expected the rule-served response to be captured, got nil")
+	}
+	srv := ev.ServedResponse
+	if srv.Status != wantStatus {
+		t.Fatalf("servedResponse status: expected %d, got %d", wantStatus, srv.Status)
+	}
+	h := http.Header(srv.Headers)
+	for k, v := range wantHeaders {
+		if got := h.Get(k); got != v {
+			t.Fatalf("servedResponse header %s: expected %q, got %q", k, v, got)
+		}
+	}
+	if srv.Body != wantBody {
+		t.Fatalf("servedResponse body: expected %q, got %q", wantBody, srv.Body)
+	}
+}
+
+func TestReplayRulesMockOnHit(t *testing.T) {
+	rs, h := replayWithRule(t, &rules.Rule{
+		ID: "m1", Name: "fake manifest", Enabled: true,
+		Match:    rules.MatchRule{Method: "GET", Host: "live.example.com", URLPattern: "/master.m3u8"},
+		Action:   rules.ActionMock,
+		MockResp: &rules.MockResponse{Status: 418, Headers: map[string][]string{"X-Test": {"yes"}}, Body: "fake body"},
+	})
+	if _, err := h.SaveBinaryBody("r1", "resp", []byte("recorded body")); err != nil {
+		t.Fatalf("SaveBinaryBody: %v", err)
+	}
+	if err := h.Save(&history.Entry{
+		ID:        "r1",
+		Timestamp: time.Now(),
+		Request:   history.RequestRecord{Method: "GET", URL: "https://live.example.com/master.m3u8", Host: "live.example.com"},
+		Response:  &history.ResponseRecord{Status: 200, Headers: map[string][]string{"Content-Type": {"application/vnd.apple.mpegurl"}}, BodyFile: "r1-resp.bin"},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	events := captureReplayEvents(t, rs)
+
+	resp := callHandleRequest(t, rs, "GET", "https://live.example.com/master.m3u8")
+	if resp.StatusCode != 418 {
+		t.Fatalf("expected mock status 418, got %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("X-Test"); got != "yes" {
+		t.Fatalf("expected X-Test: yes, got %q", got)
+	}
+	if resp.ContentLength != int64(len("fake body")) {
+		t.Fatalf("expected ContentLength %d, got %d (#737)", len("fake body"), resp.ContentLength)
+	}
+	if body, err := io.ReadAll(resp.Body); err != nil {
+		t.Fatalf("read body: %v", err)
+	} else if string(body) != "fake body" {
+		t.Fatalf("expected 'fake body', got %q", body)
+	}
+	if got := resp.Header.Get("X-Gospy-Replay"); got != "hit" {
+		t.Fatalf("expected X-Gospy-Replay: hit, got %q", got)
+	}
+
+	ev := events()
+	if len(ev) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(ev))
+	}
+	if ev[0].Result != "hit" || ev[0].EntryID != "r1" {
+		t.Fatalf("unexpected match result: %+v", ev[0])
+	}
+	if ev[0].AppliedAction != string(rules.ActionMock) || ev[0].RuleName != "fake manifest" || ev[0].Status != 418 {
+		t.Fatalf("unexpected rule metadata: %+v", ev[0])
+	}
+	assertServedResponse(t, &ev[0], 418, map[string]string{"X-Test": "yes", "X-Gospy-Replay": "hit"}, "fake body")
+}
+
+func TestReplayRulesDropOnHit(t *testing.T) {
+	rs, h := replayWithRule(t, &rules.Rule{
+		ID: "d1", Name: "block manifest", Enabled: true,
+		Match:  rules.MatchRule{Method: "GET", Host: "live.example.com", URLPattern: "/master.m3u8"},
+		Action: rules.ActionDrop,
+	})
+	if err := h.Save(&history.Entry{
+		ID:        "d1",
+		Timestamp: time.Now(),
+		Request:   history.RequestRecord{Method: "GET", URL: "https://live.example.com/master.m3u8", Host: "live.example.com"},
+		Response:  &history.ResponseRecord{Status: 200},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	events := captureReplayEvents(t, rs)
+
+	resp := callHandleRequest(t, rs, "GET", "https://live.example.com/master.m3u8")
+	if resp.StatusCode != http.StatusGatewayTimeout {
+		t.Fatalf("expected drop 504, got %d", resp.StatusCode)
+	}
+	if resp.ContentLength != 0 {
+		t.Fatalf("expected empty body ContentLength 0, got %d", resp.ContentLength)
+	}
+	if body, err := io.ReadAll(resp.Body); err != nil {
+		t.Fatalf("read body: %v", err)
+	} else if len(body) != 0 {
+		t.Fatalf("expected empty drop body, got %q", body)
+	}
+
+	ev := events()
+	if len(ev) != 1 || ev[0].Result != "hit" || ev[0].EntryID != "d1" || ev[0].AppliedAction != string(rules.ActionDrop) {
+		t.Fatalf("unexpected events: %+v", ev)
+	}
+	assertServedResponse(t, &ev[0], http.StatusGatewayTimeout, map[string]string{"X-Gospy-Replay": "hit"}, "")
+
+	// the hit was consumed: the queue is now exhausted, the rule still overrides
+	resp2 := callHandleRequest(t, rs, "GET", "https://live.example.com/master.m3u8")
+	if resp2.StatusCode != http.StatusGatewayTimeout {
+		t.Fatalf("expected drop 504 on exhausted, got %d", resp2.StatusCode)
+	}
+	ev2 := events()
+	if len(ev2) != 2 || ev2[1].Result != "exhausted" {
+		t.Fatalf("expected exhausted event, got %+v", ev2)
+	}
+}
+
+func TestReplayRulesMockOnMiss(t *testing.T) {
+	rs, h := replayWithRule(t, &rules.Rule{
+		ID: "m2", Name: "fake missing", Enabled: true,
+		Match:    rules.MatchRule{Method: "GET", Host: "example.com", URLPattern: "/not-in-queue"},
+		Action:   rules.ActionMock,
+		MockResp: &rules.MockResponse{Status: 202, Body: "mocked miss"},
+	})
+	if err := h.Save(&history.Entry{
+		ID:        "keep",
+		Timestamp: time.Now(),
+		Request:   history.RequestRecord{Method: "GET", URL: "https://live.example.com/master.m3u8", Host: "live.example.com"},
+		Response:  &history.ResponseRecord{Status: 200},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	events := captureReplayEvents(t, rs)
+
+	resp := callHandleRequest(t, rs, "GET", "https://example.com/not-in-queue")
+	if resp.StatusCode != 202 {
+		t.Fatalf("expected mock status 202, got %d", resp.StatusCode)
+	}
+	if body, err := io.ReadAll(resp.Body); err != nil {
+		t.Fatalf("read body: %v", err)
+	} else if string(body) != "mocked miss" {
+		t.Fatalf("expected 'mocked miss', got %q", body)
+	}
+
+	ev := events()
+	if len(ev) != 1 || ev[0].Result != "miss" || ev[0].AppliedAction != string(rules.ActionMock) || ev[0].Status != 202 {
+		t.Fatalf("unexpected events: %+v", ev)
+	}
+	assertServedResponse(t, &ev[0], 202, map[string]string{"X-Gospy-Replay": "miss"}, "mocked miss")
+}
+
+func TestReplayRulesMockOnExhausted(t *testing.T) {
+	rs, h := replayWithRule(t, &rules.Rule{
+		ID: "m3", Name: "fake exhausted", Enabled: true,
+		Match:    rules.MatchRule{Method: "GET", Host: "live.example.com", URLPattern: "/master.m3u8"},
+		Action:   rules.ActionMock,
+		MockResp: &rules.MockResponse{Status: 203, Body: "mocked exhausted"},
+	})
+	if err := h.Save(&history.Entry{
+		ID:        "x2",
+		Timestamp: time.Now(),
+		Request:   history.RequestRecord{Method: "GET", URL: "https://live.example.com/master.m3u8", Host: "live.example.com"},
+		Response:  &history.ResponseRecord{Status: 200},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	events := captureReplayEvents(t, rs)
+
+	callHandleRequest(t, rs, "GET", "https://live.example.com/master.m3u8")
+	resp := callHandleRequest(t, rs, "GET", "https://live.example.com/master.m3u8")
+	if resp.StatusCode != 203 {
+		t.Fatalf("expected mock status 203 on exhausted, got %d", resp.StatusCode)
+	}
+	if body, err := io.ReadAll(resp.Body); err != nil {
+		t.Fatalf("read body: %v", err)
+	} else if string(body) != "mocked exhausted" {
+		t.Fatalf("expected 'mocked exhausted', got %q", body)
+	}
+
+	ev := events()
+	if len(ev) != 2 || ev[1].Result != "exhausted" || ev[1].AppliedAction != string(rules.ActionMock) || ev[1].Status != 203 {
+		t.Fatalf("unexpected events: %+v", ev)
+	}
+	assertServedResponse(t, &ev[1], 203, map[string]string{"X-Gospy-Replay": "exhausted"}, "mocked exhausted")
+}
+
+func TestReplayRulesResponseMockCollapsesToMock(t *testing.T) {
+	rs, h := replayWithRule(t, &rules.Rule{
+		ID: "rm1", Name: "fake response", Enabled: true,
+		Match:    rules.MatchRule{Method: "GET", Host: "live.example.com", URLPattern: "/master.m3u8"},
+		Action:   rules.ActionResponseMock,
+		MockResp: &rules.MockResponse{Status: 204, Body: "collapsed"},
+	})
+	if err := h.Save(&history.Entry{
+		ID:        "r2",
+		Timestamp: time.Now(),
+		Request:   history.RequestRecord{Method: "GET", URL: "https://live.example.com/master.m3u8", Host: "live.example.com"},
+		Response:  &history.ResponseRecord{Status: 200},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	events := captureReplayEvents(t, rs)
+
+	resp := callHandleRequest(t, rs, "GET", "https://live.example.com/master.m3u8")
+	if resp.StatusCode != 204 {
+		t.Fatalf("expected 204, got %d", resp.StatusCode)
+	}
+	if body, err := io.ReadAll(resp.Body); err != nil {
+		t.Fatalf("read body: %v", err)
+	} else if string(body) != "collapsed" {
+		t.Fatalf("expected 'collapsed', got %q", body)
+	}
+
+	ev := events()
+	if len(ev) != 1 || ev[0].AppliedAction != string(rules.ActionResponseMock) {
+		t.Fatalf("unexpected events: %+v", ev)
+	}
+	assertServedResponse(t, &ev[0], 204, map[string]string{"X-Gospy-Replay": "hit"}, "collapsed")
+}
+
+func TestReplayRulesPassthroughNoOverride(t *testing.T) {
+	rs, h := replayWithRule(t, &rules.Rule{
+		ID: "p1", Name: "pass through", Enabled: true,
+		Match:  rules.MatchRule{Method: "GET", Host: "live.example.com", URLPattern: "/master.m3u8"},
+		Action: rules.ActionPassthrough,
+	})
+	if _, err := h.SaveBinaryBody("p1", "resp", []byte("recorded body")); err != nil {
+		t.Fatalf("SaveBinaryBody: %v", err)
+	}
+	if err := h.Save(&history.Entry{
+		ID:        "p1",
+		Timestamp: time.Now(),
+		Request:   history.RequestRecord{Method: "GET", URL: "https://live.example.com/master.m3u8", Host: "live.example.com"},
+		Response:  &history.ResponseRecord{Status: 200, BodyFile: "p1-resp.bin"},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	events := captureReplayEvents(t, rs)
+
+	resp := callHandleRequest(t, rs, "GET", "https://live.example.com/master.m3u8")
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected recorded 200, got %d", resp.StatusCode)
+	}
+	if body, err := io.ReadAll(resp.Body); err != nil {
+		t.Fatalf("read body: %v", err)
+	} else if string(body) != "recorded body" {
+		t.Fatalf("expected 'recorded body', got %q", body)
+	}
+
+	ev := events()
+	if len(ev) != 1 || ev[0].AppliedAction != "" || ev[0].RuleName != "" {
+		t.Fatalf("passthrough must not mark the event: %+v", ev)
+	}
+	if ev[0].ServedResponse != nil {
+		t.Fatal("passthrough must not capture a served response: the recorded response is served as-is")
 	}
 }

@@ -330,8 +330,10 @@ func runReplay(caCert *ca.CA, addr, sessionDir, matchConfig, uiAddr, dataDir str
 		_ = ignoreStore.Load()
 		focusStore := proxy.NewFocusStore(filepath.Join(uiBase, "focus.json"))
 		_ = focusStore.Load()
-		rulesStore := rules.NewStore(filepath.Join(uiBase, "rules.json"))
-		_ = rulesStore.Load()
+		rulesStore := rules.NewStore(filepath.Join(replayRoot, "rules.json"))
+		if err := rulesStore.Load(); err != nil {
+			proxy.LogError(fmt.Sprintf("Failed to load replay rules: %v", err))
+		}
 		ruleEngine := rules.NewEngine()
 		ruleEngine.Load(rulesStore.GetRules())
 		filterStore := webui.NewFilterStore(filepath.Join(uiBase, "filters.json"))
@@ -341,6 +343,7 @@ func runReplay(caCert *ca.CA, addr, sessionDir, matchConfig, uiAddr, dataDir str
 		webSrv.SetReplayMode(true)
 		webSrv.SetReplayLogDir(replayRoot)
 		srv.SetReplayNotifier(webSrv.ReplayNotifier())
+		srv.SetRulesEngine(ruleEngine)
 
 		go func() {
 			if err := webSrv.ListenAndServe(); err != nil {

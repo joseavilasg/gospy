@@ -26,7 +26,7 @@ func TestReplayLogAppendAndLoad(t *testing.T) {
 		EntryID:   "entry-1",
 		Request:   history.RequestRecord{Method: "GET", URL: "https://example.com/a", Host: "example.com"},
 	}
-	if err := log.Append(&ev1, []byte("raw body")); err != nil {
+	if err := log.Append(&ev1, []byte("raw body"), nil); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
 	if ev1.Seq != 1 {
@@ -45,7 +45,7 @@ func TestReplayLogAppendAndLoad(t *testing.T) {
 		Status:    404,
 		Request:   history.RequestRecord{Method: "GET", URL: "https://example.com/b", Host: "example.com"},
 	}
-	if err := log.Append(&ev2, nil); err != nil {
+	if err := log.Append(&ev2, nil, nil); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
 	if ev2.Seq != 2 {
@@ -102,7 +102,7 @@ func TestReplayLogBodyFilePersistsInRequest(t *testing.T) {
 			RawBody: `{"ok":true}`,
 		},
 	}
-	if err := log.Append(&ev, []byte(`{"ok":true}`)); err != nil {
+	if err := log.Append(&ev, []byte(`{"ok":true}`), nil); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
 	log.Close()
@@ -149,7 +149,7 @@ func TestReplayLogListRuns(t *testing.T) {
 				Status:    status,
 				Timestamp: time.Now().Add(time.Duration(i) * time.Second),
 			}
-			if err := log.Append(&ev, nil); err != nil {
+			if err := log.Append(&ev, nil, nil); err != nil {
 				t.Fatalf("Append: %v", err)
 			}
 		}

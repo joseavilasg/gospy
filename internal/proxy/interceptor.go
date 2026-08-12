@@ -211,13 +211,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 		_ = ic.hist().Save(entry)
 		LogRequest(entry.ID, req.Method, url)
 		LogInfo(fmt.Sprintf("DROPPED by rule %q: %s %s", rule.Name, req.Method, url))
-		dropResp := &http.Response{
-			StatusCode: 504,
-			Status:     "504 Gateway Timeout",
-			Header:     make(http.Header),
-			Body:       io.NopCloser(strings.NewReader("")),
-			Request:    req,
-		}
+		dropResp := rules.BuildDropResponse(req)
 		entry.Response = &history.ResponseRecord{
 			Status:  504,
 			Headers: make(map[string][]string),
@@ -243,7 +237,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 		LogRequest(entry.ID, req.Method, url)
 		LogInfo(fmt.Sprintf("MOCKED by rule %q: %s %s", rule.Name, req.Method, url))
 
-		resp := buildMockResponse(req, rule.MockResp)
+		resp := rules.BuildMockResponse(req, rule.MockResp)
 		entry.Response = &history.ResponseRecord{
 			Status:  resp.StatusCode,
 			Headers: resp.Header,
@@ -405,7 +399,7 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 				}
 			}
 			entry.ServerResponse = sresp
-			fakeResp := buildMockResponse(ctx.Req, ud.mockResponse)
+			fakeResp := rules.BuildMockResponse(ctx.Req, ud.mockResponse)
 			entry.Response = &history.ResponseRecord{
 				Status:  fakeResp.StatusCode,
 				Headers: fakeResp.Header,
@@ -414,7 +408,7 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 			_ = ic.hist().Update(entry)
 			LogResponse(entry.ID, ctx.Req.Method, reqURL, fakeResp.StatusCode, fakeResp.Header.Get("Content-Type"))
 		}
-		return buildHttpResponse(ctx.Req, ud.mockResponse)
+		return rules.BuildMockResponse(ctx.Req, ud.mockResponse)
 	}
 
 	if ud, ok := ctx.UserData.(*entryUserData); ok {
@@ -685,42 +679,6 @@ func applyModifications(req *http.Request, mod *rules.ModifiedRequest) {
 	if mod.Body != "" {
 		req.Body = io.NopCloser(strings.NewReader(mod.Body))
 		req.ContentLength = int64(len(mod.Body))
-	}
-}
-
-func buildMockResponse(req *http.Request, mock *rules.MockResponse) *http.Response {
-	status := 200
-	headers := http.Header{}
-	body := ""
-
-	if mock != nil {
-		status = mock.Status
-		if status == 0 {
-			status = 200
-		}
-		for k, vals := range mock.Headers {
-			for _, v := range vals {
-				headers.Set(k, v)
-			}
-		}
-		body = mock.Body
-	}
-
-	return &http.Response{
-		StatusCode: status,
-		Header:     headers,
-		Body:       io.NopCloser(strings.NewReader(body)),
-		Request:    req,
-	}
-}
-
-func buildHttpResponse(req *http.Request, mock *rules.MockResponse) *http.Response {
-	resp := buildMockResponse(req, mock)
-	return &http.Response{
-		StatusCode: resp.StatusCode,
-		Header:     resp.Header,
-		Body:       resp.Body,
-		Request:    req,
 	}
 }
 

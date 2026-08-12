@@ -2982,6 +2982,35 @@ body.resizing {
   color: var(--green);
 }
 
+.replay-event-rule {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
+.replay-event-rule-mock,
+.replay-event-rule-response_mock {
+  background: var(--action-mock-bg);
+  color: var(--action-mock);
+  border: 1px solid var(--action-mock-border);
+}
+
+.replay-event-rule-drop {
+  background: var(--action-drop-bg);
+  color: var(--action-drop);
+  border: 1px solid var(--action-drop-border);
+}
+
+.replay-event-rule-modify {
+  background: var(--action-modify-bg);
+  color: var(--action-modify);
+  border: 1px solid var(--action-modify-border);
+}
+
 .replay-event-miss .replay-event-result {
   color: var(--orange);
 }

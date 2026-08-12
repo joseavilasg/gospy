@@ -25,21 +25,24 @@ type UnconsumedEntry struct {
 // incoming request in full (history body model), the match outcome, and - for
 // misses - the queue context at that moment.
 type ReplayEvent struct {
-	Seq          int                   `json:"seq"`
-	RunID        string                `json:"runId"`
-	Timestamp    time.Time             `json:"ts"`
-	Method       string                `json:"method"`
-	URL          string                `json:"url"`
-	Result       string                `json:"result"` // hit | miss | exhausted
-	Status       int                   `json:"status"`
-	EntryID      string                `json:"entryId,omitempty"`
-	MatchedURL   string                `json:"matchedUrl,omitempty"`
-	Request      history.RequestRecord `json:"request"`
-	Unconsumed   []UnconsumedEntry     `json:"unconsumed,omitempty"`
-	TotalPending int                   `json:"totalPending,omitempty"`
-	Consumed     int                   `json:"consumed"`
-	Total        int                   `json:"total"`
-	Exhausted    bool                  `json:"exhausted"`
+	Seq            int                     `json:"seq"`
+	RunID          string                  `json:"runId"`
+	Timestamp      time.Time               `json:"ts"`
+	Method         string                  `json:"method"`
+	URL            string                  `json:"url"`
+	Result         string                  `json:"result"` // hit | miss | exhausted
+	Status         int                     `json:"status"`
+	EntryID        string                  `json:"entryId,omitempty"`
+	MatchedURL     string                  `json:"matchedUrl,omitempty"`
+	AppliedAction  string                  `json:"appliedAction,omitempty"`
+	RuleName       string                  `json:"ruleName,omitempty"`
+	Request        history.RequestRecord   `json:"request"`
+	ServedResponse *history.ResponseRecord `json:"servedResponse,omitempty"`
+	Unconsumed     []UnconsumedEntry       `json:"unconsumed,omitempty"`
+	TotalPending   int                     `json:"totalPending,omitempty"`
+	Consumed       int                     `json:"consumed"`
+	Total          int                     `json:"total"`
+	Exhausted      bool                    `json:"exhausted"`
 
 	ClientProcess     string `json:"clientProcess,omitempty"`
 	ClientPath        string `json:"clientPath,omitempty"`
@@ -78,7 +81,7 @@ func (l *ReplayLog) Dir() string   { return l.dir }
 // Append assigns the next sequence number, persists the raw request body when
 // present, and appends the event. The write lands in the OS buffer (survives
 // process death); the file is synced on Close.
-func (l *ReplayLog) Append(ev *ReplayEvent, rawBody []byte) error {
+func (l *ReplayLog) Append(ev *ReplayEvent, rawBody []byte, srvRaw []byte) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.seq++
@@ -90,6 +93,14 @@ func (l *ReplayLog) Append(ev *ReplayEvent, rawBody []byte) error {
 		}
 		ev.Request.BodyFile = name
 		ev.Request.BodySize = int64(len(rawBody))
+	}
+	if len(srvRaw) > 0 && ev.ServedResponse != nil {
+		name := fmt.Sprintf("%d.srv.bin", l.seq)
+		if err := os.WriteFile(filepath.Join(l.binDir, name), srvRaw, 0o644); err != nil {
+			return err
+		}
+		ev.ServedResponse.BodyFile = name
+		ev.ServedResponse.BodySize = int64(len(srvRaw))
 	}
 	data, err := json.Marshal(ev)
 	if err != nil {

@@ -389,8 +389,8 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/api/focused", s.replayReadOnly(s.handleFocused))
 	mux.HandleFunc("/api/focused/", s.replayReadOnly(s.handleFocusedHost))
 	mux.HandleFunc("/api/rules/check-match", s.handleCheckMatch)
-	mux.HandleFunc("/api/rules", s.replayReadOnly(s.handleRules))
-	mux.HandleFunc("/api/rules/", s.replayReadOnly(s.handleRule))
+	mux.HandleFunc("/api/rules", s.handleRules)
+	mux.HandleFunc("/api/rules/", s.handleRule)
 	mux.HandleFunc("/api/request-rule", s.replayReadOnly(s.handleRequestRule))
 	mux.HandleFunc("/api/process/signature", s.handleProcessSignature)
 	mux.HandleFunc("/api/process/events", s.replayReadOnly(s.handleProcessEvents))
@@ -2437,31 +2437,60 @@ func (s *Server) handleReplayBody(w http.ResponseWriter, r *http.Request, runID 
 		http.NotFound(w, r)
 		return
 	}
-	var rec *history.RequestRecord
+	target := r.URL.Query().Get("target")
+	if target == "" {
+		target = "request"
+	}
+	if target != "request" && target != "served" {
+		http.Error(w, "invalid target", http.StatusBadRequest)
+		return
+	}
+	var ev *session.ReplayEvent
 	for i := range events {
 		if events[i].Seq == seq {
-			rec = &events[i].Request
+			e := events[i]
+			ev = &e
 			break
 		}
 	}
-	if rec == nil || rec.BodyFile == "" {
+	if ev == nil {
 		http.NotFound(w, r)
 		return
+	}
+	var bodyFile string
+	var headers map[string][]string
+	var isBinary bool
+	if target == "served" {
+		if ev.ServedResponse == nil || ev.ServedResponse.BodyFile == "" {
+			http.NotFound(w, r)
+			return
+		}
+		bodyFile = ev.ServedResponse.BodyFile
+		headers = ev.ServedResponse.Headers
+		isBinary = ev.ServedResponse.IsBinaryBody
+	} else {
+		if ev.Request.BodyFile == "" {
+			http.NotFound(w, r)
+			return
+		}
+		bodyFile = ev.Request.BodyFile
+		headers = ev.Request.Headers
+		isBinary = ev.Request.IsBinaryBody
 	}
 	dir, err := session.ReplayRunDir(s.replayLogDir, runID)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	data, err := session.ReadReplayBody(dir, rec.BodyFile)
+	data, err := session.ReadReplayBody(dir, bodyFile)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	h := http.Header(rec.Headers)
+	h := http.Header(headers)
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	switch {
-	case rec.IsBinaryBody:
+	case isBinary:
 		w.Header().Set("Content-Type", "application/octet-stream")
 	case h.Get("Content-Type") != "":
 		w.Header().Set("Content-Type", h.Get("Content-Type"))

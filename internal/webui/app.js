@@ -1,6 +1,6 @@
 import { setFilterText, setFocusEnabled, setAgentPreview, setAgentEnabled, setAgentExposed, agentExposed, applyFullList, setLastTimestamp, selectedId, setSelectedId, requests, rules, setRules, setSignatureCache, visibleCount, getReplayMode, setReplayMode, setReplayServed, setReplayComplete, markReplayServed } from './state.js';
 import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch, setOnSelectedUpdated, loadMore, setOnReplayUpdate, loadReplayRuns, loadReplayFeed, loadReplayFeedOlder, loadReplayEventDetail, loadReplayCandidates, loadReplayCandidateDiff } from './api.js';
-import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, toggleReplayPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, buildResponseTab, ITEM_HEIGHT, appendReplayFeedEvent, onReplayFeedScroll, setOnReplayFeedLoadOlder, renderReplayEventDetail, renderReplayMatch, renderMatchCandidates, selectReplayFeedEvent, setReplayEntryView, renderUrlViewInner, loadSignatureInfo } from './render.js';
+import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, toggleReplayPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, openRuleModalFromReplayEvent, buildResponseTab, ITEM_HEIGHT, appendReplayFeedEvent, onReplayFeedScroll, setOnReplayFeedLoadOlder, renderReplayEventDetail, renderReplayMatch, renderMatchCandidates, selectReplayFeedEvent, setReplayEntryView, renderUrlViewInner, loadSignatureInfo } from './render.js';
 import { parseRoute, buildHash } from './routes.js';
 import { makeResizable } from './resize.js';
 import { initHeader, setHeaderMode } from './header.js';
@@ -133,7 +133,6 @@ initHeader('headerActions', [
   },
   {
     id: 'rulesBtn',
-    hiddenIn: ['replay'],
     html: '<button class="btn" id="rulesBtn">Rules <span class="badge" id="rulesCount">0</span></button>',
     events: { click: toggleRulesPanel },
   },
@@ -653,14 +652,18 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
     case 'create-rule-from-request':
       createRuleFromRequest();
       break;
+    case 'create-rule-from-replay-event':
+      openRuleModalFromReplayEvent(_lastReplayDetail && _lastReplayDetail.event);
+      break;
     case 'revert-body':
       revertBody(btn.dataset.target);
       break;
     case 'goto-replay':
       navigate({ kind: 'entry', id: btn.dataset.id });
       break;
-    case 'replay-body':
-      fetch(`/api/replay/events/${encodeURIComponent(btn.dataset.run)}/${btn.dataset.seq}/body`)
+    case 'replay-body': {
+      const target = btn.dataset.target || '';
+      fetch(`/api/replay/events/${encodeURIComponent(btn.dataset.run)}/${btn.dataset.seq}/body${target ? `?target=${encodeURIComponent(target)}` : ''}`)
         .then(r => r.text())
         .then(text => {
           const pre = document.querySelector('.detail-panel .body-viewer-body pre');
@@ -668,6 +671,7 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
         })
         .catch(e => console.error('Failed to load replay body:', e));
       break;
+    }
     case 'replay-entry-body':
       downloadBin(btn.dataset.target || 'response', btn.dataset.id);
       break;
@@ -1216,7 +1220,10 @@ document.getElementById('toggleListBtn').classList.toggle('active', !listHidden)
 
 loadRequests().then(() => {
   applyRoute();
-  if (getReplayMode()) return;
+  if (getReplayMode()) {
+    loadRules();
+    return;
+  }
   loadIgnored();
   loadFocused();
   loadRules();

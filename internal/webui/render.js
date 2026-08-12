@@ -12,6 +12,7 @@ export const SVG_REVERT = '<svg width="14" height="14" viewBox="0 0 16 16"><path
 export const SVG_MAXIMIZE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>';
 export const SVG_MINIMIZE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></svg>';
 export const SVG_AGENT = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>';
+const SVG_RULE = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="3" y="1" width="10" height="14" rx="1.5" stroke="currentColor" stroke-width="1.5"/><line x1="5.5" y1="5" x2="10.5" y2="5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="5.5" y1="8" x2="10.5" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="8" y1="10.5" x2="8" y2="13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="6.5" y1="11.75" x2="9.5" y2="11.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
 
 export function escapeHtml(str) {
   if (!str) return '';
@@ -446,17 +447,7 @@ export function renderDetail(req, activeTab = 'request') {
 
   const SVG_COPY_SMALL = '<svg width="10" height="10" viewBox="0 0 16 16"><rect x="5" y="5" width="9" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5 11H3.5A1.5 1.5 0 012 9.5v-7A1.5 1.5 0 013.5 1h7A1.5 1.5 0 0112 2.5V5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
 
-  const actionBanner = (() => {
-    if (!req.appliedAction || req.appliedAction === 'passthrough') return '';
-    const ruleLabel = req.ruleName ? ` by "${escapeHtml(req.ruleName)}"` : '';
-    switch (req.appliedAction) {
-      case 'mock': return `<div class="action-banner action-banner-mock">◉ Mocked${ruleLabel}</div>`;
-      case 'drop': return `<div class="action-banner action-banner-drop">✕ Dropped${ruleLabel}</div>`;
-      case 'modify': return `<div class="action-banner action-banner-modify">✎ Modified${ruleLabel}</div>`;
-      case 'response_mock': return `<div class="action-banner action-banner-response-mock">↻ Response Mocked${ruleLabel}</div>`;
-      default: return '';
-    }
-  })();
+  const actionBanner = actionBannerHtml(req);
 
   const isMocked = req.appliedAction === 'mock' || req.appliedAction === 'response_mock';
   const isDropped = req.appliedAction === 'drop';
@@ -510,7 +501,7 @@ export function renderDetail(req, activeTab = 'request') {
             ${ignoreBtn}
             ${focusBtn}
             <button class="btn-replay" data-action="send-replay"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg> Replay</button>
-            <button class="btn-create-rule" data-action="create-rule-from-request"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="3" y="1" width="10" height="14" rx="1.5" stroke="currentColor" stroke-width="1.5"/><line x1="5.5" y1="5" x2="10.5" y2="5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="5.5" y1="8" x2="10.5" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="8" y1="10.5" x2="8" y2="13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="6.5" y1="11.75" x2="9.5" y2="11.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> Rule</button>
+            <button class="btn-create-rule" data-action="create-rule-from-request">${SVG_RULE} Rule</button>
         </div>`}
         ${replayedFromHtml}
         <div class="tabs-row">
@@ -810,10 +801,20 @@ export function openRuleModal(rule) {
   document.getElementById('ruleUrl').value = rule ? (rule.match.url_pattern || '') : '';
   document.getElementById('ruleMethod').value = rule ? (rule.match.method || '') : '';
 
-  const reqAction = (rule && rule.action === 'response_mock') ? 'passthrough' : (rule ? rule.action : 'passthrough');
+  const replayMode = getReplayMode();
+  const reqAction = (() => {
+    const raw = rule ? rule.action : 'passthrough';
+    if (replayMode) return (raw === 'mock' || raw === 'drop') ? raw : 'mock';
+    return raw === 'response_mock' ? 'passthrough' : raw;
+  })();
   const reqRadio = document.querySelector(`input[name="ruleRequestAction"][value="${reqAction}"]`);
   reqRadio.checked = true;
   toggleRequestActionSections(reqAction);
+
+  for (const v of ['passthrough', 'modify']) {
+    const radio = document.querySelector(`input[name="ruleRequestAction"][value="${v}"]`);
+    if (radio) radio.closest('.radio-label').style.display = replayMode ? 'none' : '';
+  }
 
   if (rule && rule.modified_request) {
     document.getElementById('modifyHost').value = rule.modified_request.host || '';
@@ -864,6 +865,10 @@ export function openRuleModal(rule) {
 
 export function closeRuleModal() {
   document.getElementById('ruleModal').classList.remove('open');
+  for (const v of ['passthrough', 'modify']) {
+    const radio = document.querySelector(`input[name="ruleRequestAction"][value="${v}"]`);
+    if (radio) radio.closest('.radio-label').style.display = '';
+  }
 }
 
 function toggleRequestActionSections(action) {
@@ -922,14 +927,61 @@ export function openRuleModalFromRequest(entry) {
   toggleResponseActionSections('real');
 }
 
+export function openRuleModalFromReplayEvent(ev) {
+  const urlPath = (ev.url || '').replace(/^https?:\/\/[^/]+/, '');
+  const rule = {
+    name: '',
+    match: {
+      method: ev.method || '',
+      host: (ev.request && ev.request.host) || '',
+      url_pattern: urlPath,
+    },
+    action: 'mock',
+    mock_response: {
+      status: ev.status || 200,
+      headers: {},
+      body: '',
+    },
+    modified_request: {
+      host: (ev.request && ev.request.host) || '',
+      url: urlPath,
+      headers: (ev.request && ev.request.headers) || {},
+      body: (ev.request && ev.request.body) || '',
+    },
+  };
+  openRuleModal(rule);
+  document.querySelector('input[name="ruleRequestAction"][value="mock"]').checked = true;
+  toggleRequestActionSections('mock');
+  toggleResponseActionSections('real');
+}
+
+function actionLabel(action) {
+  switch (action) {
+    case 'mock': return '◉ Mocked';
+    case 'response_mock': return '↻ Response Mocked';
+    case 'drop': return '✕ Dropped';
+    case 'modify': return '✎ Modified';
+    default: return action;
+  }
+}
+
+function actionBannerHtml(record) {
+  if (!record.appliedAction || record.appliedAction === 'passthrough') return '';
+  const ruleLabel = record.ruleName ? ` by "${escapeHtml(record.ruleName)}"` : '';
+  const label = actionLabel(record.appliedAction);
+  return `<div class="action-banner action-banner-${record.appliedAction}">${label}${ruleLabel}</div>`;
+}
+
 function replayEventRow(ev, selected) {
   const sel = selected ? ' selected' : '';
   const icon = ev.result === 'hit' ? '✓' : ev.result === 'miss' ? '✗' : '‼';
   const time = ev.ts ? `<span class="replay-event-time">${new Date(ev.ts).toLocaleTimeString()}</span>` : '';
+  const ruleBadge = ev.appliedAction ? `<span class="replay-event-rule replay-event-rule-${escapeHtml(ev.appliedAction)}" title="${ev.ruleName ? `Rule: ${escapeHtml(ev.ruleName)}` : ''}">${actionLabel(ev.appliedAction)}</span>` : '';
   return `<div class="replay-event replay-event-${ev.result}${sel}" data-action="replay-event-detail" data-run="${escapeHtml(ev.runId)}" data-seq="${ev.seq}" title="${new Date(ev.ts).toLocaleString()}">
             <span class="replay-event-result">${icon}</span>
             <span class="replay-event-method">${escapeHtml(ev.method)}</span>
             <span class="replay-event-url">${escapeHtml(ev.url)}</span>
+            ${ruleBadge}
             <span class="replay-event-seq">seq ${ev.seq}</span>
             ${time}
         </div>`;
@@ -1138,6 +1190,10 @@ export function renderReplayEventDetail(detail, activeTab = 'match') {
   })();
 
   panel.innerHTML = `
+        ${actionBannerHtml(ev)}
+        <div class="detail-toolbar">
+            <button class="btn-create-rule" data-action="create-rule-from-replay-event" title="Create rule from this event">${SVG_RULE} Rule</button>
+        </div>
         <div class="tabs-row">
             <div class="tabs">
                 <button class="tab${activeTab === 'request' ? ' active' : ''}" data-action="tab" data-tab="request">Request</button>
@@ -1206,27 +1262,27 @@ function buildReplayResponseTab(detail) {
   const ev = detail.event;
   const status = ev.status != null ? ev.status : '—';
   const res = detail.matchedEntry?.response;
+  const srv = ev.servedResponse;
 
   let statusHtml = `<pre>${status}</pre>`;
   if (ev.result === 'miss') statusHtml = `<pre>${status} — replay miss</pre>`;
   if (ev.result === 'exhausted') statusHtml = `<pre>${status} — replay exhausted</pre>`;
 
   let headersHtml;
-  if (ev.result === 'hit' && res) {
+  let bodyHtml = '';
+  if (srv) {
+    headersHtml = buildHeaderRows(srv.headers || {});
+    if (srv.body) bodyHtml = `<pre>${escapeHtml(srv.body)}</pre>`;
+    else if (srv.bodyFile) bodyHtml = `<a class="replay-entry-link" data-action="replay-body" data-run="${escapeHtml(ev.runId)}" data-seq="${ev.seq}" data-target="served" href="#">Download body (${srv.bodySize || ''} bytes)</a>`;
+  } else if (ev.result === 'hit' && res) {
     const resHeaders = res.headers || {};
     headersHtml = buildHeaderRows(resHeaders) +
       `<div class="header-row"><span class="header-key">X-Gospy-Replay:</span><span class="header-value">hit</span></div>`;
-  } else {
-    headersHtml = `<div class="header-row"><span class="header-key">X-Gospy-Replay:</span><span class="header-value">${escapeHtml(ev.result)}</span></div>`;
-  }
-
-  let bodyHtml;
-  if (ev.result === 'hit' && res) {
     if (res.body) bodyHtml = `<pre>${escapeHtml(res.body)}</pre>`;
     else if (res.bodyFile && ev.entryId) bodyHtml = `<a class="replay-entry-link" data-action="replay-entry-body" data-run="${escapeHtml(ev.runId)}" data-id="${escapeHtml(ev.entryId)}" data-target="response" href="#">Download body (${res.bodySize || ''} bytes)</a>`;
-    else bodyHtml = '<div class="replay-event-empty">Empty body</div>';
   } else {
-    bodyHtml = `<pre>${escapeHtml(detail.syntheticBody || '')}</pre>`;
+    headersHtml = `<div class="header-row"><span class="header-key">X-Gospy-Replay:</span><span class="header-value">${escapeHtml(ev.result)}</span></div>`;
+    if (detail.syntheticBody) bodyHtml = `<pre>${escapeHtml(detail.syntheticBody)}</pre>`;
   }
 
   return `
@@ -1238,10 +1294,11 @@ function buildReplayResponseTab(detail) {
             <div class="section-header"><span class="section-title">Headers</span></div>
             <div class="content-block"><div class="headers-container">${headersHtml}</div></div>
         </div>
-        <div class="section-panel">
+        ${bodyHtml ? `<div class="section-panel">
             <div class="section-header"><span class="section-title">Body</span></div>
             <div class="content-block">${bodyHtml}</div>
-        </div>`;
+        </div>` : ''}
+    `;
 }
 
 export function renderReplayMatch(resp, ctx, keepScroll) {

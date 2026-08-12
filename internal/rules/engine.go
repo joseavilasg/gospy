@@ -3,9 +3,11 @@ package rules
 import (
 	"regexp"
 	"strings"
+	"sync"
 )
 
 type Engine struct {
+	mu    sync.RWMutex
 	rules []*Rule
 }
 
@@ -16,10 +18,14 @@ func NewEngine() *Engine {
 }
 
 func (e *Engine) Load(rules []*Rule) {
+	e.mu.Lock()
 	e.rules = rules
+	e.mu.Unlock()
 }
 
 func (e *Engine) Match(method, host, url string, headers map[string][]string) *Rule {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	for _, rule := range e.rules {
 		if !rule.Enabled {
 			continue
@@ -64,10 +70,14 @@ func (e *Engine) matchesRule(rule *Rule, method, host, url string, headers map[s
 }
 
 func (e *Engine) AddRule(rule *Rule) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.rules = append(e.rules, rule)
 }
 
 func (e *Engine) RemoveRule(id string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	for i, rule := range e.rules {
 		if rule.ID == id {
 			e.rules = append(e.rules[:i], e.rules[i+1:]...)
@@ -78,12 +88,16 @@ func (e *Engine) RemoveRule(id string) bool {
 }
 
 func (e *Engine) GetRules() []*Rule {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	result := make([]*Rule, len(e.rules))
 	copy(result, e.rules)
 	return result
 }
 
 func (e *Engine) FindMatchingRules(method, host, urlPattern string, excludeID string) []*Rule {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	var matches []*Rule
 	for _, rule := range e.rules {
 		if rule.ID == excludeID {

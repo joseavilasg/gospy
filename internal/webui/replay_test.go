@@ -87,7 +87,6 @@ func TestReplayModeReadOnlyGuards(t *testing.T) {
 		{"agent enabled", httptest.NewRequest(http.MethodPut, "/api/agent/enabled", nil), s.replayReadOnly(s.handleAgentEnabled)},
 		{"ignored", httptest.NewRequest(http.MethodPut, "/api/ignored", nil), s.replayReadOnly(s.handleIgnored)},
 		{"focused", httptest.NewRequest(http.MethodPut, "/api/focused", nil), s.replayReadOnly(s.handleFocused)},
-		{"rules", httptest.NewRequest(http.MethodPut, "/api/rules", nil), s.replayReadOnly(s.handleRules)},
 		{"request-rule", httptest.NewRequest(http.MethodPost, "/api/request-rule", nil), s.replayReadOnly(s.handleRequestRule)},
 		{"process events", httptest.NewRequest(http.MethodGet, "/api/process/events", nil), s.replayReadOnly(s.handleProcessEvents)},
 		{"save body", httptest.NewRequest(http.MethodPut, "/api/requests/e1/body", nil), s.handleGetRequest},
@@ -111,6 +110,172 @@ func TestReplayModeReadOnlyGuards(t *testing.T) {
 	rec = httptest.NewRecorder()
 	s.handleGetRequest(rec, httptest.NewRequest(http.MethodGet, "/api/requests/e1/body-bin", nil))
 	assertStatus(t, "body-bin GET in replay (no body -> 400, guard must not 404)", rec, http.StatusBadRequest)
+}
+
+// TestReplayRulesEnabled locks the rules-in-replay contract: the rule CRUD API
+// is mutable in replay mode (the replay server consults the same engine live)
+// and the engine picks up the stored rule.
+func TestReplayRulesEnabled(t *testing.T) {
+	s, hist, _ := newReplayServer(t)
+	saveEntry(t, hist, "e1", "GET", "https://live.example.com/a")
+
+	rule := `{"name":"fake 404","match":{"method":"GET","host":"live.example.com","url_pattern":"/a"},"action":"mock","mock_response":{"status":404,"body":"mocked"}}`
+	rec := httptest.NewRecorder()
+	s.handleRules(rec, httptest.NewRequest(http.MethodPost, "/api/rules", strings.NewReader(rule)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST /api/rules in replay: expected 201, got %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	s.handleRules(rec, httptest.NewRequest(http.MethodGet, "/api/rules", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/rules in replay: expected 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "fake 404") {
+		t.Fatalf("GET /api/rules must list the replay rule, got %q", rec.Body.String())
+	}
+	if got := len(s.engine.GetRules()); got != 1 {
+		t.Fatalf("engine must hold the replay rule, got %d rules", got)
+	}
+}
+
+// TestReplayRulesFrontend locks the rules-in-replay UI contract: the Rules
+// button is visible in replay, the replay boot loads the rules, the modal only
+// offers the actions the replay server honors (mock/drop), and applied events
+// render their rule badge and banner.
+func TestReplayRulesFrontend(t *testing.T) {
+	src := strings.ReplaceAll(appJS, "\r\n", "\n")
+	if strings.Contains(src, "id: 'rulesBtn',\n    hiddenIn: ['replay']") {
+		t.Fatal("app.js: the Rules button must be visible in replay mode")
+	}
+	if !strings.Contains(src, "if (getReplayMode()) {\n    loadRules();\n    return;\n  }") {
+		t.Fatal("app.js: the replay boot must load the rules")
+	}
+
+	rnd := strings.ReplaceAll(renderJS, "\r\n", "\n")
+	for _, probe := range []string{
+		"if (replayMode) return (raw === 'mock' || raw === 'drop') ? raw : 'mock';",
+		"for (const v of ['passthrough', 'modify'])",
+		"function actionBannerHtml(record)",
+		"actionBannerHtml(ev)",
+		"replay-event-rule",
+	} {
+		if !strings.Contains(rnd, probe) {
+			t.Fatalf("render.js: must %s", probe)
+		}
+	}
+	if !strings.Contains(styleCSS, ".replay-event-rule-mock") || !strings.Contains(styleCSS, ".replay-event-rule-drop") {
+		t.Fatal("style.css: the feed rule badges need mock/drop styles")
+	}
+	if !strings.Contains(rnd, "create-rule-from-replay-event") ||
+		!strings.Contains(rnd, "function openRuleModalFromReplayEvent(ev)") {
+		t.Fatal("render.js: the replay event detail must offer create-rule with a replay-specific prefill")
+	}
+	if !strings.Contains(src, "case 'create-rule-from-replay-event':") ||
+		!strings.Contains(src, "openRuleModalFromReplayEvent(_lastReplayDetail && _lastReplayDetail.event)") {
+		t.Fatal("app.js: the replay event detail create-rule must dispatch to the replay prefill")
+	}
+	if !strings.Contains(rnd, "const srv = ev.servedResponse;") ||
+		!strings.Contains(rnd, `data-target="served"`) {
+		t.Fatal("render.js: the response tab must render the rule-served response (and its body link) when present")
+	}
+	if !strings.Contains(src, `?target=${encodeURIComponent(target)}`) {
+		t.Fatal("app.js: the replay-body fetch must pass the served target to the endpoint")
+	}
+	if !strings.Contains(rnd, "${bodyHtml ? `<div class=\"section-panel\">") ||
+		strings.Contains(rnd, "Empty body") {
+		t.Fatal("render.js: the response tab must omit the Body section when the response has no body, never print an 'Empty body' placeholder")
+	}
+}
+
+// TestReplayServedBodyEndpoint locks the served-response body endpoint: a
+// rule-served response (mock/drop) is captured in the event and its raw body
+// is exposed via /api/replay/events/{run}/{seq}/body?target=served, distinct
+// from the recorded body served on a plain hit.
+func TestReplayServedBodyEndpoint(t *testing.T) {
+	s, _, logRoot := newReplayServer(t)
+
+	runDir, err := session.ReplayRunDir(logRoot, "mockrun")
+	if err != nil {
+		t.Fatalf("ReplayRunDir: %v", err)
+	}
+	l, err := session.OpenReplayLog(runDir, "mockrun")
+	if err != nil {
+		t.Fatalf("OpenReplayLog: %v", err)
+	}
+	if err := l.Append(&session.ReplayEvent{
+		Timestamp:     time.Now(),
+		RunID:         "mockrun",
+		Method:        "GET",
+		URL:           "https://live.example.com/master.m3u8",
+		Result:        "hit",
+		Status:        418,
+		AppliedAction: "mock",
+		ServedResponse: &history.ResponseRecord{
+			Status:  418,
+			Headers: map[string][]string{"Content-Type": {"text/plain"}},
+		},
+	}, []byte("{}"), []byte("mocked body")); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	getBody := func(qs string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		s.handleReplayBody(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/mockrun/1/body"+qs, nil), "mockrun", 1)
+		return rec
+	}
+
+	rec := getBody("")
+	if rec.Code != http.StatusOK || rec.Body.String() != "{}" {
+		t.Fatalf("request target: expected 200 with the raw request body, got %d %q", rec.Code, rec.Body.String())
+	}
+	rec = getBody("?target=served")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("served target: expected 200, got %d", rec.Code)
+	}
+	if rec.Body.String() != "mocked body" {
+		t.Fatalf("served target: expected 'mocked body', got %q", rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "text/plain" {
+		t.Fatalf("served target: expected Content-Type text/plain, got %q", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("served target: expected CORS *, got %q", got)
+	}
+	rec = getBody("?target=evil")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid target: expected 400, got %d", rec.Code)
+	}
+
+	plainDir, err := session.ReplayRunDir(logRoot, "plainrun")
+	if err != nil {
+		t.Fatalf("ReplayRunDir: %v", err)
+	}
+	pl, err := session.OpenReplayLog(plainDir, "plainrun")
+	if err != nil {
+		t.Fatalf("OpenReplayLog: %v", err)
+	}
+	if err := pl.Append(&session.ReplayEvent{
+		Timestamp: time.Now(),
+		RunID:     "plainrun",
+		Method:    "GET",
+		URL:       "https://live.example.com/master.m3u8",
+		Result:    "hit",
+		Status:    200,
+	}, []byte("{}"), nil); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := pl.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	rec = httptest.NewRecorder()
+	s.handleReplayBody(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/plainrun/1/body?target=served", nil), "plainrun", 1)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("served target on a plain hit: expected 404, got %d", rec.Code)
+	}
 }
 
 // TestReplayFilterSaveAllowed locks the replay filter contract: criteria saves
@@ -386,7 +551,7 @@ func TestReplayRunsEndpointFromDisk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenReplayLog: %v", err)
 	}
-	if err := l.Append(&session.ReplayEvent{Timestamp: time.Now(), RunID: "pastrun", Method: "GET", URL: "https://live.example.com/a", Result: "hit", Status: 200, EntryID: "e1"}, []byte("{}")); err != nil {
+	if err := l.Append(&session.ReplayEvent{Timestamp: time.Now(), RunID: "pastrun", Method: "GET", URL: "https://live.example.com/a", Result: "hit", Status: 200, EntryID: "e1"}, []byte("{}"), nil); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
 	if err := l.Close(); err != nil {
@@ -452,7 +617,7 @@ func TestReplayEventsListPaged(t *testing.T) {
 			Status:    200,
 			EntryID:   fmt.Sprintf("e%d", i+1),
 		}
-		if err := l.Append(ev, []byte("{}")); err != nil {
+		if err := l.Append(ev, []byte("{}"), nil); err != nil {
 			t.Fatalf("Append: %v", err)
 		}
 	}
