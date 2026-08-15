@@ -47,6 +47,10 @@ func main() {
 	bindIface := flag.String("bind-iface", "", "Bind proxy outbound connections to a network interface (SO_BINDTODEVICE, Linux)")
 	dnsServer := flag.String("dns", "", "Custom DNS server for proxy outbound; auto-detected from --bind-iface when empty")
 	flag.Parse()
+	if *uiAddr == "" {
+		fmt.Fprintf(os.Stderr, "ERROR: --ui cannot be empty (the web server is always active)\n")
+		os.Exit(1)
+	}
 
 	fmt.Println(`
    _____   ____    _____  _____ __     __
@@ -315,45 +319,43 @@ func runReplay(caCert *ca.CA, addr, sessionDir, matchConfig, uiAddr, dataDir str
 		return &session.ClientOrigin{Name: pi.Name, Path: pi.Path, PID: pi.PID}
 	})
 
-	if uiAddr != "" {
-		replayRoot := filepath.Join(dataDir, "replay", filepath.Base(sessionDir))
-		srv.SetReplayLogRoot(replayRoot)
+	replayRoot := filepath.Join(dataDir, "replay", filepath.Base(sessionDir))
+	srv.SetReplayLogRoot(replayRoot)
 
-		uiBase, err := os.MkdirTemp("", "gospy-replay-ui-")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR: failed to create UI temp dir: %v\n", err)
-			os.Exit(1)
-		}
-		defer os.RemoveAll(uiBase)
-
-		ignoreStore := proxy.NewIgnoreStore(filepath.Join(uiBase, "ignore.json"))
-		_ = ignoreStore.Load()
-		focusStore := proxy.NewFocusStore(filepath.Join(uiBase, "focus.json"))
-		_ = focusStore.Load()
-		rulesStore := rules.NewStore(filepath.Join(replayRoot, "rules.json"))
-		if err := rulesStore.Load(); err != nil {
-			proxy.LogError(fmt.Sprintf("Failed to load replay rules: %v", err))
-		}
-		ruleEngine := rules.NewEngine()
-		ruleEngine.Load(rulesStore.GetRules())
-		filterStore := webui.NewFilterStore(filepath.Join(uiBase, "filters.json"))
-
-		sigCache := proxy.NewSignatureCache(filepath.Join(uiBase, "signatures"))
-		webSrv := webui.NewServer(uiAddr, hist, ignoreStore, focusStore, rulesStore, ruleEngine, addr, nil, sigCache, filterStore)
-		webSrv.SetReplayMode(true)
-		webSrv.SetReplayLogDir(replayRoot)
-		srv.SetReplayNotifier(webSrv.ReplayNotifier())
-		srv.SetRulesEngine(ruleEngine)
-
-		go func() {
-			if err := webSrv.ListenAndServe(); err != nil {
-				proxy.LogError(fmt.Sprintf("Web UI error: %v", err))
-			}
-		}()
-
-		proxy.LogInfo(fmt.Sprintf("Web UI at http://localhost%s", uiAddr))
-		proxy.LogInfo("Replay mode: read-only")
+	uiBase, err := os.MkdirTemp("", "gospy-replay-ui-")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: failed to create UI temp dir: %v\n", err)
+		os.Exit(1)
 	}
+	defer os.RemoveAll(uiBase)
+
+	ignoreStore := proxy.NewIgnoreStore(filepath.Join(uiBase, "ignore.json"))
+	_ = ignoreStore.Load()
+	focusStore := proxy.NewFocusStore(filepath.Join(uiBase, "focus.json"))
+	_ = focusStore.Load()
+	rulesStore := rules.NewStore(filepath.Join(replayRoot, "rules.json"))
+	if err := rulesStore.Load(); err != nil {
+		proxy.LogError(fmt.Sprintf("Failed to load replay rules: %v", err))
+	}
+	ruleEngine := rules.NewEngine()
+	ruleEngine.Load(rulesStore.GetRules())
+	filterStore := webui.NewFilterStore(filepath.Join(uiBase, "filters.json"))
+
+	sigCache := proxy.NewSignatureCache(filepath.Join(uiBase, "signatures"))
+	webSrv := webui.NewServer(uiAddr, hist, ignoreStore, focusStore, rulesStore, ruleEngine, addr, nil, sigCache, filterStore)
+	webSrv.SetReplayMode(true)
+	webSrv.SetReplayLogDir(replayRoot)
+	srv.SetReplayNotifier(webSrv.ReplayNotifier())
+	srv.SetRulesEngine(ruleEngine)
+
+	go func() {
+		if err := webSrv.ListenAndServe(); err != nil {
+			proxy.LogError(fmt.Sprintf("Web UI error: %v", err))
+		}
+	}()
+
+	proxy.LogInfo(fmt.Sprintf("Web UI at http://localhost%s", uiAddr))
+	proxy.LogInfo("Replay mode: read-only")
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
