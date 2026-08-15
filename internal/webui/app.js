@@ -397,6 +397,7 @@ function applyRouteFull(route) {
       ensureReplayFeedView(route.run).then(() => selectReplayFeedEvent(route.run, route.seq));
       loadReplayEventDetail(route.run, route.seq).then(detail => {
         showReplayDetail(detail, route.tab);
+        if (route.tab === 'origin') loadSignatureInfo();
         if (detail && detail.event) {
           const scope = route.scope || 'matching';
           return loadMatchTab(route.run, route.seq, scope, _matchQueries[scope] || '').then(() => {
@@ -415,7 +416,10 @@ function applyRouteFull(route) {
 }
 
 function applyRouteDiff(prev, route) {
-  if (route.tab !== prev.tab) switchTabInPlace(route.tab);
+  if (route.tab !== prev.tab) {
+    switchTabInPlace(route.tab);
+    if (route.tab === 'origin') loadSignatureInfo();
+  }
   if (route.kind === 'replay' && route.tab === 'match') {
     if (route.scope !== prev.scope) {
       loadMatchTab(route.run, route.seq, route.scope, _matchQueries[route.scope] || '').then(() => {
@@ -1222,6 +1226,7 @@ loadRequests().then(() => {
   applyRoute();
   if (getReplayMode()) {
     loadRules();
+    connectSSE();
     return;
   }
   loadIgnored();
@@ -1768,7 +1773,9 @@ function connectSSE() {
         const signedEl = document.getElementById('originSigned');
         const pathEl = document.getElementById('originPath');
         if (signedEl && pathEl && pathEl.getAttribute('title') === data.filePath) {
-          if (data.isSigned) {
+          if (data.supported === false) {
+            signedEl.innerHTML = '<span class="origin-status unknown">N/A</span>';
+          } else if (data.isSigned) {
             signedEl.innerHTML = `<span class="origin-status signed">✓ Signed by ${escapeHtml(data.signerName || 'Unknown')}</span>`;
           } else {
             signedEl.innerHTML = '<span class="origin-status unsigned">✗ Unsigned</span>';

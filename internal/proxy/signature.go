@@ -15,6 +15,7 @@ type SignatureResult struct {
 	VerifiedAt time.Time `json:"verifiedAt"`
 	Error      string    `json:"error,omitempty"`
 	Supported  bool      `json:"supported"`
+	InFlight   bool      `json:"-"`
 }
 
 type SignatureCache struct {
@@ -47,6 +48,12 @@ func (sc *SignatureCache) Get(filePath string) *SignatureResult {
 	return nil
 }
 
+// SignatureSupported reports whether the current platform can verify
+// Authenticode signatures; platforms without support are deterministic N/A.
+func SignatureSupported() bool {
+	return signatureSupported()
+}
+
 func (sc *SignatureCache) VerifyAsync(filePath string) {
 	if sc.Get(filePath) != nil {
 		return
@@ -57,6 +64,7 @@ func (sc *SignatureCache) VerifyAsync(filePath string) {
 		FilePath:   filePath,
 		VerifiedAt: time.Now(),
 		Supported:  signatureSupported(),
+		InFlight:   true,
 	}
 	sc.mu.Unlock()
 
@@ -71,6 +79,19 @@ func (sc *SignatureCache) VerifyAsync(filePath string) {
 			sc.onUpdate(result)
 		}
 	}()
+}
+
+func (sc *SignatureCache) Snapshot() []*SignatureResult {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	out := make([]*SignatureResult, 0, len(sc.cache))
+	for _, r := range sc.cache {
+		if r.InFlight {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 func (sc *SignatureCache) load() {
@@ -92,7 +113,13 @@ func (sc *SignatureCache) load() {
 
 func (sc *SignatureCache) save() {
 	sc.mu.RLock()
-	data, err := json.MarshalIndent(sc.cache, "", "  ")
+	clean := make(map[string]*SignatureResult, len(sc.cache))
+	for k, v := range sc.cache {
+		if !v.InFlight {
+			clean[k] = v
+		}
+	}
+	data, err := json.MarshalIndent(clean, "", "  ")
 	sc.mu.RUnlock()
 	if err != nil {
 		return

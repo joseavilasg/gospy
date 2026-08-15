@@ -616,7 +616,7 @@ export function renderDetail(req, activeTab = 'request') {
                         <div class="origin-row">
                             <span class="origin-label">Signed:</span>
                             <span class="origin-value" id="originSigned">
-                                ${req.clientPath ? '<span class="origin-status analyzing">Analyzing...</span>' : 'N/A'}
+                                ${req.clientPath ? renderOriginStatus(req.clientSignature) : 'N/A'}
                             </span>
                         </div>
                     </div>
@@ -641,27 +641,28 @@ export function showTab(btn, tab) {
   }
 }
 
+export function renderOriginStatus(sig) {
+  if (!sig || sig.status === 'analyzing') return '<span class="origin-status analyzing">Analyzing...</span>';
+  if (sig.supported === false) return '<span class="origin-status unknown">N/A</span>';
+  if (sig.isSigned) return `<span class="origin-status signed">✓ Signed by ${escapeHtml(sig.signerName || 'Unknown')}</span>`;
+  return '<span class="origin-status unsigned">✗ Unsigned</span>';
+}
+
 export function loadSignatureInfo() {
   const pathEl = document.getElementById('originPath');
   if (!pathEl) return;
   const filePath = pathEl.getAttribute('title');
   if (!filePath) return;
+  const signedEl = document.getElementById('originSigned');
+  if (!signedEl) return;
+  if (!signedEl.querySelector('.analyzing')) return;
 
   fetch(`/api/process/signature?path=${encodeURIComponent(filePath)}`)
     .then(r => r.json())
     .then(data => {
       const signedEl = document.getElementById('originSigned');
       if (!signedEl) return;
-
-      if (data.supported === false) {
-        signedEl.innerHTML = '<span class="origin-status unknown">N/A</span>';
-      } else if (data.status === 'analyzing') {
-        signedEl.innerHTML = '<span class="origin-status analyzing">Analyzing...</span>';
-      } else if (data.isSigned) {
-        signedEl.innerHTML = `<span class="origin-status signed">✓ Signed by ${escapeHtml(data.signerName || 'Unknown')}</span>`;
-      } else {
-        signedEl.innerHTML = '<span class="origin-status unsigned">✗ Unsigned</span>';
-      }
+      signedEl.innerHTML = renderOriginStatus(data);
     })
     .catch(() => {
       const signedEl = document.getElementById('originSigned');
@@ -1245,7 +1246,7 @@ export function renderReplayEventDetail(detail, activeTab = 'match') {
                         <div class="origin-row">
                             <span class="origin-label">Signed:</span>
                             <span class="origin-value" id="originSigned">
-                                ${ev.clientPath ? '<span class="origin-status analyzing">Analyzing...</span>' : 'N/A'}
+                                ${ev.clientPath ? renderOriginStatus(detail.clientSignature) : 'N/A'}
                             </span>
                         </div>
                     </div>

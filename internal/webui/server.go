@@ -136,6 +136,7 @@ type SignatureChecker interface {
 	Get(filePath string) *proxy.SignatureResult
 	VerifyAsync(filePath string)
 	OnUpdate(fn func(*proxy.SignatureResult))
+	Snapshot() []*proxy.SignatureResult
 }
 
 func NewServer(addr string, h *history.Store, ignore IgnoreChecker, focus FocusChecker, rulesStore *rules.Store, engine *rules.Engine, proxyAddr string, resolver ProcessResolver, sigCache SignatureChecker, filterStore *FilterStore) *Server {
@@ -393,7 +394,7 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/api/rules/", s.handleRule)
 	mux.HandleFunc("/api/request-rule", s.replayReadOnly(s.handleRequestRule))
 	mux.HandleFunc("/api/process/signature", s.handleProcessSignature)
-	mux.HandleFunc("/api/process/events", s.replayReadOnly(s.handleProcessEvents))
+	mux.HandleFunc("/api/process/events", s.handleProcessEvents)
 	mux.HandleFunc("/api/streams/", s.handleStreamEvents)
 	mux.HandleFunc("/api/session/start", s.handleSessionStart)
 	mux.HandleFunc("/api/replay/runs", s.handleReplayRuns)
@@ -1073,6 +1074,13 @@ func containsNullBytes(data []byte) bool {
 	return false
 }
 
+// entryDetailResponse pairs an entry with its resolved client signature (when
+// already known) so the UI can render the origin verdict without an extra fetch.
+type entryDetailResponse struct {
+	*history.Entry
+	ClientSignature *proxy.SignatureResult `json:"clientSignature,omitempty"`
+}
+
 func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/requests/")
 	parts := strings.SplitN(path, "/", 2)
@@ -1227,7 +1235,7 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	json.NewEncoder(w).Encode(entry)
+	json.NewEncoder(w).Encode(entryDetailResponse{Entry: entry, ClientSignature: s.resolveClientSignature(entry.ClientPath)})
 }
 
 func (s *Server) handleGetBodyBin(w http.ResponseWriter, r *http.Request, id string) {
@@ -2208,12 +2216,14 @@ func (s *Server) handleProcessSignature(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		result := s.sigCache.Get(filePath)
-		if result == nil {
-			s.sigCache.VerifyAsync(filePath)
-			json.NewEncoder(w).Encode(map[string]any{"status": "analyzing", "filePath": filePath})
+		if result != nil && !result.InFlight {
+			json.NewEncoder(w).Encode(result)
 			return
 		}
-		json.NewEncoder(w).Encode(result)
+		if result == nil {
+			s.sigCache.VerifyAsync(filePath)
+		}
+		json.NewEncoder(w).Encode(map[string]any{"status": "analyzing", "filePath": filePath})
 		return
 	}
 
@@ -2242,6 +2252,12 @@ func (s *Server) handleProcessEvents(w http.ResponseWriter, r *http.Request) {
 			default:
 			}
 		})
+		for _, result := range s.sigCache.Snapshot() {
+			select {
+			case ch <- result:
+			default:
+			}
+		}
 	}
 
 	for {
@@ -2393,10 +2409,11 @@ func (s *Server) handleReplayEventsSub(w http.ResponseWriter, r *http.Request) {
 // any), the synthetic body of a miss/exhausted response, and the match config
 // the run was served under, so the frontend can render the match tab.
 type replayDetailResponse struct {
-	Event         session.ReplayEvent  `json:"event"`
-	MatchedEntry  *history.Entry       `json:"matchedEntry,omitempty"`
-	SyntheticBody string               `json:"syntheticBody,omitempty"`
-	MatchConfig   *session.MatchConfig `json:"matchConfig,omitempty"`
+	Event           session.ReplayEvent    `json:"event"`
+	MatchedEntry    *history.Entry         `json:"matchedEntry,omitempty"`
+	SyntheticBody   string                 `json:"syntheticBody,omitempty"`
+	MatchConfig     *session.MatchConfig   `json:"matchConfig,omitempty"`
+	ClientSignature *proxy.SignatureResult `json:"clientSignature,omitempty"`
 }
 
 func (s *Server) handleReplayEventDetail(w http.ResponseWriter, r *http.Request, runID string, seq int) {
@@ -2417,6 +2434,7 @@ func (s *Server) handleReplayEventDetail(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	resp := replayDetailResponse{Event: *ev, MatchConfig: s.runMatchConfig(runID)}
+	resp.ClientSignature = s.resolveClientSignature(ev.ClientPath)
 	if ev.Result == "hit" && ev.EntryID != "" {
 		if e, err := s.hist().Get(ev.EntryID); err == nil {
 			resp.MatchedEntry = e
@@ -2428,6 +2446,26 @@ func (s *Server) handleReplayEventDetail(w http.ResponseWriter, r *http.Request,
 		resp.SyntheticBody = session.ExhaustedBody()
 	}
 	s.writeJSON(w, resp)
+}
+
+// resolveClientSignature returns the origin verdict for a client path when it
+// can be known without a new verification: the cached result, or the
+// deterministic N/A on platforms without signature support.
+func (s *Server) resolveClientSignature(clientPath string) *proxy.SignatureResult {
+	if clientPath == "" || s.sigCache == nil {
+		return nil
+	}
+	if result := s.sigCache.Get(clientPath); result != nil && !result.InFlight {
+		return result
+	}
+	if !proxy.SignatureSupported() {
+		return &proxy.SignatureResult{
+			FilePath:   clientPath,
+			VerifiedAt: time.Now(),
+			Supported:  false,
+		}
+	}
+	return nil
 }
 
 // handleReplayBody serves the stored raw body of a replay event's request.

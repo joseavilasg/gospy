@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"gospy/internal/history"
+	"gospy/internal/proxy"
 	"gospy/internal/session"
 )
 
@@ -88,7 +89,6 @@ func TestReplayModeReadOnlyGuards(t *testing.T) {
 		{"ignored", httptest.NewRequest(http.MethodPut, "/api/ignored", nil), s.replayReadOnly(s.handleIgnored)},
 		{"focused", httptest.NewRequest(http.MethodPut, "/api/focused", nil), s.replayReadOnly(s.handleFocused)},
 		{"request-rule", httptest.NewRequest(http.MethodPost, "/api/request-rule", nil), s.replayReadOnly(s.handleRequestRule)},
-		{"process events", httptest.NewRequest(http.MethodGet, "/api/process/events", nil), s.replayReadOnly(s.handleProcessEvents)},
 		{"save body", httptest.NewRequest(http.MethodPut, "/api/requests/e1/body", nil), s.handleGetRequest},
 		{"revert body", httptest.NewRequest(http.MethodDelete, "/api/requests/e1/body", nil), s.handleGetRequest},
 		{"save headers", httptest.NewRequest(http.MethodPut, "/api/requests/e1/headers", nil), s.handleGetRequest},
@@ -110,6 +110,21 @@ func TestReplayModeReadOnlyGuards(t *testing.T) {
 	rec = httptest.NewRecorder()
 	s.handleGetRequest(rec, httptest.NewRequest(http.MethodGet, "/api/requests/e1/body-bin", nil))
 	assertStatus(t, "body-bin GET in replay (no body -> 400, guard must not 404)", rec, http.StatusBadRequest)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rec = httptest.NewRecorder()
+	s.handleProcessEvents(rec, httptest.NewRequest(http.MethodGet, "/api/process/events", nil).WithContext(ctx))
+	assertStatus(t, "process events SSE in replay (signature results must reach the origin tab)", rec, http.StatusOK)
+
+	src, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatalf("reading server.go: %v", err)
+	}
+	if !strings.Contains(string(src), "sigCache.Snapshot()") ||
+		!strings.Contains(string(src), "result.InFlight") {
+		t.Fatal("server.go: the signature SSE must emit the cache snapshot on connect and the GET must not serve in-flight placeholders")
+	}
 }
 
 // TestReplayRulesEnabled locks the rules-in-replay contract: the rule CRUD API
@@ -148,8 +163,8 @@ func TestReplayRulesFrontend(t *testing.T) {
 	if strings.Contains(src, "id: 'rulesBtn',\n    hiddenIn: ['replay']") {
 		t.Fatal("app.js: the Rules button must be visible in replay mode")
 	}
-	if !strings.Contains(src, "if (getReplayMode()) {\n    loadRules();\n    return;\n  }") {
-		t.Fatal("app.js: the replay boot must load the rules")
+	if !strings.Contains(src, "if (getReplayMode()) {\n    loadRules();\n    connectSSE();\n    return;\n  }") {
+		t.Fatal("app.js: the replay boot must load the rules and connect the signature SSE so the origin tab resolves its 'Analyzing...' state")
 	}
 
 	rnd := strings.ReplaceAll(renderJS, "\r\n", "\n")
@@ -453,7 +468,7 @@ func TestHeaderModuleSepsFromVisible(t *testing.T) {
 // supported:false instead of a misleading "Unsigned" (Linux has no
 // Authenticode equivalent).
 func TestOriginSignedUnsupportedHandled(t *testing.T) {
-	if !strings.Contains(renderJS, "data.supported === false") {
+	if !strings.Contains(renderJS, "sig.supported === false") {
 		t.Fatal("render.js: signature loading must handle supported:false so Linux shows N/A instead of Unsigned")
 	}
 }
@@ -537,6 +552,104 @@ func TestReplayListAndDetail(t *testing.T) {
 	}
 	if len(miss.Event.Unconsumed) != 1 {
 		t.Fatalf("unexpected unconsumed %+v", miss.Event.Unconsumed)
+	}
+}
+
+type fakeSigCache struct {
+	results map[string]*proxy.SignatureResult
+}
+
+func (f *fakeSigCache) Get(filePath string) *proxy.SignatureResult { return f.results[filePath] }
+func (f *fakeSigCache) VerifyAsync(filePath string)                {}
+func (f *fakeSigCache) OnUpdate(fn func(*proxy.SignatureResult))   {}
+func (f *fakeSigCache) Snapshot() []*proxy.SignatureResult {
+	out := make([]*proxy.SignatureResult, 0, len(f.results))
+	for _, r := range f.results {
+		out = append(out, r)
+	}
+	return out
+}
+
+func TestReplayDetailCarriesClientSignature(t *testing.T) {
+	s, _, logRoot := newReplayServer(t)
+
+	runDir, err := session.ReplayRunDir(logRoot, "sigrun")
+	if err != nil {
+		t.Fatalf("ReplayRunDir: %v", err)
+	}
+	l, err := session.OpenReplayLog(runDir, "sigrun")
+	if err != nil {
+		t.Fatalf("OpenReplayLog: %v", err)
+	}
+	if err := l.Append(&session.ReplayEvent{
+		Timestamp:  time.Now(),
+		RunID:      "sigrun",
+		Method:     "GET",
+		URL:        "https://live.example.com/a",
+		Result:     "hit",
+		Status:     200,
+		EntryID:    "e1",
+		ClientPath: "/mnt/c/bin/streamer",
+	}, []byte("{}"), nil); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := l.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	s.sigCache = &fakeSigCache{results: map[string]*proxy.SignatureResult{
+		"/mnt/c/bin/streamer": {FilePath: "/mnt/c/bin/streamer", IsSigned: true, SignerName: "Gohulu Corp", Supported: true},
+	}}
+
+	rec := httptest.NewRecorder()
+	s.handleReplayEventsSub(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/sigrun/1", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("detail: expected 200, got %d", rec.Code)
+	}
+	var detail replayDetailResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+	if detail.ClientSignature == nil || !detail.ClientSignature.IsSigned || detail.ClientSignature.SignerName != "Gohulu Corp" {
+		t.Fatalf("expected the cached client signature in the replay detail, got %+v", detail.ClientSignature)
+	}
+}
+
+func TestRequestDetailCarriesClientSignature(t *testing.T) {
+	s, h, _ := newReplayServer(t)
+
+	entry := &history.Entry{
+		ID:         "sigentry",
+		Timestamp:  time.Now(),
+		Request:    history.RequestRecord{Method: "GET", URL: "https://live.example.com/a", Host: "live.example.com"},
+		Response:   &history.ResponseRecord{Status: 200},
+		ClientPath: "/mnt/c/bin/streamer",
+	}
+	if err := h.Save(entry); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	s.sigCache = &fakeSigCache{results: map[string]*proxy.SignatureResult{
+		"/mnt/c/bin/streamer": {FilePath: "/mnt/c/bin/streamer", IsSigned: true, SignerName: "Gohulu Corp", Supported: true},
+	}}
+
+	rec := httptest.NewRecorder()
+	s.handleGetRequest(rec, httptest.NewRequest(http.MethodGet, "/api/requests/sigentry", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("detail: expected 200, got %d", rec.Code)
+	}
+	var resp struct {
+		ID              string                 `json:"id"`
+		ClientSignature *proxy.SignatureResult `json:"clientSignature"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+	if resp.ID != "sigentry" {
+		t.Fatalf("embedded entry fields must stay at the top level, got id=%q", resp.ID)
+	}
+	if resp.ClientSignature == nil || !resp.ClientSignature.IsSigned {
+		t.Fatalf("expected the cached client signature in the request detail, got %+v", resp.ClientSignature)
 	}
 }
 
@@ -797,8 +910,20 @@ func TestReplayBrowserHistory(t *testing.T) {
 			t.Fatalf("app.js: the router must %s", probe)
 		}
 	}
+	if !strings.Contains(app, "showReplayDetail(detail, route.tab);\n        if (route.tab === 'origin') loadSignatureInfo();") ||
+		!strings.Contains(app, "switchTabInPlace(route.tab);\n    if (route.tab === 'origin') loadSignatureInfo();") {
+		t.Fatal("app.js: opening the origin tab (full apply or in-place diff) must request the signature so the replay event detail resolves its 'Analyzing...' state")
+	}
+	if !strings.Contains(app, "data.supported === false") {
+		t.Fatal("app.js: the signature SSE handler must honor supported:false (N/A on platforms without signature verification)")
+	}
 	if !strings.Contains(renderJS, "renderReplayEventDetail(detail, activeTab") {
 		t.Fatal("render.js: renderReplayEventDetail must accept the active tab from the route")
+	}
+	if !strings.Contains(renderJS, "renderOriginStatus(req.clientSignature)") ||
+		!strings.Contains(renderJS, "renderOriginStatus(detail.clientSignature)") ||
+		!strings.Contains(renderJS, "querySelector('.analyzing')") {
+		t.Fatal("render.js: the origin verdict must come from the detail payload when available and loadSignatureInfo must skip the fetch once a verdict is already shown")
 	}
 	src, err := os.ReadFile("server.go")
 	if err != nil {
