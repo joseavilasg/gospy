@@ -94,22 +94,15 @@ func (ic *Interceptor) CaptureStore() *history.Store {
 	return ic.history.Load()
 }
 
-// capture writes an entry to the active session store unless recording was
-// stopped (max-duration reached). Returns whether the entry was saved.
+// capture writes an entry to the active session store. Entries whose requests
+// passed the HandleRequest stop gate are always captured in full, even if the
+// stop fires mid-flight. Returns whether the entry was saved.
 func (ic *Interceptor) capture(entry *history.Entry) bool {
-	if ic.captureStopped.Load() {
-		return false
-	}
 	h := ic.hist()
 	if h == nil {
 		return false
 	}
 	return h.Save(entry) == nil
-}
-
-// captureEnabled reports whether new requests are still being recorded.
-func (ic *Interceptor) captureEnabled() bool {
-	return ic.hist() != nil && !ic.captureStopped.Load()
 }
 
 func (ic *Interceptor) isSelfRequest(host string) bool {
@@ -168,7 +161,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			ct := req.Header.Get("Content-Type")
 			if len(data) > 0 {
 				entryID = uuid.New().String()
-				if ic.captureEnabled() {
+				if ic.hist() != nil {
 					if filename, err := ic.hist().SaveBinaryBody(entryID, "req", data); err == nil {
 						bodyFile = filename
 						bodySize = int64(len(data))

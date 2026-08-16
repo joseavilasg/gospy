@@ -790,6 +790,27 @@ func TestInterceptor_CaptureStopped(t *testing.T) {
 	}
 }
 
+func TestCaptureWritesAfterStop(t *testing.T) {
+	ic, store := newTestInterceptor(t, nil)
+	ic.SetCaptureStopped(true)
+
+	entry := &history.Entry{
+		ID: "req-passed-gate",
+		Request: history.RequestRecord{
+			Method:  "GET",
+			URL:     "http://example.com/api",
+			Host:    "example.com",
+			Headers: http.Header{},
+		},
+	}
+	if !ic.capture(entry) {
+		t.Fatal("capture should write entries whose request passed the stop gate")
+	}
+	if got := store.ListSummary(); len(got) != 1 {
+		t.Errorf("capture wrote %d entries, want 1", len(got))
+	}
+}
+
 func TestInterceptor_RotationResetsStop(t *testing.T) {
 	ic, store1 := newTestInterceptor(t, nil)
 	store2, err := history.New(t.TempDir())
