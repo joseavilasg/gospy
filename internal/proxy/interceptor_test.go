@@ -757,6 +757,62 @@ func TestInterceptor_SetHistoryStore(t *testing.T) {
 	}
 }
 
+func TestInterceptor_CaptureStopped(t *testing.T) {
+	ic, store := newTestInterceptor(t, nil)
+	ic.SetCaptureStopped(true)
+
+	req := newRequest("GET", "http://example.com/api")
+	ctx := newProxyCtx(req)
+	returnedReq, resp := ic.HandleRequest(req, ctx)
+	if returnedReq != req {
+		t.Fatal("HandleRequest should return the same request")
+	}
+	if resp == nil {
+		t.Fatal("HandleRequest should reject traffic after the capture stop")
+	}
+	if resp.StatusCode != http.StatusGone {
+		t.Errorf("StatusCode = %d, want 410", resp.StatusCode)
+	}
+	if got := resp.Header.Get("X-Gospy-Recording"); got != "stopped" {
+		t.Errorf("X-Gospy-Recording = %q, want stopped", got)
+	}
+	if got := store.ListSummary(); len(got) != 0 {
+		t.Errorf("stopped capture wrote %d entries, want 0", len(got))
+	}
+
+	ic.SetCaptureStopped(false)
+	returnedReq, resp = ic.HandleRequest(newRequest("GET", "http://example.com/api"), newProxyCtx(newRequest("GET", "http://example.com/api")))
+	if returnedReq == nil || resp != nil {
+		t.Fatal("HandleRequest must passthrough after the capture resumes")
+	}
+	if got := store.ListSummary(); len(got) != 1 {
+		t.Errorf("resumed capture wrote %d entries, want 1", len(got))
+	}
+}
+
+func TestInterceptor_RotationResetsStop(t *testing.T) {
+	ic, store1 := newTestInterceptor(t, nil)
+	store2, err := history.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("history.New: %v", err)
+	}
+	ic.SetCaptureStopped(true)
+	ic.SetHistoryStore(store2)
+
+	req := newRequest("GET", "http://example.com/api")
+	ctx := newProxyCtx(req)
+	returnedReq, resp := ic.HandleRequest(req, ctx)
+	if returnedReq != req || resp != nil {
+		t.Fatal("HandleRequest must passthrough after rotation")
+	}
+	if got := store1.ListSummary(); len(got) != 0 {
+		t.Errorf("old store captured %d entries, want 0", len(got))
+	}
+	if got := store2.ListSummary(); len(got) != 1 {
+		t.Errorf("rotated store captured %d entries, want 1 (stop must reset on rotation)", len(got))
+	}
+}
+
 // --- Session gate (record auto mode, no session started) ---
 
 func newNilStoreInterceptor(t *testing.T) *Interceptor {

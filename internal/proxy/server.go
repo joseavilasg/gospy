@@ -102,6 +102,17 @@ func (s *Server) SetHistoryStore(h *history.Store) {
 	s.interceptor.SetHistoryStore(h)
 }
 
+// CaptureStore returns the store currently receiving captured traffic.
+func (s *Server) CaptureStore() *history.Store {
+	return s.interceptor.CaptureStore()
+}
+
+// SetCaptureStopped stops recording for the active session: requests after
+// the stop are rejected with 410 + X-Gospy-Recording: stopped.
+func (s *Server) SetCaptureStopped(on bool) {
+	s.interceptor.SetCaptureStopped(on)
+}
+
 // streamingResponseWriter flushes the response headers immediately after
 // WriteHeader for streaming responses. Without the explicit Flush, goproxy's
 // headers sit in the connection buffer until the first body chunk is written

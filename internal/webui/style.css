@@ -1298,6 +1298,15 @@ pre {
   color: var(--text-strong);
 }
 
+.recording-stopped-banner {
+  display: none;
+  padding: var(--sp-3) var(--sp-8);
+  background: rgba(255, 152, 0, 0.1);
+  color: var(--orange);
+  font-size: var(--fs-sm);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
 .agent-banner {
   display: none;
   padding: var(--sp-3) var(--sp-8);

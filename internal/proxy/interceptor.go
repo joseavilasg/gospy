@@ -30,12 +30,13 @@ type entryUserData struct {
 }
 
 type Interceptor struct {
-	history     atomic.Pointer[history.Store]
-	ignoreStore *IgnoreStore
-	engine      *rules.Engine
-	skipPorts   map[string]bool
-	resolver    *ClientResolver
-	sigCache    *SignatureCache
+	history        atomic.Pointer[history.Store]
+	captureStopped atomic.Bool
+	ignoreStore    *IgnoreStore
+	engine         *rules.Engine
+	skipPorts      map[string]bool
+	resolver       *ClientResolver
+	sigCache       *SignatureCache
 
 	// StreamNotifier is invoked (throttled) as a live SSE response body grows,
 	// and once more with done=true when it ends. Wired by main to the webui
@@ -73,9 +74,42 @@ func (ic *Interceptor) hist() *history.Store {
 	return ic.history.Load()
 }
 
-// SetHistoryStore rotates the capture target (used by session start).
+// SetHistoryStore rotates the capture target (used by session start). Each
+// session starts with a fresh recording window, so any max-duration stop
+// from a previous session is cleared.
 func (ic *Interceptor) SetHistoryStore(h *history.Store) {
+	ic.captureStopped.Store(false)
 	ic.history.Store(h)
+}
+
+// SetCaptureStopped stops recording for the active session: every request
+// after the stop is rejected with 410 + X-Gospy-Recording: stopped (the
+// replay-style hard cut), so the client knows recording ended.
+func (ic *Interceptor) SetCaptureStopped(on bool) {
+	ic.captureStopped.Store(on)
+}
+
+// CaptureStore returns the store currently receiving captured traffic.
+func (ic *Interceptor) CaptureStore() *history.Store {
+	return ic.history.Load()
+}
+
+// capture writes an entry to the active session store unless recording was
+// stopped (max-duration reached). Returns whether the entry was saved.
+func (ic *Interceptor) capture(entry *history.Entry) bool {
+	if ic.captureStopped.Load() {
+		return false
+	}
+	h := ic.hist()
+	if h == nil {
+		return false
+	}
+	return h.Save(entry) == nil
+}
+
+// captureEnabled reports whether new requests are still being recorded.
+func (ic *Interceptor) captureEnabled() bool {
+	return ic.hist() != nil && !ic.captureStopped.Load()
 }
 
 func (ic *Interceptor) isSelfRequest(host string) bool {
@@ -96,6 +130,13 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 
 	if ic.isSelfRequest(req.Host) {
 		return req, nil
+	}
+
+	// Recording stopped (max-duration reached): hard cut, replay-style. The
+	// session is sealed and every request is rejected so the client can tell
+	// recording ended.
+	if ic.captureStopped.Load() {
+		return req, recordingStoppedResponse(req)
 	}
 
 	if ic.ignoreStore.IsIgnored(req.Host) {
@@ -127,9 +168,11 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			ct := req.Header.Get("Content-Type")
 			if len(data) > 0 {
 				entryID = uuid.New().String()
-				if filename, err := ic.hist().SaveBinaryBody(entryID, "req", data); err == nil {
-					bodyFile = filename
-					bodySize = int64(len(data))
+				if ic.captureEnabled() {
+					if filename, err := ic.hist().SaveBinaryBody(entryID, "req", data); err == nil {
+						bodyFile = filename
+						bodySize = int64(len(data))
+					}
 				}
 				isBinary = history.IsBinaryBody(data, ce, ct)
 				if !isBinary {
@@ -188,7 +231,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			Origin:            origin,
 			AgentCallID:       agentCallID,
 		}
-		_ = ic.hist().Save(entry)
+		ic.capture(entry)
 		ctx.UserData = &entryUserData{entryID: entry.ID}
 		LogRequest(entry.ID, req.Method, url)
 		return req, nil
@@ -208,7 +251,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			Origin:            origin,
 			AgentCallID:       agentCallID,
 		}
-		_ = ic.hist().Save(entry)
+		ic.capture(entry)
 		LogRequest(entry.ID, req.Method, url)
 		LogInfo(fmt.Sprintf("DROPPED by rule %q: %s %s", rule.Name, req.Method, url))
 		dropResp := rules.BuildDropResponse(req)
@@ -233,7 +276,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			Origin:            origin,
 			AgentCallID:       agentCallID,
 		}
-		_ = ic.hist().Save(entry)
+		ic.capture(entry)
 		LogRequest(entry.ID, req.Method, url)
 		LogInfo(fmt.Sprintf("MOCKED by rule %q: %s %s", rule.Name, req.Method, url))
 
@@ -282,7 +325,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			Origin:            origin,
 			AgentCallID:       agentCallID,
 		}
-		_ = ic.hist().Save(entry)
+		ic.capture(entry)
 		ctx.UserData = &entryUserData{entryID: entry.ID}
 		LogRequest(entry.ID, req.Method, url)
 		LogInfo(fmt.Sprintf("MODIFIED by rule %q: %s %s", rule.Name, req.Method, url))
@@ -301,7 +344,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 			Origin:            origin,
 			AgentCallID:       agentCallID,
 		}
-		_ = ic.hist().Save(entry)
+		ic.capture(entry)
 		LogRequest(entry.ID, req.Method, url)
 		LogInfo(fmt.Sprintf("RESPONSE MOCK by rule %q: %s %s", rule.Name, req.Method, url))
 		ctx.UserData = &requestUserData{
@@ -319,7 +362,7 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 		Origin:        origin,
 		AgentCallID:   agentCallID,
 	}
-	_ = ic.hist().Save(entry)
+	ic.capture(entry)
 	ctx.UserData = &entryUserData{entryID: entry.ID}
 	LogRequest(entry.ID, req.Method, url)
 	return req, nil
@@ -472,6 +515,24 @@ func noSessionResponse(req *http.Request) *http.Response {
 	}
 	resp.Header.Set("Content-Type", "text/plain; charset=utf-8")
 	resp.Header.Set("X-Gospy-Replay", "nosession")
+	return resp
+}
+
+// recordingStoppedResponse rejects any request after the record max-duration
+// was reached. The X-Gospy-Recording header tells the client (e.g. gostream)
+// that recording ended, mirroring the X-Gospy-Replay contract of replay mode.
+func recordingStoppedResponse(req *http.Request) *http.Response {
+	const body = "recording stopped (max duration)\n"
+	resp := &http.Response{
+		StatusCode:    http.StatusGone,
+		Status:        "410 Gone",
+		Header:        make(http.Header),
+		ContentLength: int64(len(body)),
+		Body:          io.NopCloser(strings.NewReader(body)),
+		Request:       req,
+	}
+	resp.Header.Set("Content-Type", "text/plain; charset=utf-8")
+	resp.Header.Set("X-Gospy-Recording", "stopped")
 	return resp
 }
 

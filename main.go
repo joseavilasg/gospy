@@ -8,7 +8,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"gospy/internal/agent"
 	"gospy/internal/browser"
@@ -44,12 +46,22 @@ func main() {
 	focusHosts := flag.String("focus", "", "Comma-separated hosts to focus on (e.g. \"host1.com,host2.com\")")
 	sessionDir := flag.String("session", "", "Session name or directory for recording/replay")
 	matchConfig := flag.String("match-config", "", "Match configuration file for replay")
+	maxDuration := flag.String("max-duration", "", "Stop recording after this duration, counted from the first captured request (e.g. 60s, 2m)")
 	bindIface := flag.String("bind-iface", "", "Bind proxy outbound connections to a network interface (SO_BINDTODEVICE, Linux)")
 	dnsServer := flag.String("dns", "", "Custom DNS server for proxy outbound; auto-detected from --bind-iface when empty")
 	flag.Parse()
 	if *uiAddr == "" {
 		fmt.Fprintf(os.Stderr, "ERROR: --ui cannot be empty (the web server is always active)\n")
 		os.Exit(1)
+	}
+	maxDur := time.Duration(0)
+	if *maxDuration != "" {
+		d, err := time.ParseDuration(*maxDuration)
+		if err != nil || d <= 0 {
+			fmt.Fprintf(os.Stderr, "ERROR: invalid --max-duration %q (use e.g. 60s, 2m)\n", *maxDuration)
+			os.Exit(1)
+		}
+		maxDur = d
 	}
 
 	fmt.Println(`
@@ -177,6 +189,9 @@ func main() {
 
 	webSrv := webui.NewServer(*uiAddr, hist, ignoreStore, focusStore, rulesStore, ruleEngine, *proxyAddr, srv.Resolver(), srv.SigCache(), filterStore)
 	srv.SetStreamNotifier(webSrv.StreamNotifier())
+	if mode == "record" && recordSessionDir != "" && maxDur > 0 {
+		wireMaxDuration(hist, srv, webSrv, maxDur, *maxDuration)
+	}
 
 	var mcpServer *agent.Server
 	if autoSession {
@@ -190,6 +205,9 @@ func main() {
 			webSrv.SetHistoryStore(store)
 			if mcpServer != nil {
 				mcpServer.SetHistoryStore(store)
+			}
+			if maxDur > 0 {
+				wireMaxDuration(store, srv, webSrv, maxDur, *maxDuration)
 			}
 			proxy.LogInfo(fmt.Sprintf("Recording session started: %s", dir))
 			return dir, filepath.Base(dir), nil
@@ -373,4 +391,24 @@ func runReplay(caCert *ca.CA, addr, sessionDir, matchConfig, uiAddr, dataDir str
 		fmt.Fprintf(os.Stderr, "Replay server error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// wireMaxDuration stops recording maxDur after the session's first captured
+// request. Each session store gets its own window (rotating to a new session
+// arms a fresh timer); the expiry callback only pauses the capture if that
+// session is still the active one.
+func wireMaxDuration(store *history.Store, srv *proxy.Server, webSrv *webui.Server, maxDur time.Duration, maxLabel string) {
+	var once sync.Once
+	store.OnSave(func(*history.Entry) {
+		once.Do(func() {
+			time.AfterFunc(maxDur, func() {
+				if srv.CaptureStore() != store {
+					return
+				}
+				srv.SetCaptureStopped(true)
+				webSrv.SetRecordingStopped(maxLabel)
+				proxy.LogInfo(fmt.Sprintf("Recording stopped after %s (max-duration)", maxLabel))
+			})
+		})
+	})
 }

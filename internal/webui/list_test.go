@@ -2,6 +2,7 @@ package webui
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -875,5 +876,99 @@ func TestListRequests_AgentEnabledGate(t *testing.T) {
 	}
 	if gateResp["enabled"] || gateResp["exposed"] {
 		t.Fatalf("expected enabled+exposed false, got %+v", gateResp)
+	}
+}
+
+func TestRecordingStoppedPayload(t *testing.T) {
+	s, _, hist := newTestServer(t)
+	saveEntry(t, hist, "a", "GET", "http://example.com/a")
+
+	resp := getListResponse(t, s, "/api/requests")
+	if resp.RecordingStopped {
+		t.Fatal("recordingStopped must be false initially")
+	}
+	if resp.RecordingMax != "" {
+		t.Fatalf("recordingMax = %q, want empty", resp.RecordingMax)
+	}
+
+	s.SetRecordingStopped("60s")
+	resp = getListResponse(t, s, "/api/requests")
+	if !resp.RecordingStopped {
+		t.Fatal("recordingStopped must be true after SetRecordingStopped")
+	}
+	if resp.RecordingMax != "60s" {
+		t.Fatalf("recordingMax = %q, want 60s", resp.RecordingMax)
+	}
+}
+
+func TestRecordingEventsSSE(t *testing.T) {
+	s, _, _ := newTestServer(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	rec := httptest.NewRecorder()
+	s.handleRecordingEvents(rec, httptest.NewRequest(http.MethodGet, "/api/recording/events", nil).WithContext(ctx))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("recording events SSE: expected 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"stopped":false`) {
+		t.Fatalf("snapshot must report stopped=false initially, got %q", rec.Body.String())
+	}
+
+	s.SetRecordingStopped("60s")
+	rec = httptest.NewRecorder()
+	s.handleRecordingEvents(rec, httptest.NewRequest(http.MethodGet, "/api/recording/events", nil).WithContext(ctx))
+	if !strings.Contains(rec.Body.String(), `"stopped":true`) {
+		t.Fatalf("snapshot must report stopped=true after the cut, got %q", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"max":"60s"`) {
+		t.Fatalf("snapshot must carry the max label, got %q", rec.Body.String())
+	}
+}
+
+func TestRecordingHubBroadcast(t *testing.T) {
+	hub := newRecordingHub()
+	ch := hub.subscribe()
+	defer hub.unsubscribe(ch)
+
+	hub.publish(recordingEvent{Stopped: true, Max: "60s"})
+	select {
+	case ev := <-ch:
+		if !ev.Stopped || ev.Max != "60s" {
+			t.Fatalf("broadcast = %+v, want stopped=true max=60s", ev)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("broadcast never delivered")
+	}
+}
+
+func TestRecordingStoppedFrontend(t *testing.T) {
+	api := strings.ReplaceAll(apiJS, "\r\n", "\n")
+	for _, probe := range []string{
+		"onRecordingStoppedUpdate(data.recordingStopped",
+		"setOnRecordingStoppedUpdate",
+	} {
+		if !strings.Contains(api, probe) {
+			t.Fatalf("api.js: must %s", probe)
+		}
+	}
+	app := strings.ReplaceAll(appJS, "\r\n", "\n")
+	for _, probe := range []string{
+		"function syncRecordingStopped(stopped, max)",
+		"setOnRecordingStoppedUpdate(syncRecordingStopped)",
+		"recordingStoppedBanner",
+		"connectRecordingEvents",
+		"new EventSource('/api/recording/events')",
+	} {
+		if !strings.Contains(app, probe) {
+			t.Fatalf("app.js: must %s", probe)
+		}
+	}
+	if !strings.Contains(styleCSS, ".recording-stopped-banner") {
+		t.Fatal("style.css: must style the recording-stopped banner")
+	}
+	if !strings.Contains(indexHTML, "recordingStoppedBanner") {
+		t.Fatal("index.html: must render the recording-stopped banner")
 	}
 }

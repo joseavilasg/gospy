@@ -109,13 +109,64 @@ type Server struct {
 	streamHub      *streamHub
 	sessionStarter SessionStarter
 
+	recordingHub *recordingHub
+
 	replayMode   bool
 	replayLogDir string
+
+	// recordingStopped is set when the record max-duration is reached: new
+	// traffic keeps flowing but nothing else is written to the session.
+	recordingMu      sync.Mutex
+	recordingStopped bool
+	recordingMax     string
 
 	replayMu      sync.Mutex
 	replayRunID   string
 	replayEvents  []session.ReplayEvent
 	replayClients map[chan session.ReplayEvent]struct{}
+}
+
+// recordingEvent is the recording-state payload pushed to SSE clients.
+type recordingEvent struct {
+	Stopped bool   `json:"stopped"`
+	Max     string `json:"max,omitempty"`
+}
+
+// recordingHub fans recording-state changes out to open SSE connections.
+// Subscribers get the current state on subscribe (snapshot-on-connect) and
+// every change afterwards.
+type recordingHub struct {
+	mu   sync.Mutex
+	subs map[chan recordingEvent]struct{}
+}
+
+func newRecordingHub() *recordingHub {
+	return &recordingHub{subs: make(map[chan recordingEvent]struct{})}
+}
+
+func (h *recordingHub) subscribe() chan recordingEvent {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	ch := make(chan recordingEvent, 4)
+	h.subs[ch] = struct{}{}
+	return ch
+}
+
+func (h *recordingHub) unsubscribe(ch chan recordingEvent) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.subs, ch)
+}
+
+func (h *recordingHub) publish(ev recordingEvent) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for ch := range h.subs {
+		select {
+		case ch <- ev:
+		default:
+		}
+	}
 }
 
 // SessionStarter creates a recording session and rotates every consumer to it.
@@ -152,6 +203,7 @@ func NewServer(addr string, h *history.Store, ignore IgnoreChecker, focus FocusC
 		sigCache:      sigCache,
 		lastVisible:   make(map[string]bool),
 		streamHub:     newStreamHub(h, maxBodyLen),
+		recordingHub:  newRecordingHub(),
 		replayClients: make(map[chan session.ReplayEvent]struct{}),
 	}
 	s.history.Store(h)
@@ -224,8 +276,31 @@ func (s *Server) SetHistoryStore(h *history.Store) {
 	s.lastVisible = make(map[string]bool)
 	s.listMu.Unlock()
 	s.recomputeTotal()
+	s.recordingMu.Lock()
+	s.recordingStopped = false
+	s.recordingMax = ""
+	s.recordingMu.Unlock()
 	s.filterStore.Touch()
 	s.streamHub.SetHistoryStore(h)
+}
+
+// SetRecordingStopped marks that recording ended because max-duration was
+// reached. Touching the filter store forces the frontend to refetch the list
+// so the stopped indicator appears without a reload.
+func (s *Server) SetRecordingStopped(max string) {
+	s.recordingMu.Lock()
+	s.recordingStopped = true
+	s.recordingMax = max
+	s.recordingMu.Unlock()
+	s.recordingHub.publish(recordingEvent{Stopped: true, Max: max})
+	s.filterStore.Touch()
+}
+
+// recordingState returns the current recording-stopped state.
+func (s *Server) recordingState() (stopped bool, max string) {
+	s.recordingMu.Lock()
+	defer s.recordingMu.Unlock()
+	return s.recordingStopped, s.recordingMax
 }
 
 // SetSessionStarter registers the callback that creates a recording session
@@ -395,6 +470,7 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/api/request-rule", s.replayReadOnly(s.handleRequestRule))
 	mux.HandleFunc("/api/process/signature", s.handleProcessSignature)
 	mux.HandleFunc("/api/process/events", s.handleProcessEvents)
+	mux.HandleFunc("/api/recording/events", s.handleRecordingEvents)
 	mux.HandleFunc("/api/streams/", s.handleStreamEvents)
 	mux.HandleFunc("/api/session/start", s.handleSessionStart)
 	mux.HandleFunc("/api/replay/runs", s.handleReplayRuns)
@@ -471,19 +547,21 @@ func queryInt(r *http.Request, name string) int {
 }
 
 type listResponse struct {
-	Entries      []*history.ListEntry `json:"entries"`
-	Upserts      []*history.ListEntry `json:"upserts"`
-	Removed      []string             `json:"removed,omitempty"`
-	Total        int                  `json:"total"`
-	VisibleCount int                  `json:"visibleCount"`
-	Offset       int                  `json:"offset"`
-	Version      int                  `json:"version"`
-	Filters      *history.Filters     `json:"filters,omitempty"`
-	FocusEnabled bool                 `json:"focusEnabled"`
-	AgentPreview bool                 `json:"agentPreview"`
-	AgentEnabled bool                 `json:"agentEnabled"`
-	AgentExposed bool                 `json:"agentExposed"`
-	Replay       *replayList          `json:"replay,omitempty"`
+	Entries          []*history.ListEntry `json:"entries"`
+	Upserts          []*history.ListEntry `json:"upserts"`
+	Removed          []string             `json:"removed,omitempty"`
+	Total            int                  `json:"total"`
+	VisibleCount     int                  `json:"visibleCount"`
+	Offset           int                  `json:"offset"`
+	Version          int                  `json:"version"`
+	Filters          *history.Filters     `json:"filters,omitempty"`
+	FocusEnabled     bool                 `json:"focusEnabled"`
+	AgentPreview     bool                 `json:"agentPreview"`
+	AgentEnabled     bool                 `json:"agentEnabled"`
+	AgentExposed     bool                 `json:"agentExposed"`
+	Replay           *replayList          `json:"replay,omitempty"`
+	RecordingStopped bool                 `json:"recordingStopped,omitempty"`
+	RecordingMax     string               `json:"recordingMax,omitempty"`
 }
 
 // agentExposed reports whether the agent MCP is active AND its profile has no
@@ -543,18 +621,21 @@ func (s *Server) fullList(offset, limit int) listResponse {
 	s.nonIgnoredTotal = total
 	s.totalMu.Unlock()
 
+	stopped, rmax := s.recordingState()
 	return listResponse{
-		Entries:      page,
-		Total:        total,
-		VisibleCount: visibleCount,
-		Offset:       offset,
-		Version:      version,
-		Filters:      &filters,
-		FocusEnabled: focusEnabled,
-		AgentPreview: s.filterStore.AgentPreview(),
-		AgentEnabled: s.filterStore.AgentGate(),
-		AgentExposed: s.agentExposed(),
-		Replay:       s.replayInfo(),
+		Entries:          page,
+		Total:            total,
+		VisibleCount:     visibleCount,
+		Offset:           offset,
+		Version:          version,
+		Filters:          &filters,
+		FocusEnabled:     focusEnabled,
+		AgentPreview:     s.filterStore.AgentPreview(),
+		AgentEnabled:     s.filterStore.AgentGate(),
+		AgentExposed:     s.agentExposed(),
+		Replay:           s.replayInfo(),
+		RecordingStopped: stopped,
+		RecordingMax:     rmax,
 	}
 }
 
@@ -580,17 +661,20 @@ func (s *Server) diffList(since time.Time) listResponse {
 		}
 	}
 
+	stopped, rmax := s.recordingState()
 	return listResponse{
-		Upserts:      upserts,
-		Removed:      removed,
-		Total:        s.total(),
-		VisibleCount: len(s.lastVisible),
-		Version:      version,
-		FocusEnabled: focusEnabled,
-		AgentPreview: s.filterStore.AgentPreview(),
-		AgentEnabled: s.filterStore.AgentGate(),
-		AgentExposed: s.agentExposed(),
-		Replay:       s.replayInfo(),
+		Upserts:          upserts,
+		Removed:          removed,
+		Total:            s.total(),
+		VisibleCount:     len(s.lastVisible),
+		Version:          version,
+		FocusEnabled:     focusEnabled,
+		AgentPreview:     s.filterStore.AgentPreview(),
+		AgentEnabled:     s.filterStore.AgentGate(),
+		AgentExposed:     s.agentExposed(),
+		Replay:           s.replayInfo(),
+		RecordingStopped: stopped,
+		RecordingMax:     rmax,
 	}
 }
 
@@ -2266,6 +2350,42 @@ func (s *Server) handleProcessEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		case result := <-ch:
 			data, _ := json.Marshal(result)
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+	}
+}
+
+// handleRecordingEvents streams the recording-stopped state to the UI. A
+// snapshot of the current state is emitted on connect so the banner appears
+// even when the max-duration cut happened before the page (re)loaded.
+func (s *Server) handleRecordingEvents(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	ctx := r.Context()
+	ch := s.recordingHub.subscribe()
+	defer s.recordingHub.unsubscribe(ch)
+
+	stopped, max := s.recordingState()
+	data, _ := json.Marshal(recordingEvent{Stopped: stopped, Max: max})
+	fmt.Fprintf(w, "data: %s\n\n", data)
+	flusher.Flush()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev := <-ch:
+			data, _ := json.Marshal(ev)
 			fmt.Fprintf(w, "data: %s\n\n", data)
 			flusher.Flush()
 		}

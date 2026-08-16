@@ -5,9 +5,11 @@ import { syncCriteriaFromServer } from './filters.js';
 let onSelectedUpdated = () => { };
 let loadingMore = false;
 let onReplayUpdate = () => { };
+let onRecordingStoppedUpdate = () => { };
 
 export function setOnSelectedUpdated(cb) { onSelectedUpdated = cb; }
 export function setOnReplayUpdate(cb) { onReplayUpdate = cb; }
+export function setOnRecordingStoppedUpdate(cb) { onRecordingStoppedUpdate = cb; }
 
 export async function loadMore() {
   if (loadingMore) return;
@@ -46,6 +48,7 @@ export async function loadRequests() {
       invalidateFilterCache();
       renderList();
       if (data.replay) onReplayUpdate(data.replay);
+      onRecordingStoppedUpdate(data.recordingStopped || false, data.recordingMax || '');
       if (selUpdated) onSelectedUpdated(selectedId);
     } else if (data.entries) {
       const prevSel = selectedId ? requests.find(r => r.id === selectedId) : null;
@@ -59,6 +62,7 @@ export async function loadRequests() {
         exposed: data.agentExposed,
       });
       if (data.replay) onReplayUpdate(data.replay);
+      onRecordingStoppedUpdate(data.recordingStopped || false, data.recordingMax || '');
       const currSel = selectedId ? requests.find(r => r.id === selectedId) : null;
       if (prevSel && currSel && prevSel.updatedAt !== currSel.updatedAt) onSelectedUpdated(selectedId);
     }

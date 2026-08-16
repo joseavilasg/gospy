@@ -1,5 +1,5 @@
 import { setFilterText, setFocusEnabled, setAgentPreview, setAgentEnabled, setAgentExposed, agentExposed, applyFullList, setLastTimestamp, selectedId, setSelectedId, requests, rules, setRules, setSignatureCache, visibleCount, getReplayMode, setReplayMode, setReplayServed, setReplayComplete, markReplayServed } from './state.js';
-import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch, setOnSelectedUpdated, loadMore, setOnReplayUpdate, loadReplayRuns, loadReplayFeed, loadReplayFeedOlder, loadReplayEventDetail, loadReplayCandidates, loadReplayCandidateDiff } from './api.js';
+import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch, setOnSelectedUpdated, loadMore, setOnReplayUpdate, setOnRecordingStoppedUpdate, loadReplayRuns, loadReplayFeed, loadReplayFeedOlder, loadReplayEventDetail, loadReplayCandidates, loadReplayCandidateDiff } from './api.js';
 import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, toggleReplayPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, openRuleModalFromReplayEvent, buildResponseTab, ITEM_HEIGHT, appendReplayFeedEvent, onReplayFeedScroll, setOnReplayFeedLoadOlder, renderReplayEventDetail, renderReplayMatch, renderMatchCandidates, selectReplayFeedEvent, setReplayEntryView, renderUrlViewInner, loadSignatureInfo } from './render.js';
 import { parseRoute, buildHash } from './routes.js';
 import { makeResizable } from './resize.js';
@@ -191,6 +191,22 @@ function syncReplay(rp) {
   ensureReplayStream();
 }
 
+let _recordingStopped = false;
+let _recordingMax = '';
+function syncRecordingStopped(stopped, max) {
+  const banner = document.getElementById('recordingStoppedBanner');
+  if (!banner) return;
+  if (_recordingStopped === stopped && _recordingMax === max) return;
+  _recordingStopped = stopped;
+  _recordingMax = max;
+  if (stopped) {
+    banner.style.display = 'block';
+    banner.textContent = '\u25CF Recording stopped (max ' + max + ')';
+  } else {
+    banner.style.display = 'none';
+  }
+}
+
 function closeReplayStream() {
   if (_replayStreamSrc) {
     _replayStreamSrc.close();
@@ -280,6 +296,7 @@ function populateReplayRuns() {
 }
 
 setOnReplayUpdate(syncReplay);
+setOnRecordingStoppedUpdate(syncRecordingStopped);
 setOnReplayFeedLoadOlder(beforeSeq => loadReplayFeedOlder(beforeSeq));
 let _lastReplayDetail = null;
 let _matchState = null;
@@ -1227,12 +1244,14 @@ loadRequests().then(() => {
   if (getReplayMode()) {
     loadRules();
     connectSSE();
+    connectRecordingEvents();
     return;
   }
   loadIgnored();
   loadFocused();
   loadRules();
   connectSSE();
+  connectRecordingEvents();
 });
 restoreBodyFilter();
 setInterval(() => {
@@ -1787,5 +1806,22 @@ function connectSSE() {
   eventSource.onerror = () => {
     eventSource.close();
     setTimeout(connectSSE, 3000);
+  };
+}
+
+// SSE for the recording-stopped state: the banner must appear the moment the
+// record max-duration cut fires, without waiting for a list refetch.
+let recordingEventSource = null;
+function connectRecordingEvents() {
+  recordingEventSource = new EventSource('/api/recording/events');
+  recordingEventSource.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      syncRecordingStopped(data.stopped || false, data.max || '');
+    } catch (err) { }
+  };
+  recordingEventSource.onerror = () => {
+    recordingEventSource.close();
+    setTimeout(connectRecordingEvents, 3000);
   };
 }
