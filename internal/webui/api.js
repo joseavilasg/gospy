@@ -48,7 +48,7 @@ export async function loadRequests() {
       invalidateFilterCache();
       renderList();
       if (data.replay) onReplayUpdate(data.replay);
-      onRecordingStoppedUpdate(data.recordingStopped || false, data.recordingMax || '');
+      onRecordingStoppedUpdate(data.recordingStopped || false, data.recordingMax || '', data.recordingSession || '');
       if (selUpdated) onSelectedUpdated(selectedId);
     } else if (data.entries) {
       const prevSel = selectedId ? requests.find(r => r.id === selectedId) : null;
@@ -62,7 +62,7 @@ export async function loadRequests() {
         exposed: data.agentExposed,
       });
       if (data.replay) onReplayUpdate(data.replay);
-      onRecordingStoppedUpdate(data.recordingStopped || false, data.recordingMax || '');
+      onRecordingStoppedUpdate(data.recordingStopped || false, data.recordingMax || '', data.recordingSession || '');
       const currSel = selectedId ? requests.find(r => r.id === selectedId) : null;
       if (prevSel && currSel && prevSel.updatedAt !== currSel.updatedAt) onSelectedUpdated(selectedId);
     }

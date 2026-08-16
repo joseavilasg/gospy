@@ -193,15 +193,18 @@ function syncReplay(rp) {
 
 let _recordingStopped = false;
 let _recordingMax = '';
-function syncRecordingStopped(stopped, max) {
+let _recordingSession = '';
+
+function syncRecordingStopped(stopped, max, session) {
   const banner = document.getElementById('recordingStoppedBanner');
   if (!banner) return;
-  if (_recordingStopped === stopped && _recordingMax === max) return;
+  if (_recordingStopped === stopped && _recordingMax === max && _recordingSession === session) return;
   _recordingStopped = stopped;
   _recordingMax = max;
+  _recordingSession = session;
   if (stopped) {
     banner.style.display = 'block';
-    banner.textContent = '\u25CF Recording stopped (max ' + max + ')';
+    banner.textContent = '\u25CF Recording stopped (max ' + max + '), session ' + session;
   } else {
     banner.style.display = 'none';
   }
@@ -1817,7 +1820,7 @@ function connectRecordingEvents() {
   recordingEventSource.onmessage = (e) => {
     try {
       const data = JSON.parse(e.data);
-      syncRecordingStopped(data.stopped || false, data.max || '');
+      syncRecordingStopped(data.stopped || false, data.max || '', data.session || '');
     } catch (err) { }
   };
   recordingEventSource.onerror = () => {

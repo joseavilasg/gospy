@@ -407,7 +407,7 @@ func wireMaxDuration(store *history.Store, srv *proxy.Server, webSrv *webui.Serv
 				}
 				srv.SetCaptureStopped(true)
 				webSrv.SetRecordingStopped(maxLabel)
-				proxy.LogInfo(fmt.Sprintf("Recording stopped after %s (max-duration)", maxLabel))
+				proxy.LogInfo(fmt.Sprintf("Recording stopped after %s (max-duration), session %s", maxLabel, filepath.Base(store.Dir())))
 			})
 		})
 	})

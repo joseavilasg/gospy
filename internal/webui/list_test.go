@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -899,10 +900,13 @@ func TestRecordingStoppedPayload(t *testing.T) {
 	if resp.RecordingMax != "60s" {
 		t.Fatalf("recordingMax = %q, want 60s", resp.RecordingMax)
 	}
+	if resp.RecordingSession != filepath.Base(hist.Dir()) {
+		t.Fatalf("recordingSession = %q, want %q", resp.RecordingSession, filepath.Base(hist.Dir()))
+	}
 }
 
 func TestRecordingEventsSSE(t *testing.T) {
-	s, _, _ := newTestServer(t)
+	s, _, hist := newTestServer(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -925,6 +929,9 @@ func TestRecordingEventsSSE(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `"max":"60s"`) {
 		t.Fatalf("snapshot must carry the max label, got %q", rec.Body.String())
 	}
+	if !strings.Contains(rec.Body.String(), `"session":"`+filepath.Base(hist.Dir())) {
+		t.Fatalf("snapshot must carry the session id, got %q", rec.Body.String())
+	}
 }
 
 func TestRecordingHubBroadcast(t *testing.T) {
@@ -932,11 +939,11 @@ func TestRecordingHubBroadcast(t *testing.T) {
 	ch := hub.subscribe()
 	defer hub.unsubscribe(ch)
 
-	hub.publish(recordingEvent{Stopped: true, Max: "60s"})
+	hub.publish(recordingEvent{Stopped: true, Max: "60s", Session: "sess-1"})
 	select {
 	case ev := <-ch:
-		if !ev.Stopped || ev.Max != "60s" {
-			t.Fatalf("broadcast = %+v, want stopped=true max=60s", ev)
+		if !ev.Stopped || ev.Max != "60s" || ev.Session != "sess-1" {
+			t.Fatalf("broadcast = %+v, want stopped=true max=60s session=sess-1", ev)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("broadcast never delivered")
@@ -947,6 +954,7 @@ func TestRecordingStoppedFrontend(t *testing.T) {
 	api := strings.ReplaceAll(apiJS, "\r\n", "\n")
 	for _, probe := range []string{
 		"onRecordingStoppedUpdate(data.recordingStopped",
+		"data.recordingSession",
 		"setOnRecordingStoppedUpdate",
 	} {
 		if !strings.Contains(api, probe) {
@@ -955,7 +963,8 @@ func TestRecordingStoppedFrontend(t *testing.T) {
 	}
 	app := strings.ReplaceAll(appJS, "\r\n", "\n")
 	for _, probe := range []string{
-		"function syncRecordingStopped(stopped, max)",
+		"function syncRecordingStopped(stopped, max, session)",
+		"data.session",
 		"setOnRecordingStoppedUpdate(syncRecordingStopped)",
 		"recordingStoppedBanner",
 		"connectRecordingEvents",

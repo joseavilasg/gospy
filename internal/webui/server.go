@@ -119,6 +119,7 @@ type Server struct {
 	recordingMu      sync.Mutex
 	recordingStopped bool
 	recordingMax     string
+	recordingSession string
 
 	replayMu      sync.Mutex
 	replayRunID   string
@@ -130,6 +131,7 @@ type Server struct {
 type recordingEvent struct {
 	Stopped bool   `json:"stopped"`
 	Max     string `json:"max,omitempty"`
+	Session string `json:"session,omitempty"`
 }
 
 // recordingHub fans recording-state changes out to open SSE connections.
@@ -279,6 +281,7 @@ func (s *Server) SetHistoryStore(h *history.Store) {
 	s.recordingMu.Lock()
 	s.recordingStopped = false
 	s.recordingMax = ""
+	s.recordingSession = ""
 	s.recordingMu.Unlock()
 	s.filterStore.Touch()
 	s.streamHub.SetHistoryStore(h)
@@ -288,19 +291,24 @@ func (s *Server) SetHistoryStore(h *history.Store) {
 // reached. Touching the filter store forces the frontend to refetch the list
 // so the stopped indicator appears without a reload.
 func (s *Server) SetRecordingStopped(max string) {
+	session := ""
+	if h := s.hist(); h != nil {
+		session = filepath.Base(h.Dir())
+	}
 	s.recordingMu.Lock()
 	s.recordingStopped = true
 	s.recordingMax = max
+	s.recordingSession = session
 	s.recordingMu.Unlock()
-	s.recordingHub.publish(recordingEvent{Stopped: true, Max: max})
+	s.recordingHub.publish(recordingEvent{Stopped: true, Max: max, Session: session})
 	s.filterStore.Touch()
 }
 
 // recordingState returns the current recording-stopped state.
-func (s *Server) recordingState() (stopped bool, max string) {
+func (s *Server) recordingState() (stopped bool, max string, session string) {
 	s.recordingMu.Lock()
 	defer s.recordingMu.Unlock()
-	return s.recordingStopped, s.recordingMax
+	return s.recordingStopped, s.recordingMax, s.recordingSession
 }
 
 // SetSessionStarter registers the callback that creates a recording session
@@ -562,6 +570,7 @@ type listResponse struct {
 	Replay           *replayList          `json:"replay,omitempty"`
 	RecordingStopped bool                 `json:"recordingStopped,omitempty"`
 	RecordingMax     string               `json:"recordingMax,omitempty"`
+	RecordingSession string               `json:"recordingSession,omitempty"`
 }
 
 // agentExposed reports whether the agent MCP is active AND its profile has no
@@ -621,7 +630,7 @@ func (s *Server) fullList(offset, limit int) listResponse {
 	s.nonIgnoredTotal = total
 	s.totalMu.Unlock()
 
-	stopped, rmax := s.recordingState()
+	stopped, rmax, rsession := s.recordingState()
 	return listResponse{
 		Entries:          page,
 		Total:            total,
@@ -636,6 +645,7 @@ func (s *Server) fullList(offset, limit int) listResponse {
 		Replay:           s.replayInfo(),
 		RecordingStopped: stopped,
 		RecordingMax:     rmax,
+		RecordingSession: rsession,
 	}
 }
 
@@ -661,7 +671,7 @@ func (s *Server) diffList(since time.Time) listResponse {
 		}
 	}
 
-	stopped, rmax := s.recordingState()
+	stopped, rmax, rsession := s.recordingState()
 	return listResponse{
 		Upserts:          upserts,
 		Removed:          removed,
@@ -675,6 +685,7 @@ func (s *Server) diffList(since time.Time) listResponse {
 		Replay:           s.replayInfo(),
 		RecordingStopped: stopped,
 		RecordingMax:     rmax,
+		RecordingSession: rsession,
 	}
 }
 
@@ -2375,8 +2386,8 @@ func (s *Server) handleRecordingEvents(w http.ResponseWriter, r *http.Request) {
 	ch := s.recordingHub.subscribe()
 	defer s.recordingHub.unsubscribe(ch)
 
-	stopped, max := s.recordingState()
-	data, _ := json.Marshal(recordingEvent{Stopped: stopped, Max: max})
+	stopped, max, session := s.recordingState()
+	data, _ := json.Marshal(recordingEvent{Stopped: stopped, Max: max, Session: session})
 	fmt.Fprintf(w, "data: %s\n\n", data)
 	flusher.Flush()
 
