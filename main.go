@@ -167,7 +167,7 @@ func main() {
 		proxy.LogInfo(fmt.Sprintf("Recording session to %s", recordSessionDir))
 	}
 	if autoSession {
-		proxy.LogInfo("Waiting for session start: POST http://localhost:8081/api/session/start")
+		proxy.LogInfo(fmt.Sprintf("Waiting for session start: POST %s/api/session/start", uiURL(*uiAddr)))
 		proxy.LogInfo("Proxy traffic is rejected until a session starts")
 	}
 	if mode == "record" && !*systemProxy {
@@ -220,7 +220,7 @@ func main() {
 		}
 	}()
 
-	proxy.LogInfo(fmt.Sprintf("Web UI at http://localhost%s", *uiAddr))
+	proxy.LogInfo(fmt.Sprintf("Web UI at %s", uiURL(*uiAddr)))
 
 	agentFwd, err := agent.NewForwarder("http://127.0.0.1"+*proxyAddr, caCert.TLSCert())
 	if err != nil {
@@ -372,7 +372,7 @@ func runReplay(caCert *ca.CA, addr, sessionDir, matchConfig, uiAddr, dataDir str
 		}
 	}()
 
-	proxy.LogInfo(fmt.Sprintf("Web UI at http://localhost%s", uiAddr))
+	proxy.LogInfo(fmt.Sprintf("Web UI at %s", uiURL(uiAddr)))
 	proxy.LogInfo("Replay mode: read-only")
 
 	sigCh := make(chan os.Signal, 1)
@@ -411,4 +411,11 @@ func wireMaxDuration(store *history.Store, srv *proxy.Server, webSrv *webui.Serv
 			})
 		})
 	})
+}
+
+func uiURL(addr string) string {
+	if strings.HasPrefix(addr, ":") {
+		return "http://localhost" + addr
+	}
+	return "http://" + addr
 }
