@@ -9,6 +9,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -630,6 +631,7 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/api/replay/runs", s.handleReplayRuns)
 	mux.HandleFunc("/api/replay/events", s.handleReplayEventsList)
 	mux.HandleFunc("/api/replay/events/", s.handleReplayEventsSub)
+	mux.HandleFunc("/api/replay/filter-values", s.handleReplayFilterValues)
 
 	LogWebUI(s.addr)
 
@@ -2566,7 +2568,8 @@ func (s *Server) handleReplayRuns(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleReplayEventsList returns the events of a run. run= empty selects the
-// active run.
+// active run. Optional result= and host= filters narrow the events before
+// pagination.
 func (s *Server) handleReplayEventsList(w http.ResponseWriter, r *http.Request) {
 	if !s.replayMode {
 		http.NotFound(w, r)
@@ -2589,6 +2592,27 @@ func (s *Server) handleReplayEventsList(w http.ResponseWriter, r *http.Request) 
 	}
 	if events == nil {
 		events = []session.ReplayEvent{}
+	}
+
+	// Apply filters before pagination.
+	if resultFilter := r.URL.Query().Get("result"); resultFilter != "" {
+		var filtered []session.ReplayEvent
+		for _, ev := range events {
+			if ev.Result == resultFilter {
+				filtered = append(filtered, ev)
+			}
+		}
+		events = filtered
+	}
+	if hostFilter := r.URL.Query().Get("host"); hostFilter != "" {
+		var filtered []session.ReplayEvent
+		for _, ev := range events {
+			u, err := url.Parse(ev.URL)
+			if err == nil && strings.EqualFold(u.Hostname(), hostFilter) {
+				filtered = append(filtered, ev)
+			}
+		}
+		events = filtered
 	}
 
 	total := len(events)
@@ -2634,6 +2658,70 @@ func (s *Server) handleReplayEventsList(w http.ResponseWriter, r *http.Request) 
 		"total":   total,
 		"hasMore": limit > 0 && start > 0,
 	})
+}
+
+// handleReplayFilterValues returns the distinct values for a replay event filter
+// field (result, host, method) scoped to a run. Used by the UI for the replay
+// filter bar and by the MCP agent (list_replay_filter_values).
+func (s *Server) handleReplayFilterValues(w http.ResponseWriter, r *http.Request) {
+	if !s.replayMode {
+		http.NotFound(w, r)
+		return
+	}
+	typ := r.URL.Query().Get("type")
+	if typ != "result" && typ != "host" && typ != "method" {
+		http.Error(w, "unknown filter type; valid: result, host, method", http.StatusBadRequest)
+		return
+	}
+	runID := r.URL.Query().Get("run")
+	if runID == "" {
+		s.replayMu.Lock()
+		runID = s.replayRunID
+		s.replayMu.Unlock()
+	}
+	if runID == "" {
+		s.writeJSON(w, map[string]any{"type": typ, "values": []map[string]any{}})
+		return
+	}
+	events, err := s.replayEventsFor(runID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	type optionCount struct {
+		Value string `json:"value"`
+		Count int    `json:"count"`
+	}
+	counts := map[string]int{}
+	for _, ev := range events {
+		var val string
+		switch typ {
+		case "result":
+			val = ev.Result
+		case "method":
+			val = ev.Method
+		case "host":
+			u, err := url.Parse(ev.URL)
+			if err != nil {
+				continue
+			}
+			val = u.Hostname()
+		}
+		if val != "" {
+			counts[val]++
+		}
+	}
+	out := make([]optionCount, 0, len(counts))
+	for v, c := range counts {
+		out = append(out, optionCount{Value: v, Count: c})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].Value < out[j].Value
+	})
+	s.writeJSON(w, map[string]any{"type": typ, "values": out})
 }
 
 // handleReplayEventsSub dispatches the per-run endpoints: <run>/stream (SSE),

@@ -1,5 +1,5 @@
 import { setFilterText, setFocusEnabled, setAgentPreview, setAgentEnabled, setAgentExposed, agentExposed, applyFullList, setLastTimestamp, selectedId, setSelectedId, requests, rules, setRules, setSignatureCache, visibleCount, getReplayMode, setReplayMode, setReplayServed, setReplayComplete, markReplayServed } from './state.js';
-import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch, setOnSelectedUpdated, loadMore, setOnReplayUpdate, setOnRecordingStoppedUpdate, loadReplayRuns, loadReplayFeed, loadReplayFeedOlder, loadReplayEventDetail, loadReplayCandidates, loadReplayCandidateDiff } from './api.js';
+import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch, setOnSelectedUpdated, loadMore, setOnReplayUpdate, setOnRecordingStoppedUpdate, loadReplayRuns, loadReplayFeed, loadReplayFeedOlder, loadReplayEventDetail, loadReplayCandidates, loadReplayCandidateDiff, setFeedResultFilter, setFeedHostFilter, loadReplayFilterValues } from './api.js';
 import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, toggleReplayPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, openRuleModalFromReplayEvent, buildResponseTab, ITEM_HEIGHT, appendReplayFeedEvent, onReplayFeedScroll, setOnReplayFeedLoadOlder, renderReplayEventDetail, renderReplayMatch, renderMatchCandidates, selectReplayFeedEvent, setReplayEntryView, renderUrlViewInner, loadSignatureInfo } from './render.js';
 import { parseRoute, buildHash } from './routes.js';
 import { makeResizable } from './resize.js';
@@ -294,6 +294,7 @@ function populateReplayRuns() {
     if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
     if (runs.length > 0 && !sel.value) sel.value = runs[0].runId;
     updateReplayRunMeta(sel.value);
+    if (sel.value) updateReplayHostFilter(sel.value);
   });
 }
 
@@ -487,8 +488,39 @@ document.getElementById('replayRunSelect').addEventListener('change', (e) => {
   const runId = e.target.value;
   _pickedRun = runId || null;
   updateReplayRunMeta(runId);
+  updateReplayHostFilter(runId);
   renderFeedFor(_pickedRun);
 });
+
+// Replay filter bar: result dropdown and host dropdown trigger a feed reload.
+document.getElementById('replayFilterResult').addEventListener('change', (e) => {
+  setFeedResultFilter(e.target.value);
+  renderFeedFor(_pickedRun === null ? (_activeRunId || document.getElementById('replayRunSelect').value) : _pickedRun);
+});
+document.getElementById('replayFilterHost').addEventListener('change', (e) => {
+  setFeedHostFilter(e.target.value);
+  renderFeedFor(_pickedRun === null ? (_activeRunId || document.getElementById('replayRunSelect').value) : _pickedRun);
+});
+
+async function updateReplayHostFilter(runId) {
+  const sel = document.getElementById('replayFilterHost');
+  const prev = sel.value;
+  const data = await loadReplayFilterValues(runId, 'host');
+  sel.innerHTML = '<option value="">All hosts</option>';
+  for (const v of (data.values || [])) {
+    const opt = document.createElement('option');
+    opt.value = v.value;
+    opt.textContent = `${v.value} (${v.count})`;
+    sel.appendChild(opt);
+  }
+  // Preserve previous selection if still available.
+  if (prev && [...sel.options].some(o => o.value === prev)) {
+    sel.value = prev;
+  } else {
+    sel.value = '';
+    setFeedHostFilter('');
+  }
+}
 
 makeResizable(document.getElementById('replayDrag'), document.getElementById('replayPanel'), {
   persistKey: 'gospy-replay-panel-h',

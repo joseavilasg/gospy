@@ -649,23 +649,23 @@ func TestMCP_ListFilterValues(t *testing.T) {
 	}
 
 	// Scoped to the visible set: github.com must not leak.
-	unmarshal(callTool(t, h, "list_filter_values", map[string]any{"type": "method"}))
+	unmarshal(callTool(t, h, "list_entry_filter_values", map[string]any{"type": "method"}))
 	if payload.Type != "method" || len(payload.Values) != 2 {
-		t.Fatalf("list_filter_values(method) = %+v, want 2 scoped values", payload)
+		t.Fatalf("list_entry_filter_values(method) = %+v, want 2 scoped values", payload)
 	}
 	if payload.Values[0].Value != "GET" || payload.Values[0].Count != 1 || payload.Values[1].Value != "POST" || payload.Values[1].Count != 1 {
 		t.Fatalf("unexpected method values: %+v", payload.Values)
 	}
 
 	// Unknown type is a clear error.
-	msg := isErrorText(t, callTool(t, h, "list_filter_values", map[string]any{"type": "bogus"}))
+	msg := isErrorText(t, callTool(t, h, "list_entry_filter_values", map[string]any{"type": "bogus"}))
 	if !strings.Contains(msg, "unknown filter type") {
 		t.Fatalf("expected an unknown-type error, got %q", msg)
 	}
 
 	// Gate off: no values leak.
 	fs.gate = false
-	unmarshal(callTool(t, h, "list_filter_values", map[string]any{"type": "host"}))
+	unmarshal(callTool(t, h, "list_entry_filter_values", map[string]any{"type": "host"}))
 	if len(payload.Values) != 0 {
 		t.Fatalf("gate off must leak no values, got %+v", payload.Values)
 	}
@@ -776,26 +776,61 @@ func TestMCP_ListReplayEvents(t *testing.T) {
 	events := []session.ReplayEvent{
 		{Seq: 1, Result: "hit", Method: "GET", URL: "http://example.com/a", Status: 200, Timestamp: now},
 		{Seq: 2, Result: "miss", Method: "POST", URL: "http://example.com/b", Status: 0, Timestamp: now},
-		{Seq: 3, Result: "exhausted", Method: "GET", URL: "http://example.com/c", Status: 0, Exhausted: true, Timestamp: now},
+		{Seq: 3, Result: "exhausted", Method: "GET", URL: "http://cdn.example.com/c", Status: 0, Exhausted: true, Timestamp: now},
 	}
 	h := newTestReplayMCPServer(t, events, "run-42")
+
+	// No filters — all events.
 	resp := callTool(t, h, "list_replay_events", map[string]any{})
 	text := resultText(t, resp)
 	if !strings.Contains(text, "\"runId\":\"run-42\"") {
 		t.Fatalf("expected runId in response, got %s", text)
 	}
-	if !strings.Contains(text, "\"count\":3") {
-		t.Fatalf("expected count=3, got %s", text)
+	if !strings.Contains(text, "\"total\":3") {
+		t.Fatalf("expected total=3, got %s", text)
+	}
+	if strings.Contains(text, "\"hasMore\":true") {
+		t.Fatalf("should not have more with 3 events and default limit, got %s", text)
+	}
+
+	// Filter by result=miss.
+	resp = callTool(t, h, "list_replay_events", map[string]any{"result": "miss"})
+	text = resultText(t, resp)
+	if !strings.Contains(text, "\"total\":1") {
+		t.Fatalf("expected total=1 for miss filter, got %s", text)
 	}
 	if !strings.Contains(text, "\"result\":\"miss\"") {
 		t.Fatalf("expected miss event, got %s", text)
 	}
-	if !strings.Contains(text, "\"id\":1") {
-		t.Fatalf("expected id:1, got %s", text)
+
+	// Filter by host.
+	resp = callTool(t, h, "list_replay_events", map[string]any{"host": "cdn.example.com"})
+	text = resultText(t, resp)
+	if !strings.Contains(text, "\"total\":1") {
+		t.Fatalf("expected total=1 for host filter, got %s", text)
 	}
-	// consumed/total must not appear in the response.
-	if strings.Contains(text, "\"consumed\"") || strings.Contains(text, "\"total\"") {
-		t.Fatalf("consumed/total must not appear in event summary, got %s", text)
+	if !strings.Contains(text, "cdn.example.com") {
+		t.Fatalf("expected cdn event, got %s", text)
+	}
+
+	// Pagination: limit=2.
+	resp = callTool(t, h, "list_replay_events", map[string]any{"limit": float64(2)})
+	text = resultText(t, resp)
+	if !strings.Contains(text, "\"events\"") {
+		t.Fatalf("expected events array, got %s", text)
+	}
+	if !strings.Contains(text, "\"total\":3") {
+		t.Fatalf("expected total=3, got %s", text)
+	}
+	if !strings.Contains(text, "\"hasMore\":true") {
+		t.Fatalf("expected hasMore=true, got %s", text)
+	}
+
+	// Pagination: offset=2, limit=2 → 1 event.
+	resp = callTool(t, h, "list_replay_events", map[string]any{"offset": float64(2), "limit": float64(2)})
+	text = resultText(t, resp)
+	if strings.Contains(text, "\"hasMore\":true") {
+		t.Fatalf("expected hasMore=false, got %s", text)
 	}
 }
 
@@ -866,6 +901,63 @@ func TestMCP_ListReplayCandidates(t *testing.T) {
 func TestMCP_ListReplayCandidates_NoReplay(t *testing.T) {
 	h, _ := newTestMCPServer(t, &mockFilterStore{gate: false})
 	resp := callTool(t, h, "list_replay_candidates", map[string]any{"eventId": float64(1)})
+	msg := isErrorText(t, resp)
+	if !strings.Contains(msg, "replay tools are only available in replay mode") {
+		t.Fatalf("expected replay-mode error, got %q", msg)
+	}
+}
+
+func TestMCP_ListReplayFilterValues(t *testing.T) {
+	now := time.Now()
+	events := []session.ReplayEvent{
+		{Seq: 1, Result: "hit", Method: "GET", URL: "http://example.com/a", Status: 200, Timestamp: now},
+		{Seq: 2, Result: "miss", Method: "POST", URL: "http://example.com/b", Status: 0, Timestamp: now},
+		{Seq: 3, Result: "exhausted", Method: "GET", URL: "http://cdn.example.com/c", Status: 0, Exhausted: true, Timestamp: now},
+		{Seq: 4, Result: "miss", Method: "GET", URL: "http://cdn.example.com/d", Status: 0, Timestamp: now},
+	}
+	h := newTestReplayMCPServer(t, events, "run-42")
+
+	// result: 1 hit, 2 miss, 1 exhausted.
+	resp := callTool(t, h, "list_replay_filter_values", map[string]any{"type": "result"})
+	text := resultText(t, resp)
+	if !strings.Contains(text, "\"type\":\"result\"") {
+		t.Fatalf("expected type=result, got %s", text)
+	}
+	if !strings.Contains(text, "\"value\":\"miss\"") || !strings.Contains(text, "\"count\":2") {
+		t.Fatalf("expected miss count=2, got %s", text)
+	}
+	if !strings.Contains(text, "\"value\":\"hit\"") || !strings.Contains(text, "\"count\":1") {
+		t.Fatalf("expected hit count=1, got %s", text)
+	}
+
+	// host: example.com (2), cdn.example.com (2).
+	resp = callTool(t, h, "list_replay_filter_values", map[string]any{"type": "host"})
+	text = resultText(t, resp)
+	if !strings.Contains(text, "\"value\":\"example.com\"") {
+		t.Fatalf("expected example.com, got %s", text)
+	}
+	if !strings.Contains(text, "\"value\":\"cdn.example.com\"") {
+		t.Fatalf("expected cdn.example.com, got %s", text)
+	}
+
+	// method: GET (3), POST (1).
+	resp = callTool(t, h, "list_replay_filter_values", map[string]any{"type": "method"})
+	text = resultText(t, resp)
+	if !strings.Contains(text, "\"value\":\"GET\"") || !strings.Contains(text, "\"count\":3") {
+		t.Fatalf("expected GET count=3, got %s", text)
+	}
+
+	// Unknown type.
+	resp = callTool(t, h, "list_replay_filter_values", map[string]any{"type": "bogus"})
+	msg := isErrorText(t, resp)
+	if !strings.Contains(msg, "unknown filter type") {
+		t.Fatalf("expected unknown-type error, got %q", msg)
+	}
+}
+
+func TestMCP_ListReplayFilterValues_NoReplay(t *testing.T) {
+	h, _ := newTestMCPServer(t, &mockFilterStore{gate: false})
+	resp := callTool(t, h, "list_replay_filter_values", map[string]any{"type": "result"})
 	msg := isErrorText(t, resp)
 	if !strings.Contains(msg, "replay tools are only available in replay mode") {
 		t.Fatalf("expected replay-mode error, got %q", msg)

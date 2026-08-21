@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -66,8 +67,9 @@ type ReplayDiffResult struct {
 }
 
 // SetReplayAnalyzer wires the replay analysis backend. When set, the replay
-// tools (list_replay_events, get_replay_event, list_replay_candidates) become
-// available and send_request is blocked.
+// tools (list_replay_events, get_replay_event, list_replay_candidates,
+// list_replay_filter_values, replay_diff) become available and send_request
+// is blocked.
 func (s *Server) SetReplayAnalyzer(a ReplayAnalyzer) {
 	s.replay = a
 }
@@ -79,18 +81,18 @@ func NewServer(scope *Scope, hist *history.Store, fwd *Forwarder) *Server {
 	ms := server.NewMCPServer("gospy-agent", "1.0.0", server.WithToolCapabilities(true), server.WithInputSchemaValidation())
 
 	ms.AddTool(mcp.NewTool("list_entries",
-		mcp.WithDescription("Lists the entries currently visible to the agent: the agent gate must be enabled and the agent filter profile applies. Optional criteria narrow the visible set - they combine with AND and can never expand the profile scope. Fields that require exact values (host, referer, process, origin, requestContentType, responseContentType, method) accept comma-separated lists (OR) and should be discovered with list_filter_values; path and text are free text; status is an exact HTTP status code; from/to bound the entry timestamp (inclusive). Pagination is mandatory (max 200 entries per page)."),
+		mcp.WithDescription("Lists the entries currently visible to the agent: the agent gate must be enabled and the agent filter profile applies. Optional criteria narrow the visible set - they combine with AND and can never expand the profile scope. Fields that require exact values (host, referer, process, origin, requestContentType, responseContentType, method) accept comma-separated lists (OR) and should be discovered with list_entry_filter_values; path and text are free text; status is an exact HTTP status code; from/to bound the entry timestamp (inclusive). Pagination is mandatory (max 200 entries per page)."),
 		mcp.WithNumber("offset", mcp.DefaultNumber(0), mcp.Min(0)),
 		mcp.WithNumber("limit", mcp.DefaultNumber(50), mcp.Min(1), mcp.Max(200)),
-		mcp.WithString("host", mcp.Description("Exact host match. Discover valid values with list_filter_values('host'). Comma-separated for multiple (OR).")),
+		mcp.WithString("host", mcp.Description("Exact host match. Discover valid values with list_entry_filter_values('host'). Comma-separated for multiple (OR).")),
 		mcp.WithString("path", mcp.Description("Free text: case-insensitive substring over the URL path+query, e.g. '/api/issues/'.")),
-		mcp.WithString("method", mcp.Description("Exact HTTP method (GET, POST, ...). Discover valid values with list_filter_values('method'). Comma-separated for multiple (OR).")),
+		mcp.WithString("method", mcp.Description("Exact HTTP method (GET, POST, ...). Discover valid values with list_entry_filter_values('method'). Comma-separated for multiple (OR).")),
 		mcp.WithString("status", mcp.Description("Exact HTTP response status, e.g. '200' or '404'. Comma-separated for multiple (OR).")),
-		mcp.WithString("referer", mcp.Description("Exact referer host match. Discover valid values with list_filter_values('referer'). Comma-separated for multiple (OR).")),
-		mcp.WithString("process", mcp.Description("Exact client process name match. Discover valid values with list_filter_values('process'). Comma-separated for multiple (OR).")),
+		mcp.WithString("referer", mcp.Description("Exact referer host match. Discover valid values with list_entry_filter_values('referer'). Comma-separated for multiple (OR).")),
+		mcp.WithString("process", mcp.Description("Exact client process name match. Discover valid values with list_entry_filter_values('process'). Comma-separated for multiple (OR).")),
 		mcp.WithString("origin", mcp.Description("Exact origin match ('browser' or 'agent'). Comma-separated for multiple (OR).")),
-		mcp.WithString("requestContentType", mcp.Description("Exact request Content-Type match. Discover valid values with list_filter_values('requestContentType'). Comma-separated for multiple (OR).")),
-		mcp.WithString("responseContentType", mcp.Description("Exact response Content-Type match. Discover valid values with list_filter_values('responseContentType'). Comma-separated for multiple (OR).")),
+		mcp.WithString("requestContentType", mcp.Description("Exact request Content-Type match. Discover valid values with list_entry_filter_values('requestContentType'). Comma-separated for multiple (OR).")),
+		mcp.WithString("responseContentType", mcp.Description("Exact response Content-Type match. Discover valid values with list_entry_filter_values('responseContentType'). Comma-separated for multiple (OR).")),
 		mcp.WithString("text", mcp.Description("Free text: matches the URL, method, status, client process and entry id.")),
 		mcp.WithString("from", mcp.Description("Inclusive lower bound on the entry timestamp. Format: RFC3339 instant ('2026-08-02T14:30:00Z') or local wall-clock ('2026-08-02T14:30', system time zone).")),
 		mcp.WithString("to", mcp.Description("Inclusive upper bound on the entry timestamp. Same formats as 'from'.")),
@@ -115,18 +117,22 @@ func NewServer(scope *Scope, hist *history.Store, fwd *Forwarder) *Server {
 		mcp.WithDescription("Lists the distinct hosts currently in the agent-visible set (your scope: what you can see), sorted."),
 	), s.handleListVisibleHosts)
 
-	ms.AddTool(mcp.NewTool("list_filter_values",
+	ms.AddTool(mcp.NewTool("list_entry_filter_values",
 		mcp.WithDescription("Lists the exact values available for a list-type filter field (host, referer, process, origin, requestContentType, responseContentType, method), scoped to the agent's visible set. Use the returned values verbatim in list_entries - these fields require exact matches, not free text. This answers 'what can I filter by', while list_visible_hosts answers 'what is my scope'."),
 		mcp.WithString("type", mcp.Required(), mcp.Description("Filter field to enumerate: host, referer, process, origin, requestContentType, responseContentType or method.")),
-	), s.handleListFilterValues)
+	), s.handleListEntryFilterValues)
 
 	ms.AddTool(mcp.NewTool("list_replay_runs",
 		mcp.WithDescription("Lists all replay runs for the session, newest first. Each run includes hit/miss/exhausted counts, duration, and an active flag indicating whether it is the currently running replay."),
 	), s.handleListReplayRuns)
 
 	ms.AddTool(mcp.NewTool("list_replay_events",
-		mcp.WithDescription("Lists replay events for a run: each event is one request as it passed through the replay proxy, with the match outcome (hit/miss/exhausted). If runId is omitted, uses the active (live) run — returns an error if no run is active."),
+		mcp.WithDescription("Lists replay events for a run: each event is one request as it passed through the replay proxy, with the match outcome (hit/miss/exhausted). If runId is omitted, uses the active (live) run — returns an error if no run is active. Pagination is mandatory (max 200 events per page). Use list_replay_filter_values to discover valid filter values."),
 		mcp.WithString("runId", mcp.Description("Replay run ID (from list_replay_runs). Omitted: the active run.")),
+		mcp.WithString("result", mcp.Description("Filter by match result: 'hit', 'miss', or 'exhausted'. Use list_replay_filter_values('result') to discover values.")),
+		mcp.WithString("host", mcp.Description("Filter by host in the event URL. Use list_replay_filter_values('host') to discover values.")),
+		mcp.WithNumber("offset", mcp.DefaultNumber(0), mcp.Min(0)),
+		mcp.WithNumber("limit", mcp.DefaultNumber(50), mcp.Min(1), mcp.Max(200)),
 	), s.handleListReplayEvents)
 
 	ms.AddTool(mcp.NewTool("get_replay_event",
@@ -148,6 +154,12 @@ func NewServer(scope *Scope, hist *history.Store, fwd *Forwarder) *Server {
 		mcp.WithString("entryId", mcp.Required(), mcp.Description("ID of the recorded entry to diff against (from list_replay_candidates).")),
 		mcp.WithString("runId", mcp.Description("Replay run ID (from list_replay_runs). Omitted: the active run.")),
 	), s.handleReplayDiff)
+
+	ms.AddTool(mcp.NewTool("list_replay_filter_values",
+		mcp.WithDescription("Lists the distinct values available for a replay event filter field (result, host, method), scoped to a run. Use the returned values verbatim in list_replay_events. If runId is omitted, uses the active run."),
+		mcp.WithString("type", mcp.Required(), mcp.Description("Filter field to enumerate: 'result' (hit/miss/exhausted), 'host', or 'method'.")),
+		mcp.WithString("runId", mcp.Description("Replay run ID (from list_replay_runs). Omitted: the active run.")),
+	), s.handleListReplayFilterValues)
 
 	s.mcp = ms
 	return s
@@ -229,7 +241,7 @@ var filterValueTypes = map[string]bool{
 	"requestContentType": true, "responseContentType": true, "method": true,
 }
 
-func (s *Server) handleListFilterValues(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleListEntryFilterValues(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	typ := req.GetString("type", "")
 	if !filterValueTypes[typ] {
 		return mcp.NewToolResultErrorf("unknown filter type %q; valid: host, referer, process, origin, requestContentType, responseContentType, method", typ), nil
@@ -321,6 +333,44 @@ func (s *Server) handleListReplayEvents(ctx context.Context, req mcp.CallToolReq
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+
+	// Apply filters.
+	resultFilter := strings.ToLower(strings.TrimSpace(req.GetString("result", "")))
+	hostFilter := strings.ToLower(strings.TrimSpace(req.GetString("host", "")))
+	var filtered []session.ReplayEvent
+	for _, ev := range events {
+		if resultFilter != "" && ev.Result != resultFilter {
+			continue
+		}
+		if hostFilter != "" {
+			u, err := url.Parse(ev.URL)
+			if err != nil || !strings.EqualFold(u.Hostname(), hostFilter) {
+				continue
+			}
+		}
+		filtered = append(filtered, ev)
+	}
+
+	total := len(filtered)
+	offset := int(req.GetFloat("offset", 0))
+	limit := int(req.GetFloat("limit", 50))
+	if limit < 1 {
+		limit = 1
+	} else if limit > 200 {
+		limit = 200
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > total {
+		offset = total
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	page := filtered[offset:end]
+
 	type eventSummary struct {
 		ID        int       `json:"id"`
 		Result    string    `json:"result"`
@@ -331,17 +381,18 @@ func (s *Server) handleListReplayEvents(ctx context.Context, req mcp.CallToolReq
 		Ts        time.Time `json:"ts"`
 		EntryID   string    `json:"entryId,omitempty"`
 	}
-	out := make([]eventSummary, len(events))
-	for i, ev := range events {
+	out := make([]eventSummary, len(page))
+	for i, ev := range page {
 		out[i] = eventSummary{
 			ID: ev.Seq, Result: ev.Result, Method: ev.Method, URL: ev.URL,
 			Status: ev.Status, Exhausted: ev.Exhausted, Ts: ev.Timestamp, EntryID: ev.EntryID,
 		}
 	}
 	return mcp.NewToolResultJSON(map[string]any{
-		"runId":  runID,
-		"events": out,
-		"count":  len(out),
+		"runId":   runID,
+		"events":  out,
+		"total":   total,
+		"hasMore": offset+limit < total,
 	})
 }
 
@@ -426,6 +477,63 @@ func (s *Server) handleReplayDiff(ctx context.Context, req mcp.CallToolRequest) 
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	return mcp.NewToolResultJSON(diff)
+}
+
+var replayFilterValueTypes = map[string]bool{"result": true, "host": true, "method": true}
+
+func (s *Server) handleListReplayFilterValues(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.replay == nil {
+		return mcp.NewToolResultError("replay tools are only available in replay mode"), nil
+	}
+	typ := req.GetString("type", "")
+	if !replayFilterValueTypes[typ] {
+		return mcp.NewToolResultErrorf("unknown filter type %q; valid: result, host, method", typ), nil
+	}
+	runID, err := s.resolveRunID(req.GetString("runId", ""))
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	events, err := s.replay.ReplayEvents(runID)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	type optionCount struct {
+		Value string `json:"value"`
+		Count int    `json:"count"`
+	}
+	counts := map[string]int{}
+	for _, ev := range events {
+		var val string
+		switch typ {
+		case "result":
+			val = ev.Result
+		case "method":
+			val = ev.Method
+		case "host":
+			u, err := url.Parse(ev.URL)
+			if err != nil {
+				continue
+			}
+			val = u.Hostname()
+		}
+		if val != "" {
+			counts[val]++
+		}
+	}
+	out := make([]optionCount, 0, len(counts))
+	for v, c := range counts {
+		out = append(out, optionCount{Value: v, Count: c})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].Value < out[j].Value
+	})
+	return mcp.NewToolResultJSON(map[string]any{
+		"type":   typ,
+		"values": out,
+	})
 }
 
 // resolveRunID resolves an optional runId parameter: empty → active run, non-empty → passed through.

@@ -282,12 +282,24 @@ export async function loadReplayRuns() {
 const FEED_PAGE = 200;
 let feedRunId = null;
 let feedLoadingOlder = false;
+let _feedResultFilter = '';
+let _feedHostFilter = '';
+
+export function setFeedResultFilter(val) { _feedResultFilter = val || ''; }
+export function setFeedHostFilter(val) { _feedHostFilter = val || ''; }
+
+export function getFeedFilters() {
+  return { result: _feedResultFilter, host: _feedHostFilter };
+}
 
 export async function loadReplayFeed(runId) {
   feedRunId = runId;
   if (!runId) { clearReplayFeed(); return; }
   try {
-    const resp = await fetch(`/api/replay/events?run=${encodeURIComponent(runId)}&limit=${FEED_PAGE}`);
+    let url = `/api/replay/events?run=${encodeURIComponent(runId)}&limit=${FEED_PAGE}`;
+    if (_feedResultFilter) url += `&result=${encodeURIComponent(_feedResultFilter)}`;
+    if (_feedHostFilter) url += `&host=${encodeURIComponent(_feedHostFilter)}`;
+    const resp = await fetch(url);
     const data = await resp.json();
     setReplayFeed(data.events || [], !!data.hasMore);
   } catch (e) {
@@ -300,13 +312,28 @@ export async function loadReplayFeedOlder(beforeSeq) {
   if (!feedRunId || feedLoadingOlder || beforeSeq == null) return;
   feedLoadingOlder = true;
   try {
-    const resp = await fetch(`/api/replay/events?run=${encodeURIComponent(feedRunId)}&limit=${FEED_PAGE}&beforeSeq=${beforeSeq}`);
+    let url = `/api/replay/events?run=${encodeURIComponent(feedRunId)}&limit=${FEED_PAGE}&beforeSeq=${beforeSeq}`;
+    if (_feedResultFilter) url += `&result=${encodeURIComponent(_feedResultFilter)}`;
+    if (_feedHostFilter) url += `&host=${encodeURIComponent(_feedHostFilter)}`;
+    const resp = await fetch(url);
     const data = await resp.json();
     prependReplayFeed(data.events || [], !!data.hasMore);
   } catch (e) {
     console.error('Failed to load older replay events:', e);
   } finally {
     feedLoadingOlder = false;
+  }
+}
+
+export async function loadReplayFilterValues(runId, type) {
+  try {
+    let url = `/api/replay/filter-values?type=${encodeURIComponent(type)}`;
+    if (runId) url += `&run=${encodeURIComponent(runId)}`;
+    const resp = await fetch(url);
+    return await resp.json();
+  } catch (e) {
+    console.error('Failed to load replay filter values:', e);
+    return { type, values: [] };
   }
 }
 

@@ -785,6 +785,126 @@ func TestReplayEventsListPaged(t *testing.T) {
 	}
 }
 
+func TestReplayEventsListFiltered(t *testing.T) {
+	s, _, logRoot := newReplayServer(t)
+
+	runDir, err := session.ReplayRunDir(logRoot, "filtrun")
+	if err != nil {
+		t.Fatalf("ReplayRunDir: %v", err)
+	}
+	l, err := session.OpenReplayLog(runDir, "filtrun")
+	if err != nil {
+		t.Fatalf("OpenReplayLog: %v", err)
+	}
+	for _, ev := range []session.ReplayEvent{
+		{Seq: 1, Result: "hit", Method: "GET", URL: "http://a.example.com/x", Status: 200},
+		{Seq: 2, Result: "miss", Method: "POST", URL: "http://b.example.com/y", Status: 0},
+		{Seq: 3, Result: "exhausted", Method: "GET", URL: "http://a.example.com/z", Status: 0, Exhausted: true},
+		{Seq: 4, Result: "miss", Method: "GET", URL: "http://a.example.com/w", Status: 0},
+	} {
+		l.Append(&ev, nil, nil)
+	}
+
+	l.Close()
+
+	getFiltered := func(qs string) []session.ReplayEvent {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		s.handleReplayEventsList(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events?run=filtrun&"+qs, nil))
+		var resp struct {
+			Events []session.ReplayEvent `json:"events"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return resp.Events
+	}
+
+	// result=miss → 2 events.
+	events := getFiltered("result=miss")
+	if len(events) != 2 {
+		t.Fatalf("result=miss: expected 2, got %d", len(events))
+	}
+
+	// host=a.example.com → 3 events.
+	events = getFiltered("host=a.example.com")
+	if len(events) != 3 {
+		t.Fatalf("host=a.example.com: expected 3, got %d", len(events))
+	}
+
+	// result=miss + host=a.example.com → 1 event.
+	events = getFiltered("result=miss&host=a.example.com")
+	if len(events) != 1 {
+		t.Fatalf("result=miss+host=a.example.com: expected 1, got %d", len(events))
+	}
+}
+
+func TestReplayFilterValuesEndpoint(t *testing.T) {
+	s, _, logRoot := newReplayServer(t)
+
+	runDir, err := session.ReplayRunDir(logRoot, "fvrun")
+	if err != nil {
+		t.Fatalf("ReplayRunDir: %v", err)
+	}
+	l, err := session.OpenReplayLog(runDir, "fvrun")
+	if err != nil {
+		t.Fatalf("OpenReplayLog: %v", err)
+	}
+	for _, ev := range []session.ReplayEvent{
+		{Seq: 1, Result: "hit", Method: "GET", URL: "http://a.example.com/x", Status: 200},
+		{Seq: 2, Result: "miss", Method: "POST", URL: "http://b.example.com/y", Status: 0},
+		{Seq: 3, Result: "exhausted", Method: "GET", URL: "http://a.example.com/z", Status: 0, Exhausted: true},
+	} {
+		l.Append(&ev, nil, nil)
+	}
+
+	l.Close()
+
+	getValues := func(typ string) []struct {
+		Value string `json:"value"`
+		Count int    `json:"count"`
+	} {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		s.handleReplayFilterValues(rec, httptest.NewRequest(http.MethodGet, "/api/replay/filter-values?type="+typ+"&run=fvrun", nil))
+		var resp struct {
+			Values []struct {
+				Value string `json:"value"`
+				Count int    `json:"count"`
+			} `json:"values"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return resp.Values
+	}
+
+	// result: hit(1), miss(1), exhausted(1).
+	vals := getValues("result")
+	if len(vals) != 3 {
+		t.Fatalf("result values: expected 3, got %d", len(vals))
+	}
+
+	// method: GET(2), POST(1).
+	vals = getValues("method")
+	if len(vals) != 2 {
+		t.Fatalf("method values: expected 2, got %d", len(vals))
+	}
+
+	// host: a.example.com(2), b.example.com(1).
+	vals = getValues("host")
+	if len(vals) != 2 {
+		t.Fatalf("host values: expected 2, got %d", len(vals))
+	}
+
+	// Unknown type → 400.
+	rec := httptest.NewRecorder()
+	s.handleReplayFilterValues(rec, httptest.NewRequest(http.MethodGet, "/api/replay/filter-values?type=bogus&run=fvrun", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("bogus type: status=%d, want 400", rec.Code)
+	}
+}
+
 func TestReplayFeedVirtualization(t *testing.T) {
 	if !strings.Contains(renderJS, "onReplayFeedScroll") ||
 		!strings.Contains(renderJS, "slice().reverse()") {
@@ -1554,6 +1674,39 @@ func TestReplaySessionLabelShown(t *testing.T) {
 	}
 	if !strings.Contains(appJS, "replaySessionLabel") {
 		t.Fatal("app.js: populateReplayRuns must render the session name into replaySessionLabel")
+	}
+}
+
+func TestReplayFilterBar(t *testing.T) {
+	if !strings.Contains(indexHTML, `id="replayFilterResult"`) {
+		t.Fatal("index.html: the replay header must have a result filter select")
+	}
+	if !strings.Contains(indexHTML, `id="replayFilterHost"`) {
+		t.Fatal("index.html: the replay header must have a host filter select")
+	}
+	if !strings.Contains(styleCSS, ".replay-filter-select") {
+		t.Fatal("style.css: .replay-filter-select rule is required")
+	}
+	if !strings.Contains(appJS, "replayFilterResult") {
+		t.Fatal("app.js: must wire the result filter change handler")
+	}
+	if !strings.Contains(appJS, "replayFilterHost") {
+		t.Fatal("app.js: must wire the host filter change handler")
+	}
+	if !strings.Contains(appJS, "updateReplayHostFilter") {
+		t.Fatal("app.js: must populate the host filter dropdown on run change")
+	}
+	if !strings.Contains(apiJS, "setFeedResultFilter") {
+		t.Fatal("api.js: must export setFeedResultFilter")
+	}
+	if !strings.Contains(apiJS, "setFeedHostFilter") {
+		t.Fatal("api.js: must export setFeedHostFilter")
+	}
+	if !strings.Contains(apiJS, "loadReplayFilterValues") {
+		t.Fatal("api.js: must export loadReplayFilterValues")
+	}
+	if !strings.Contains(apiJS, "/api/replay/filter-values") {
+		t.Fatal("api.js: loadReplayFilterValues must call /api/replay/filter-values")
 	}
 }
 
