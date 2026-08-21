@@ -85,7 +85,6 @@ func TestReplayModeReadOnlyGuards(t *testing.T) {
 		h    http.HandlerFunc
 	}{
 		{"agent view", httptest.NewRequest(http.MethodPut, "/api/agent/view", nil), s.replayReadOnly(s.handleAgentView)},
-		{"agent enabled", httptest.NewRequest(http.MethodPut, "/api/agent/enabled", nil), s.replayReadOnly(s.handleAgentEnabled)},
 		{"ignored", httptest.NewRequest(http.MethodPut, "/api/ignored", nil), s.replayReadOnly(s.handleIgnored)},
 		{"focused", httptest.NewRequest(http.MethodPut, "/api/focused", nil), s.replayReadOnly(s.handleFocused)},
 		{"request-rule", httptest.NewRequest(http.MethodPost, "/api/request-rule", nil), s.replayReadOnly(s.handleRequestRule)},

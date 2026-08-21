@@ -17,9 +17,9 @@ type FilterStore interface {
 // profile applies. Agent-origin entries are filtered exactly like any other
 // entry - there is no origin bypass.
 //
-// In replay mode the session is the universe: the gate check is bypassed for
-// all read-only tools, the agent filter profile is not applied (the user's
-// UI filters are for them only), and every entry in the store is visible.
+// In replay mode the agent filter profile is not applied (the user's UI filters
+// are for them only) and every entry in the store is visible, but the gate
+// still applies - the agent is never accessible by default.
 type Scope struct {
 	histVal    atomic.Pointer[history.Store]
 	filter     FilterStore
@@ -46,8 +46,8 @@ func (sc *Scope) SetHistoryStore(h *history.Store) {
 	sc.histVal.Store(h)
 }
 
-// SetReplayMode enables replay scope semantics: all entries visible, no agent
-// filter profile, gate bypassed for read-only tools.
+// SetReplayMode enables replay scope semantics: no agent filter profile (the
+// session is the universe). The gate still applies in replay mode.
 func (sc *Scope) SetReplayMode(enabled bool) {
 	sc.replayMode = enabled
 }
@@ -96,10 +96,9 @@ func (sc *Scope) base() (all []*history.ListEntry, filters history.Filters, opts
 }
 
 // ListEntries returns page [offset, offset+limit) of the agent-visible set.
-// The gate is a hard stop: when off, nothing is exposed. In replay mode the
-// gate is bypassed - the session is the universe.
+// The gate is a hard stop: when off, nothing is exposed - in every mode.
 func (sc *Scope) ListEntries(query history.Filters, offset, limit int) ListPage {
-	if !sc.replayMode && !sc.filter.AgentGate() {
+	if !sc.filter.AgentGate() {
 		return ListPage{Entries: make([]*AgentEntry, 0)}
 	}
 	all, filters, opts := sc.base()
@@ -133,10 +132,9 @@ func (sc *Scope) ListEntries(query history.Filters, offset, limit int) ListPage 
 // FilterValues returns the distinct option values for a list-type filter field
 // (host, referer, process, origin, content types, method), computed over the
 // agent-visible set only. This mirrors the UI dropdown (history.Options) so the
-// agent discovers exact filter values within its scope, never outside it. In
-// replay mode the gate is bypassed.
+// agent discovers exact filter values within its scope, never outside it.
 func (sc *Scope) FilterValues(typ string) []history.OptionCount {
-	if !sc.replayMode && !sc.filter.AgentGate() {
+	if !sc.filter.AgentGate() {
 		return []history.OptionCount{}
 	}
 	all, filters, opts := sc.base()
@@ -150,8 +148,10 @@ func (sc *Scope) FilterValues(typ string) []history.OptionCount {
 }
 
 // IsVisible gates get_entry: only entries in the agent-visible set can be read.
-// In replay mode every entry in the session is visible.
 func (sc *Scope) IsVisible(id string) bool {
+	if !sc.filter.AgentGate() {
+		return false
+	}
 	if sc.replayMode {
 		st := sc.hist()
 		if st == nil {
@@ -164,9 +164,6 @@ func (sc *Scope) IsVisible(id string) bool {
 		}
 		return false
 	}
-	if !sc.filter.AgentGate() {
-		return false
-	}
 	all, filters, opts := sc.base()
 	visible := make(map[string]bool, len(all))
 	history.PageVisibleSet(all,
@@ -177,9 +174,8 @@ func (sc *Scope) IsVisible(id string) bool {
 }
 
 // VisibleHosts returns the distinct hosts of the visible set, sorted.
-// In replay mode the gate is bypassed.
 func (sc *Scope) VisibleHosts() []string {
-	if !sc.replayMode && !sc.filter.AgentGate() {
+	if !sc.filter.AgentGate() {
 		return []string{}
 	}
 	all, filters, opts := sc.base()

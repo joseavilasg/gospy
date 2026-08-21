@@ -74,6 +74,16 @@ func (s *Server) SetReplayAnalyzer(a ReplayAnalyzer) {
 	s.replay = a
 }
 
+// requireGate returns an error if the agent gate is off. Every MCP tool
+// calls this before doing any work - the gate is the single hard stop
+// that controls agent access in both record and replay modes.
+func (s *Server) requireGate() error {
+	if !s.scope.GateEnabled() {
+		return fmt.Errorf("the agent gate is disabled, request the user to enable it")
+	}
+	return nil
+}
+
 // NewServer wires the tools. The caller mounts Handler() at exactly /mcp.
 func NewServer(scope *Scope, hist *history.Store, fwd *Forwarder) *Server {
 	s := &Server{scope: scope, fwd: fwd}
@@ -127,7 +137,7 @@ func NewServer(scope *Scope, hist *history.Store, fwd *Forwarder) *Server {
 	), s.handleListReplayRuns)
 
 	ms.AddTool(mcp.NewTool("list_replay_events",
-		mcp.WithDescription("Lists replay events for a run: each event is one request as it passed through the replay proxy, with the match outcome (hit/miss/exhausted). If runId is omitted, uses the active (live) run — returns an error if no run is active. Pagination is mandatory (max 200 events per page). Use list_replay_filter_values to discover valid filter values."),
+		mcp.WithDescription("Lists replay events for a run: each event is one request as it passed through the replay proxy, with the match outcome (hit/miss/exhausted). If runId is omitted, uses the active (live) run - returns an error if no run is active. Pagination is mandatory (max 200 events per page). Use list_replay_filter_values to discover valid filter values."),
 		mcp.WithString("runId", mcp.Description("Replay run ID (from list_replay_runs). Omitted: the active run.")),
 		mcp.WithString("result", mcp.Description("Filter by match result: 'hit', 'miss', or 'exhausted'. Use list_replay_filter_values('result') to discover values.")),
 		mcp.WithString("host", mcp.Description("Filter by host in the event URL. Use list_replay_filter_values('host') to discover values.")),
@@ -188,6 +198,9 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) handleListEntries(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if err := s.requireGate(); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	query := history.Filters{
 		Host:                parseListArg(req.GetString("host", "")),
 		Path:                parseListArg(req.GetString("path", "")),
@@ -242,6 +255,9 @@ var filterValueTypes = map[string]bool{
 }
 
 func (s *Server) handleListEntryFilterValues(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if err := s.requireGate(); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	typ := req.GetString("type", "")
 	if !filterValueTypes[typ] {
 		return mcp.NewToolResultErrorf("unknown filter type %q; valid: host, referer, process, origin, requestContentType, responseContentType, method", typ), nil
@@ -257,6 +273,9 @@ func (s *Server) handleListEntryFilterValues(ctx context.Context, req mcp.CallTo
 }
 
 func (s *Server) handleGetEntry(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if err := s.requireGate(); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	id := req.GetString("id", "")
 	if id == "" {
 		return mcp.NewToolResultError("id is required"), nil
@@ -278,8 +297,8 @@ func (s *Server) handleSendRequest(ctx context.Context, req mcp.CallToolRequest)
 	if s.replay != nil {
 		return mcp.NewToolResultError("send_request is not available in replay mode"), nil
 	}
-	if !s.scope.GateEnabled() {
-		return mcp.NewToolResultError("the agent gate is disabled"), nil
+	if err := s.requireGate(); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
 	}
 	spec, err := parseRequestSpec(req)
 	if err != nil {
@@ -303,11 +322,17 @@ func (s *Server) handleSendRequest(ctx context.Context, req mcp.CallToolRequest)
 }
 
 func (s *Server) handleListVisibleHosts(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if err := s.requireGate(); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	hosts := s.scope.VisibleHosts()
 	return mcp.NewToolResultJSON(map[string]any{"hosts": hosts, "count": len(hosts)})
 }
 
 func (s *Server) handleListReplayRuns(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if err := s.requireGate(); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	if s.replay == nil {
 		return mcp.NewToolResultError("replay tools are only available in replay mode"), nil
 	}
@@ -322,6 +347,9 @@ func (s *Server) handleListReplayRuns(ctx context.Context, req mcp.CallToolReque
 }
 
 func (s *Server) handleListReplayEvents(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if err := s.requireGate(); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	if s.replay == nil {
 		return mcp.NewToolResultError("replay tools are only available in replay mode"), nil
 	}
@@ -397,6 +425,9 @@ func (s *Server) handleListReplayEvents(ctx context.Context, req mcp.CallToolReq
 }
 
 func (s *Server) handleGetReplayEvent(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if err := s.requireGate(); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	if s.replay == nil {
 		return mcp.NewToolResultError("replay tools are only available in replay mode"), nil
 	}
@@ -434,6 +465,9 @@ func (s *Server) handleGetReplayEvent(ctx context.Context, req mcp.CallToolReque
 }
 
 func (s *Server) handleListReplayCandidates(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if err := s.requireGate(); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	if s.replay == nil {
 		return mcp.NewToolResultError("replay tools are only available in replay mode"), nil
 	}
@@ -457,6 +491,9 @@ func (s *Server) handleListReplayCandidates(ctx context.Context, req mcp.CallToo
 }
 
 func (s *Server) handleReplayDiff(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if err := s.requireGate(); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	if s.replay == nil {
 		return mcp.NewToolResultError("replay tools are only available in replay mode"), nil
 	}
@@ -482,6 +519,9 @@ func (s *Server) handleReplayDiff(ctx context.Context, req mcp.CallToolRequest) 
 var replayFilterValueTypes = map[string]bool{"result": true, "host": true, "method": true}
 
 func (s *Server) handleListReplayFilterValues(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if err := s.requireGate(); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
 	if s.replay == nil {
 		return mcp.NewToolResultError("replay tools are only available in replay mode"), nil
 	}

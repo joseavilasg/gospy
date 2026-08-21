@@ -156,23 +156,22 @@ func TestMCP_ListEntries(t *testing.T) {
 	fs := &mockFilterStore{gate: false}
 	h, hist := newTestMCPServer(t, fs)
 
+	// Gate off: tool returns explicit error.
 	resp := callTool(t, h, "list_entries", map[string]any{})
-	text := resultText(t, resp)
-	var page ListPage
-	if err := json.Unmarshal([]byte(text), &page); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if page.Entries == nil || len(page.Entries) != 0 || page.VisibleCount != 0 {
-		t.Fatalf("gate off list = %+v", page)
+	errText := isErrorText(t, resp)
+	if !strings.Contains(errText, "the agent gate is disabled") {
+		t.Fatalf("gate off error = %q", errText)
 	}
 
+	// Gate on: data flows.
 	fs.gate = true
 	saveTestEntry(t, hist, "a.com", "", 200)
 	saveTestEntry(t, hist, "b.com", "", 200)
 	fs.filters = history.Filters{Host: []string{"a.com"}, MatchMode: "all"}
 
 	resp = callTool(t, h, "list_entries", map[string]any{})
-	text = resultText(t, resp)
+	text := resultText(t, resp)
+	var page ListPage
 	if err := json.Unmarshal([]byte(text), &page); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -228,7 +227,7 @@ func TestMCP_GetEntry(t *testing.T) {
 	// Gate off rejects everything.
 	fs.gate = false
 	errText = isErrorText(t, callTool(t, h, "get_entry", map[string]any{"id": e.ID}))
-	if !strings.Contains(errText, "not in the agent-visible set") {
+	if !strings.Contains(errText, "the agent gate is disabled") {
 		t.Errorf("gate off error = %q", errText)
 	}
 }
@@ -242,6 +241,77 @@ func TestMCP_SendRequestGate(t *testing.T) {
 	if !strings.Contains(errText, "gate is disabled") {
 		t.Errorf("gate off error = %q", errText)
 	}
+}
+
+func TestMCP_GateBlocksAllTools(t *testing.T) {
+	gateErr := "the agent gate is disabled, request the user to enable it"
+
+	t.Run("record_tools", func(t *testing.T) {
+		fs := &mockFilterStore{gate: false}
+		h, hist := newTestMCPServer(t, fs)
+		_ = hist
+
+		cases := []struct {
+			name string
+			args map[string]any
+		}{
+			{"list_entries", map[string]any{}},
+			{"list_visible_hosts", map[string]any{}},
+			{"list_entry_filter_values", map[string]any{"type": "host"}},
+			{"send_request", map[string]any{"template": "x"}},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				resp := callTool(t, h, tc.name, tc.args)
+				msg := isErrorText(t, resp)
+				if !strings.Contains(msg, gateErr) {
+					t.Errorf("%s with gate off: expected gate error, got %q", tc.name, msg)
+				}
+			})
+		}
+
+		// get_entry needs an entry id - create one with gate on, then flip off.
+		fs.gate = true
+		saveTestEntry(t, hist, "a.com", "", 200)
+		fs.gate = false
+		resp := callTool(t, h, "get_entry", map[string]any{"id": "1"})
+		msg := isErrorText(t, resp)
+		if !strings.Contains(msg, gateErr) {
+			t.Errorf("get_entry with gate off: expected gate error, got %q", msg)
+		}
+	})
+
+	t.Run("replay_tools", func(t *testing.T) {
+		hist := newTestHistory(t)
+		fs := &mockFilterStore{gate: false}
+		srv := NewServer(NewScope(hist, fs, nil, nil), hist, nil)
+		srv.SetReplayAnalyzer(&mockReplayAnalyzer{
+			events: []session.ReplayEvent{{Seq: 1, Result: "miss", Method: "GET", URL: "http://a.com/", Status: 0, Timestamp: time.Now()}},
+			runID:  "test-run",
+		})
+		h := srv.Handler()
+
+		cases := []struct {
+			name string
+			args map[string]any
+		}{
+			{"list_replay_runs", map[string]any{}},
+			{"list_replay_events", map[string]any{}},
+			{"get_replay_event", map[string]any{"eventId": float64(1)}},
+			{"list_replay_candidates", map[string]any{"eventId": float64(1)}},
+			{"replay_diff", map[string]any{"eventId": float64(1), "entryId": "1"}},
+			{"list_replay_filter_values", map[string]any{"type": "result"}},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				resp := callTool(t, h, tc.name, tc.args)
+				msg := isErrorText(t, resp)
+				if !strings.Contains(msg, gateErr) {
+					t.Errorf("%s with gate off: expected gate error, got %q", tc.name, msg)
+				}
+			})
+		}
+	})
 }
 
 func TestMCP_SendRequest_RequiresTemplate(t *testing.T) {
@@ -380,25 +450,24 @@ func TestMCP_ListVisibleHosts(t *testing.T) {
 	fs := &mockFilterStore{gate: false}
 	h, hist := newTestMCPServer(t, fs)
 
+	// Gate off: explicit error.
 	resp := callTool(t, h, "list_visible_hosts", map[string]any{})
-	text := resultText(t, resp)
-	var out struct {
-		Hosts []string `json:"hosts"`
-		Count int      `json:"count"`
-	}
-	if err := json.Unmarshal([]byte(text), &out); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if out.Hosts == nil || len(out.Hosts) != 0 {
-		t.Fatalf("gate off hosts = %+v", out)
+	errText := isErrorText(t, resp)
+	if !strings.Contains(errText, "the agent gate is disabled") {
+		t.Fatalf("gate off error = %q", errText)
 	}
 
+	// Gate on: data flows.
 	fs.gate = true
 	saveTestEntry(t, hist, "b.com", "", 200)
 	saveTestEntry(t, hist, "a.com", "", 200)
 
 	resp = callTool(t, h, "list_visible_hosts", map[string]any{})
-	text = resultText(t, resp)
+	text := resultText(t, resp)
+	var out struct {
+		Hosts []string `json:"hosts"`
+		Count int      `json:"count"`
+	}
 	if err := json.Unmarshal([]byte(text), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -663,11 +732,11 @@ func TestMCP_ListFilterValues(t *testing.T) {
 		t.Fatalf("expected an unknown-type error, got %q", msg)
 	}
 
-	// Gate off: no values leak.
+	// Gate off: explicit error.
 	fs.gate = false
-	unmarshal(callTool(t, h, "list_entry_filter_values", map[string]any{"type": "host"}))
-	if len(payload.Values) != 0 {
-		t.Fatalf("gate off must leak no values, got %+v", payload.Values)
+	errText := isErrorText(t, callTool(t, h, "list_entry_filter_values", map[string]any{"type": "host"}))
+	if !strings.Contains(errText, "the agent gate is disabled") {
+		t.Fatalf("gate off error = %q", errText)
 	}
 }
 
@@ -766,7 +835,7 @@ func (m *mockReplayAnalyzer) ReplayDiff(runID string, seq int, entryID string) (
 func newTestReplayMCPServer(t *testing.T, events []session.ReplayEvent, runID string) http.Handler {
 	t.Helper()
 	hist := newTestHistory(t)
-	srv := NewServer(NewScope(hist, nil, nil, nil), hist, nil)
+	srv := NewServer(NewScope(hist, &mockFilterStore{gate: true}, nil, nil), hist, nil)
 	srv.SetReplayAnalyzer(&mockReplayAnalyzer{events: events, runID: runID})
 	return srv.Handler()
 }
@@ -780,7 +849,7 @@ func TestMCP_ListReplayEvents(t *testing.T) {
 	}
 	h := newTestReplayMCPServer(t, events, "run-42")
 
-	// No filters — all events.
+	// No filters - all events.
 	resp := callTool(t, h, "list_replay_events", map[string]any{})
 	text := resultText(t, resp)
 	if !strings.Contains(text, "\"runId\":\"run-42\"") {
@@ -835,7 +904,7 @@ func TestMCP_ListReplayEvents(t *testing.T) {
 }
 
 func TestMCP_ListReplayEvents_NoReplay(t *testing.T) {
-	h, _ := newTestMCPServer(t, &mockFilterStore{gate: false})
+	h, _ := newTestMCPServer(t, &mockFilterStore{gate: true})
 	resp := callTool(t, h, "list_replay_events", map[string]any{})
 	msg := isErrorText(t, resp)
 	if !strings.Contains(msg, "replay tools are only available in replay mode") {
@@ -899,7 +968,7 @@ func TestMCP_ListReplayCandidates(t *testing.T) {
 }
 
 func TestMCP_ListReplayCandidates_NoReplay(t *testing.T) {
-	h, _ := newTestMCPServer(t, &mockFilterStore{gate: false})
+	h, _ := newTestMCPServer(t, &mockFilterStore{gate: true})
 	resp := callTool(t, h, "list_replay_candidates", map[string]any{"eventId": float64(1)})
 	msg := isErrorText(t, resp)
 	if !strings.Contains(msg, "replay tools are only available in replay mode") {
@@ -956,7 +1025,7 @@ func TestMCP_ListReplayFilterValues(t *testing.T) {
 }
 
 func TestMCP_ListReplayFilterValues_NoReplay(t *testing.T) {
-	h, _ := newTestMCPServer(t, &mockFilterStore{gate: false})
+	h, _ := newTestMCPServer(t, &mockFilterStore{gate: true})
 	resp := callTool(t, h, "list_replay_filter_values", map[string]any{"type": "result"})
 	msg := isErrorText(t, resp)
 	if !strings.Contains(msg, "replay tools are only available in replay mode") {

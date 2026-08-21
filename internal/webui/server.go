@@ -614,7 +614,7 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/api/filters/body", s.handleClearBodyFilter)
 	mux.HandleFunc("/api/filters", s.handleSaveFilters)
 	mux.HandleFunc("/api/agent/view", s.replayReadOnly(s.handleAgentView))
-	mux.HandleFunc("/api/agent/enabled", s.replayReadOnly(s.handleAgentEnabled))
+	mux.HandleFunc("/api/agent/enabled", s.handleAgentEnabled)
 	mux.HandleFunc("/api/ignored", s.replayReadOnly(s.handleIgnored))
 	mux.HandleFunc("/api/ignored/", s.replayReadOnly(s.handleIgnoredHost))
 	mux.HandleFunc("/api/focused", s.replayReadOnly(s.handleFocused))
@@ -724,6 +724,9 @@ type listResponse struct {
 // agentExposed reports whether the agent MCP is active AND its profile has no
 // active filters - i.e. it would see the whole unfiltered traffic stream.
 func (s *Server) agentExposed() bool {
+	if s.replayMode {
+		return false
+	}
 	if !s.filterStore.AgentGate() {
 		return false
 	}
