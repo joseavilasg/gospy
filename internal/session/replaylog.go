@@ -134,6 +134,7 @@ type RunSummary struct {
 	Misses     int       `json:"misses"`
 	Exhausted  int       `json:"exhausted"`
 	DurationMs int64     `json:"durationMs"`
+	Active     bool      `json:"active"`
 }
 
 // ListReplayRuns summarizes every replay run stored under root, newest first.

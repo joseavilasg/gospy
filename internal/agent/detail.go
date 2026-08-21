@@ -12,31 +12,35 @@ import (
 const hexDumpMaxLines = 20
 
 // EntryDetail returns a copy of the entry as served to the agent: every header
-// set runs through SanitizeHeaders, compressed bodies are decoded inline, and
+// set runs through SanitizeHeaders (unless replayMode is true, where raw
+// headers are needed for debugging), compressed bodies are decoded inline, and
 // binary bodies get a hex dump (same rendering as the WebUI detail panel).
 // dir is the history directory used to resolve .bin body files.
-func EntryDetail(dir string, e *history.Entry) *history.Entry {
+func EntryDetail(dir string, e *history.Entry, replayMode ...bool) *history.Entry {
+	sanitize := len(replayMode) == 0 || !replayMode[0]
 	c := *e
-	c.Request = sanitizeRequestRecord(dir, e.Request)
+	c.Request = sanitizeRequestRecord(dir, e.Request, sanitize)
 	if e.Response != nil {
-		rc := sanitizeResponseRecord(dir, *e.Response)
+		rc := sanitizeResponseRecord(dir, *e.Response, sanitize)
 		c.Response = &rc
 	}
 	if e.ServerRequest != nil {
-		sr := sanitizeRequestRecord(dir, *e.ServerRequest)
+		sr := sanitizeRequestRecord(dir, *e.ServerRequest, sanitize)
 		c.ServerRequest = &sr
 	}
 	if e.ServerResponse != nil {
-		src := sanitizeResponseRecord(dir, *e.ServerResponse)
+		src := sanitizeResponseRecord(dir, *e.ServerResponse, sanitize)
 		c.ServerResponse = &src
 	}
 	return &c
 }
 
-func sanitizeRequestRecord(dir string, rec history.RequestRecord) history.RequestRecord {
-	rec.Headers = SanitizeHeaders(rec.Headers)
-	if len(rec.EditedHeaders) > 0 {
-		rec.EditedHeaders = SanitizeHeaders(rec.EditedHeaders)
+func sanitizeRequestRecord(dir string, rec history.RequestRecord, sanitize bool) history.RequestRecord {
+	if sanitize {
+		rec.Headers = SanitizeHeaders(rec.Headers)
+		if len(rec.EditedHeaders) > 0 {
+			rec.EditedHeaders = SanitizeHeaders(rec.EditedHeaders)
+		}
 	}
 	if rec.RawBody != "" && rec.Body == "" {
 		rec.Body = decodeBody(rec.RawBody, rec.Headers)
@@ -47,8 +51,10 @@ func sanitizeRequestRecord(dir string, rec history.RequestRecord) history.Reques
 	return rec
 }
 
-func sanitizeResponseRecord(dir string, rec history.ResponseRecord) history.ResponseRecord {
-	rec.Headers = SanitizeHeaders(rec.Headers)
+func sanitizeResponseRecord(dir string, rec history.ResponseRecord, sanitize bool) history.ResponseRecord {
+	if sanitize {
+		rec.Headers = SanitizeHeaders(rec.Headers)
+	}
 	if rec.RawBody != "" && rec.Body == "" {
 		rec.Body = decodeBody(rec.RawBody, rec.Headers)
 	}

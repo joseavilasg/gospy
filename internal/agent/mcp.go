@@ -9,20 +9,67 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
 	"gospy/internal/history"
+	"gospy/internal/session"
 )
 
-// Server exposes the agent scope as an MCP server with 4 synchronous tools over
+// Server exposes the agent scope as an MCP server with tools over
 // streamable HTTP on a single /mcp endpoint.
 type Server struct {
 	scope   *Scope
 	histVal atomic.Pointer[history.Store]
 	fwd     *Forwarder
 	mcp     *server.MCPServer
+	replay  ReplayAnalyzer // nil in record mode; set for replay
+}
+
+// ReplayAnalyzer is implemented by the webui.Server and provides the MCP agent
+// with replay event analysis. Nil in record mode.
+type ReplayAnalyzer interface {
+	ActiveRunID() string
+	ListReplayRuns() ([]session.RunSummary, error)
+	ReplayEvents(runID string) ([]session.ReplayEvent, error)
+	ReplayEventDetail(runID string, seq int) (*session.ReplayEvent, error)
+	ReplayCandidates(runID string, seq int, scope string) (*ReplayCandidateResult, error)
+	ReplayDiff(runID string, seq int, entryID string) (*ReplayDiffResult, error)
+}
+
+// ReplayCandidateResult is the MCP response for list_replay_candidates.
+type ReplayCandidateResult struct {
+	Scope   string                 `json:"scope"`
+	Total   map[string]int         `json:"total"`
+	Entries []ReplayCandidateEntry `json:"entries"`
+}
+
+// ReplayCandidateEntry is one entry in the candidate list.
+type ReplayCandidateEntry struct {
+	EntryID       string `json:"entryId"`
+	Entry         int    `json:"entry"`
+	Method        string `json:"method"`
+	URL           string `json:"url"`
+	Tag           string `json:"tag"`
+	ConsumedBySeq int    `json:"consumedBySeq,omitempty"`
+	DiffCount     int    `json:"diffCount,omitempty"`
+}
+
+// ReplayDiffResult is the MCP response for replay_diff.
+type ReplayDiffResult struct {
+	RunID   string             `json:"runId"`
+	Seq     int                `json:"id"`
+	EntryID string             `json:"entryId"`
+	Diff    session.DiffResult `json:"diff"`
+}
+
+// SetReplayAnalyzer wires the replay analysis backend. When set, the replay
+// tools (list_replay_events, get_replay_event, list_replay_candidates) become
+// available and send_request is blocked.
+func (s *Server) SetReplayAnalyzer(a ReplayAnalyzer) {
+	s.replay = a
 }
 
 // NewServer wires the tools. The caller mounts Handler() at exactly /mcp.
@@ -50,12 +97,12 @@ func NewServer(scope *Scope, hist *history.Store, fwd *Forwarder) *Server {
 	), s.handleListEntries)
 
 	ms.AddTool(mcp.NewTool("get_entry",
-		mcp.WithDescription("Returns a single captured entry in full: headers are sanitized, bodies are included (hex dump for binary). Only entries in the agent-visible set can be read."),
+		mcp.WithDescription("Returns a single captured entry in full: headers are sanitized (raw in replay mode for debugging), bodies are included (hex dump for binary). Only entries in the agent-visible set can be read."),
 		mcp.WithString("id", mcp.Required()),
 	), s.handleGetEntry)
 
 	ms.AddTool(mcp.NewTool("send_request",
-		mcp.WithDescription("Sends a request through the gospy proxy using a captured entry as template. The template is REQUIRED and must be in the agent-visible set: the host (scheme+host+port) is fixed to the template's, and sensitive headers (Authorization, Cookie, ...) come exclusively from the captured request and are never exposed. Every omitted field is inherited from the template: method, path, query, headers and body. 'headers' only adds or replaces NON-sensitive headers (overriding a sensitive one is rejected). A 'body' string replaces the body with UTF-8 text (Content-Encoding is dropped); when omitted, the template's raw captured body is replayed byte-for-byte (binary and compressed included). The request is captured as agent-origin traffic and the active rules apply. Response headers are sanitized."),
+		mcp.WithDescription("Sends a request through the gospy proxy using a captured entry as template. The template is REQUIRED and must be in the agent-visible set: the host (scheme+host+port) is fixed to the template's, and sensitive headers (Authorization, Cookie, ...) come exclusively from the captured request and are never exposed. Every omitted field is inherited from the template: method, path, query, headers and body. 'headers' only adds or replaces NON-sensitive headers (overriding a sensitive one is rejected). A 'body' string replaces the body with UTF-8 text (Content-Encoding is dropped); when omitted, the template's raw captured body is replayed byte-for-byte (binary and compressed included). The request is captured as agent-origin traffic and the active rules apply. Response headers are sanitized. Not available in replay mode."),
 		mcp.WithString("template", mcp.Required(), mcp.Description("ID of a captured entry in the agent-visible set to use as the request template.")),
 		mcp.WithString("method", mcp.Description("HTTP method (uppercased). Omitted: the template's method.")),
 		mcp.WithString("path", mcp.Description("Request path, e.g. /api/issues/search. Omitted: the template's path.")),
@@ -72,6 +119,35 @@ func NewServer(scope *Scope, hist *history.Store, fwd *Forwarder) *Server {
 		mcp.WithDescription("Lists the exact values available for a list-type filter field (host, referer, process, origin, requestContentType, responseContentType, method), scoped to the agent's visible set. Use the returned values verbatim in list_entries - these fields require exact matches, not free text. This answers 'what can I filter by', while list_visible_hosts answers 'what is my scope'."),
 		mcp.WithString("type", mcp.Required(), mcp.Description("Filter field to enumerate: host, referer, process, origin, requestContentType, responseContentType or method.")),
 	), s.handleListFilterValues)
+
+	ms.AddTool(mcp.NewTool("list_replay_runs",
+		mcp.WithDescription("Lists all replay runs for the session, newest first. Each run includes hit/miss/exhausted counts, duration, and an active flag indicating whether it is the currently running replay."),
+	), s.handleListReplayRuns)
+
+	ms.AddTool(mcp.NewTool("list_replay_events",
+		mcp.WithDescription("Lists replay events for a run: each event is one request as it passed through the replay proxy, with the match outcome (hit/miss/exhausted). If runId is omitted, uses the active (live) run — returns an error if no run is active."),
+		mcp.WithString("runId", mcp.Description("Replay run ID (from list_replay_runs). Omitted: the active run.")),
+	), s.handleListReplayEvents)
+
+	ms.AddTool(mcp.NewTool("get_replay_event",
+		mcp.WithDescription("Returns the full detail of a replay event by its event ID within a run. If runId is omitted, uses the active run. Includes the incoming request metadata, match result, and for hits the served response from the matched recorded entry."),
+		mcp.WithNumber("eventId", mcp.Required(), mcp.Description("Event ID (from list_replay_events). Identifies the replay event, not a recorded entry.")),
+		mcp.WithString("runId", mcp.Description("Replay run ID (from list_replay_runs). Omitted: the active run.")),
+	), s.handleGetReplayEvent)
+
+	ms.AddTool(mcp.NewTool("list_replay_candidates",
+		mcp.WithDescription("Returns candidate recorded entries for a replay event, identified by its event ID. If runId is omitted, uses the active run. Candidates are entries from the recorded session that could match the incoming request, tagged with their state (served = already matched by another event, consumed = used, pending = still available) and a per-parameter diff count. scope=matching shows entries sharing host+path ranked by diff count; scope=all shows the full unconsumed queue."),
+		mcp.WithNumber("eventId", mcp.Required(), mcp.Description("Event ID of the replay event to find candidates for (from list_replay_events).")),
+		mcp.WithString("scope", mcp.Description("Matching scope: 'matching' (entries sharing host+path, default) or 'all' (the full unconsumed queue).")),
+		mcp.WithString("runId", mcp.Description("Replay run ID (from list_replay_runs). Omitted: the active run.")),
+	), s.handleListReplayCandidates)
+
+	ms.AddTool(mcp.NewTool("replay_diff",
+		mcp.WithDescription("Shows the detailed diff between a replay event's incoming request and a specific recorded entry. Use list_replay_candidates to find candidate entry IDs, then this tool to inspect the exact parameter differences."),
+		mcp.WithNumber("eventId", mcp.Required(), mcp.Description("Event ID of the replay event (from list_replay_events).")),
+		mcp.WithString("entryId", mcp.Required(), mcp.Description("ID of the recorded entry to diff against (from list_replay_candidates).")),
+		mcp.WithString("runId", mcp.Description("Replay run ID (from list_replay_runs). Omitted: the active run.")),
+	), s.handleReplayDiff)
 
 	s.mcp = ms
 	return s
@@ -183,10 +259,13 @@ func (s *Server) handleGetEntry(ctx context.Context, req mcp.CallToolRequest) (*
 	if err != nil {
 		return mcp.NewToolResultErrorf("entry %s not found", id), nil
 	}
-	return mcp.NewToolResultJSON(EntryDetail(s.hist().Dir(), entry))
+	return mcp.NewToolResultJSON(EntryDetail(s.hist().Dir(), entry, s.replay != nil))
 }
 
 func (s *Server) handleSendRequest(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.replay != nil {
+		return mcp.NewToolResultError("send_request is not available in replay mode"), nil
+	}
 	if !s.scope.GateEnabled() {
 		return mcp.NewToolResultError("the agent gate is disabled"), nil
 	}
@@ -214,6 +293,151 @@ func (s *Server) handleSendRequest(ctx context.Context, req mcp.CallToolRequest)
 func (s *Server) handleListVisibleHosts(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	hosts := s.scope.VisibleHosts()
 	return mcp.NewToolResultJSON(map[string]any{"hosts": hosts, "count": len(hosts)})
+}
+
+func (s *Server) handleListReplayRuns(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.replay == nil {
+		return mcp.NewToolResultError("replay tools are only available in replay mode"), nil
+	}
+	runs, err := s.replay.ListReplayRuns()
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	if runs == nil {
+		runs = []session.RunSummary{}
+	}
+	return mcp.NewToolResultJSON(map[string]any{"runs": runs, "count": len(runs)})
+}
+
+func (s *Server) handleListReplayEvents(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.replay == nil {
+		return mcp.NewToolResultError("replay tools are only available in replay mode"), nil
+	}
+	runID, err := s.resolveRunID(req.GetString("runId", ""))
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	events, err := s.replay.ReplayEvents(runID)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	type eventSummary struct {
+		ID        int       `json:"id"`
+		Result    string    `json:"result"`
+		Method    string    `json:"method"`
+		URL       string    `json:"url"`
+		Status    int       `json:"status"`
+		Exhausted bool      `json:"exhausted"`
+		Ts        time.Time `json:"ts"`
+		EntryID   string    `json:"entryId,omitempty"`
+	}
+	out := make([]eventSummary, len(events))
+	for i, ev := range events {
+		out[i] = eventSummary{
+			ID: ev.Seq, Result: ev.Result, Method: ev.Method, URL: ev.URL,
+			Status: ev.Status, Exhausted: ev.Exhausted, Ts: ev.Timestamp, EntryID: ev.EntryID,
+		}
+	}
+	return mcp.NewToolResultJSON(map[string]any{
+		"runId":  runID,
+		"events": out,
+		"count":  len(out),
+	})
+}
+
+func (s *Server) handleGetReplayEvent(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.replay == nil {
+		return mcp.NewToolResultError("replay tools are only available in replay mode"), nil
+	}
+	seq := req.GetInt("eventId", 0)
+	if seq <= 0 {
+		return mcp.NewToolResultError("eventId is required and must be > 0"), nil
+	}
+	runID, err := s.resolveRunID(req.GetString("runId", ""))
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	ev, err := s.replay.ReplayEventDetail(runID, seq)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	result := map[string]any{
+		"id":        ev.Seq,
+		"result":    ev.Result,
+		"method":    ev.Method,
+		"url":       ev.URL,
+		"status":    ev.Status,
+		"exhausted": ev.Exhausted,
+		"ts":        ev.Timestamp,
+	}
+	if ev.EntryID != "" {
+		result["entryId"] = ev.EntryID
+	}
+	if ev.MatchedURL != "" {
+		result["matchedUrl"] = ev.MatchedURL
+	}
+	if ev.ServedResponse != nil {
+		result["servedResponse"] = ev.ServedResponse
+	}
+	return mcp.NewToolResultJSON(result)
+}
+
+func (s *Server) handleListReplayCandidates(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.replay == nil {
+		return mcp.NewToolResultError("replay tools are only available in replay mode"), nil
+	}
+	seq := req.GetInt("eventId", 0)
+	if seq <= 0 {
+		return mcp.NewToolResultError("eventId is required and must be > 0"), nil
+	}
+	scope := req.GetString("scope", "matching")
+	if scope != "all" {
+		scope = "matching"
+	}
+	runID, err := s.resolveRunID(req.GetString("runId", ""))
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	result, err := s.replay.ReplayCandidates(runID, seq, scope)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return mcp.NewToolResultJSON(result)
+}
+
+func (s *Server) handleReplayDiff(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.replay == nil {
+		return mcp.NewToolResultError("replay tools are only available in replay mode"), nil
+	}
+	seq := req.GetInt("eventId", 0)
+	if seq <= 0 {
+		return mcp.NewToolResultError("eventId is required and must be > 0"), nil
+	}
+	entryID := req.GetString("entryId", "")
+	if entryID == "" {
+		return mcp.NewToolResultError("entryId is required"), nil
+	}
+	runID, err := s.resolveRunID(req.GetString("runId", ""))
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	diff, err := s.replay.ReplayDiff(runID, seq, entryID)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return mcp.NewToolResultJSON(diff)
+}
+
+// resolveRunID resolves an optional runId parameter: empty → active run, non-empty → passed through.
+func (s *Server) resolveRunID(runID string) (string, error) {
+	if runID != "" {
+		return runID, nil
+	}
+	active := s.replay.ActiveRunID()
+	if active == "" {
+		return "", fmt.Errorf("no active replay run - specify runId")
+	}
+	return active, nil
 }
 
 func parseRequestSpec(req mcp.CallToolRequest) (RequestSpec, error) {

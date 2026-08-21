@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"gospy/internal/history"
+	"gospy/internal/session"
 )
 
 func emptyCert() tls.Certificate { return tls.Certificate{} }
@@ -730,5 +731,158 @@ func TestMCP_ListEntriesInvalidTimeBound(t *testing.T) {
 	msg := isErrorText(t, resp)
 	if !strings.Contains(msg, "must be an RFC3339 instant or a local wall-clock") {
 		t.Fatalf("expected a time validation error, got %q", msg)
+	}
+}
+
+// --- replay tool tests ---
+
+type mockReplayAnalyzer struct {
+	events []session.ReplayEvent
+	runID  string
+}
+
+func (m *mockReplayAnalyzer) ActiveRunID() string { return m.runID }
+func (m *mockReplayAnalyzer) ListReplayRuns() ([]session.RunSummary, error) {
+	return []session.RunSummary{{RunID: m.runID, Active: true}}, nil
+}
+func (m *mockReplayAnalyzer) ReplayEvents(runID string) ([]session.ReplayEvent, error) {
+	return m.events, nil
+}
+func (m *mockReplayAnalyzer) ReplayEventDetail(runID string, seq int) (*session.ReplayEvent, error) {
+	for i := range m.events {
+		if m.events[i].Seq == seq {
+			return &m.events[i], nil
+		}
+	}
+	return nil, fmt.Errorf("event with seq %d not found in run %s", seq, runID)
+}
+func (m *mockReplayAnalyzer) ReplayCandidates(runID string, seq int, scope string) (*ReplayCandidateResult, error) {
+	return &ReplayCandidateResult{Scope: scope, Entries: []ReplayCandidateEntry{}}, nil
+}
+func (m *mockReplayAnalyzer) ReplayDiff(runID string, seq int, entryID string) (*ReplayDiffResult, error) {
+	return &ReplayDiffResult{RunID: runID, Seq: seq, EntryID: entryID}, nil
+}
+
+func newTestReplayMCPServer(t *testing.T, events []session.ReplayEvent, runID string) http.Handler {
+	t.Helper()
+	hist := newTestHistory(t)
+	srv := NewServer(NewScope(hist, nil, nil, nil), hist, nil)
+	srv.SetReplayAnalyzer(&mockReplayAnalyzer{events: events, runID: runID})
+	return srv.Handler()
+}
+
+func TestMCP_ListReplayEvents(t *testing.T) {
+	now := time.Now()
+	events := []session.ReplayEvent{
+		{Seq: 1, Result: "hit", Method: "GET", URL: "http://example.com/a", Status: 200, Timestamp: now},
+		{Seq: 2, Result: "miss", Method: "POST", URL: "http://example.com/b", Status: 0, Timestamp: now},
+		{Seq: 3, Result: "exhausted", Method: "GET", URL: "http://example.com/c", Status: 0, Exhausted: true, Timestamp: now},
+	}
+	h := newTestReplayMCPServer(t, events, "run-42")
+	resp := callTool(t, h, "list_replay_events", map[string]any{})
+	text := resultText(t, resp)
+	if !strings.Contains(text, "\"runId\":\"run-42\"") {
+		t.Fatalf("expected runId in response, got %s", text)
+	}
+	if !strings.Contains(text, "\"count\":3") {
+		t.Fatalf("expected count=3, got %s", text)
+	}
+	if !strings.Contains(text, "\"result\":\"miss\"") {
+		t.Fatalf("expected miss event, got %s", text)
+	}
+	if !strings.Contains(text, "\"id\":1") {
+		t.Fatalf("expected id:1, got %s", text)
+	}
+	// consumed/total must not appear in the response.
+	if strings.Contains(text, "\"consumed\"") || strings.Contains(text, "\"total\"") {
+		t.Fatalf("consumed/total must not appear in event summary, got %s", text)
+	}
+}
+
+func TestMCP_ListReplayEvents_NoReplay(t *testing.T) {
+	h, _ := newTestMCPServer(t, &mockFilterStore{gate: false})
+	resp := callTool(t, h, "list_replay_events", map[string]any{})
+	msg := isErrorText(t, resp)
+	if !strings.Contains(msg, "replay tools are only available in replay mode") {
+		t.Fatalf("expected replay-mode error, got %q", msg)
+	}
+}
+
+func TestMCP_GetReplayEvent(t *testing.T) {
+	now := time.Now()
+	events := []session.ReplayEvent{
+		{Seq: 1, Result: "miss", Method: "POST", URL: "http://example.com/b?id=abc&quality=high", Status: 0, Timestamp: now},
+	}
+	h := newTestReplayMCPServer(t, events, "run-42")
+	resp := callTool(t, h, "get_replay_event", map[string]any{"eventId": float64(1)})
+	text := resultText(t, resp)
+	if !strings.Contains(text, "\"result\":\"miss\"") {
+		t.Fatalf("expected miss, got %s", text)
+	}
+	if !strings.Contains(text, "\"method\":\"POST\"") {
+		t.Fatalf("expected method POST, got %s", text)
+	}
+	if !strings.Contains(text, "\"id\":1") {
+		t.Fatalf("expected id:1, got %s", text)
+	}
+	// consumed/total must not appear in the detail response.
+	if strings.Contains(text, "\"consumed\"") || strings.Contains(text, "\"total\"") {
+		t.Fatalf("consumed/total must not appear in event detail, got %s", text)
+	}
+}
+
+func TestMCP_GetReplayEvent_NotFound(t *testing.T) {
+	h := newTestReplayMCPServer(t, nil, "run-42")
+	resp := callTool(t, h, "get_replay_event", map[string]any{"eventId": float64(99)})
+	msg := isErrorText(t, resp)
+	if !strings.Contains(msg, "not found") {
+		t.Fatalf("expected not-found error, got %q", msg)
+	}
+}
+
+func TestMCP_GetReplayEvent_MissingEventId(t *testing.T) {
+	h := newTestReplayMCPServer(t, nil, "run-42")
+	resp := callTool(t, h, "get_replay_event", map[string]any{})
+	// MCP schema validation catches missing required 'eventId' before the handler runs.
+	msg := isErrorText(t, resp)
+	if !strings.Contains(msg, "Missing") || !strings.Contains(msg, "eventId") {
+		t.Fatalf("expected missing-eventId validation error, got %q", msg)
+	}
+}
+
+func TestMCP_ListReplayCandidates(t *testing.T) {
+	now := time.Now()
+	events := []session.ReplayEvent{
+		{Seq: 1, Result: "miss", Method: "GET", URL: "http://example.com/a", Status: 0, Consumed: 1, Total: 1, Timestamp: now},
+	}
+	h := newTestReplayMCPServer(t, events, "run-42")
+	resp := callTool(t, h, "list_replay_candidates", map[string]any{"eventId": float64(1), "scope": "all"})
+	text := resultText(t, resp)
+	if !strings.Contains(text, "\"scope\":\"all\"") {
+		t.Fatalf("expected scope all, got %s", text)
+	}
+}
+
+func TestMCP_ListReplayCandidates_NoReplay(t *testing.T) {
+	h, _ := newTestMCPServer(t, &mockFilterStore{gate: false})
+	resp := callTool(t, h, "list_replay_candidates", map[string]any{"eventId": float64(1)})
+	msg := isErrorText(t, resp)
+	if !strings.Contains(msg, "replay tools are only available in replay mode") {
+		t.Fatalf("expected replay-mode error, got %q", msg)
+	}
+}
+
+func TestMCP_SendRequestBlockedInReplay(t *testing.T) {
+	events := []session.ReplayEvent{
+		{Seq: 1, Result: "hit", Method: "GET", URL: "http://example.com/", Status: 200, Timestamp: time.Now()},
+	}
+	h := newTestReplayMCPServer(t, events, "run-42")
+	resp := callTool(t, h, "send_request", map[string]any{
+		"template": "http://example.com/",
+		"method":   "GET",
+	})
+	msg := isErrorText(t, resp)
+	if !strings.Contains(msg, "send_request is not available in replay mode") {
+		t.Fatalf("expected replay-mode block, got %q", msg)
 	}
 }

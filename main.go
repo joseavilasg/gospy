@@ -365,6 +365,20 @@ func runReplay(caCert *ca.CA, addr, sessionDir, matchConfig, uiAddr, dataDir str
 	webSrv.SetReplayLogDir(replayRoot)
 	srv.SetReplayNotifier(webSrv.ReplayNotifier())
 	srv.SetRulesEngine(ruleEngine)
+	webSrv.SetRunLister(srv)
+
+	mcpScope := agent.NewScope(hist, filterStore, ignoreStore, focusStore)
+	mcpScope.SetReplayMode(true)
+	mcpServer := agent.NewServer(mcpScope, hist, nil)
+	mcpServer.SetReplayAnalyzer(webSrv)
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/mcp", mcpServer.Handler())
+		if err := http.ListenAndServe("127.0.0.1:8090", mux); err != nil {
+			proxy.LogError(fmt.Sprintf("Agent MCP error: %v", err))
+		}
+	}()
+	proxy.LogInfo("Agent MCP at http://127.0.0.1:8090/mcp")
 
 	go func() {
 		if err := webSrv.ListenAndServe(); err != nil {

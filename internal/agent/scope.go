@@ -16,11 +16,16 @@ type FilterStore interface {
 // Scope resolves the agent-visible set: the gate must be on and the agent filter
 // profile applies. Agent-origin entries are filtered exactly like any other
 // entry - there is no origin bypass.
+//
+// In replay mode the session is the universe: the gate check is bypassed for
+// all read-only tools, the agent filter profile is not applied (the user's
+// UI filters are for them only), and every entry in the store is visible.
 type Scope struct {
-	histVal atomic.Pointer[history.Store]
-	filter  FilterStore
-	ignored history.HostMatcher
-	focused history.HostMatcher
+	histVal    atomic.Pointer[history.Store]
+	filter     FilterStore
+	ignored    history.HostMatcher
+	focused    history.HostMatcher
+	replayMode bool
 }
 
 func NewScope(hist *history.Store, filter FilterStore, ignored, focused history.HostMatcher) *Scope {
@@ -39,6 +44,12 @@ func (sc *Scope) hist() *history.Store {
 // SetHistoryStore rotates the session store the MCP scope reads.
 func (sc *Scope) SetHistoryStore(h *history.Store) {
 	sc.histVal.Store(h)
+}
+
+// SetReplayMode enables replay scope semantics: all entries visible, no agent
+// filter profile, gate bypassed for read-only tools.
+func (sc *Scope) SetReplayMode(enabled bool) {
+	sc.replayMode = enabled
 }
 
 // MCP pagination bounds: default page size 50, hard cap 200 (non-bypassable).
@@ -69,6 +80,12 @@ func (sc *Scope) base() (all []*history.ListEntry, filters history.Filters, opts
 	if st := sc.hist(); st != nil {
 		all = st.ListSummary()
 	}
+	if sc.replayMode {
+		// Replay: no agent filter profile - session is the universe.
+		// User's UI filters are for them only.
+		opts = history.MatchOpts{Ignored: sc.ignored}
+		return all, history.Filters{}, opts
+	}
 	filters, focusEnabled, _ := sc.filter.SnapshotAgent()
 	opts = history.MatchOpts{
 		Ignored:      sc.ignored,
@@ -79,9 +96,10 @@ func (sc *Scope) base() (all []*history.ListEntry, filters history.Filters, opts
 }
 
 // ListEntries returns page [offset, offset+limit) of the agent-visible set.
-// The gate is a hard stop: when off, nothing is exposed.
+// The gate is a hard stop: when off, nothing is exposed. In replay mode the
+// gate is bypassed - the session is the universe.
 func (sc *Scope) ListEntries(query history.Filters, offset, limit int) ListPage {
-	if !sc.filter.AgentGate() {
+	if !sc.replayMode && !sc.filter.AgentGate() {
 		return ListPage{Entries: make([]*AgentEntry, 0)}
 	}
 	all, filters, opts := sc.base()
@@ -115,9 +133,10 @@ func (sc *Scope) ListEntries(query history.Filters, offset, limit int) ListPage 
 // FilterValues returns the distinct option values for a list-type filter field
 // (host, referer, process, origin, content types, method), computed over the
 // agent-visible set only. This mirrors the UI dropdown (history.Options) so the
-// agent discovers exact filter values within its scope, never outside it.
+// agent discovers exact filter values within its scope, never outside it. In
+// replay mode the gate is bypassed.
 func (sc *Scope) FilterValues(typ string) []history.OptionCount {
-	if !sc.filter.AgentGate() {
+	if !sc.replayMode && !sc.filter.AgentGate() {
 		return []history.OptionCount{}
 	}
 	all, filters, opts := sc.base()
@@ -131,7 +150,20 @@ func (sc *Scope) FilterValues(typ string) []history.OptionCount {
 }
 
 // IsVisible gates get_entry: only entries in the agent-visible set can be read.
+// In replay mode every entry in the session is visible.
 func (sc *Scope) IsVisible(id string) bool {
+	if sc.replayMode {
+		st := sc.hist()
+		if st == nil {
+			return false
+		}
+		for _, le := range st.ListSummary() {
+			if le.ID == id {
+				return true
+			}
+		}
+		return false
+	}
 	if !sc.filter.AgentGate() {
 		return false
 	}
@@ -145,8 +177,9 @@ func (sc *Scope) IsVisible(id string) bool {
 }
 
 // VisibleHosts returns the distinct hosts of the visible set, sorted.
+// In replay mode the gate is bypassed.
 func (sc *Scope) VisibleHosts() []string {
-	if !sc.filter.AgentGate() {
+	if !sc.replayMode && !sc.filter.AgentGate() {
 		return []string{}
 	}
 	all, filters, opts := sc.base()

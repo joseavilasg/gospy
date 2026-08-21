@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"gospy/internal/agent"
 	"gospy/internal/history"
 	"gospy/internal/proxy"
 	"gospy/internal/rules"
@@ -125,6 +126,8 @@ type Server struct {
 	replayRunID   string
 	replayEvents  []session.ReplayEvent
 	replayClients map[chan session.ReplayEvent]struct{}
+
+	runLister session.RunLister // backend that knows the active run
 }
 
 // recordingEvent is the recording-state payload pushed to SSE clients.
@@ -331,6 +334,25 @@ func (s *Server) SetReplayLogDir(dir string) {
 	s.replayLogDir = dir
 }
 
+// RunLister is the backend interface that lists replay runs with their active
+// state. session.ReplayServer satisfies this.
+type RunLister = session.RunLister
+
+// SetRunLister injects the backend that knows which replay run is active.
+func (s *Server) SetRunLister(l RunLister) {
+	s.runLister = l
+}
+
+// ListReplayRuns returns summaries of every replay run for this session, with
+// the active run flagged. Delegates to the RunLister backend; falls back to
+// reading disk directly when no backend is wired.
+func (s *Server) ListReplayRuns() ([]session.RunSummary, error) {
+	if s.runLister != nil {
+		return s.runLister.ListReplayRuns()
+	}
+	return session.ListReplayRuns(s.replayLogDir)
+}
+
 // ReplayNotifier returns the callback to wire into the replay server. It keeps
 // the active run's events in memory (for the list response, run endpoints and
 // SSE snapshots) and fans every event out to connected stream clients.
@@ -421,6 +443,130 @@ func (s *Server) replayEventsFor(runID string) ([]session.ReplayEvent, error) {
 		return nil, err
 	}
 	return session.LoadReplayRun(dir)
+}
+
+// ReplayEvents returns the events of a run. Empty runID selects the active run.
+// Implements agent.ReplayAnalyzer.
+func (s *Server) ReplayEvents(runID string) ([]session.ReplayEvent, error) {
+	if runID == "" {
+		runID = s.ActiveRunID()
+		if runID == "" {
+			return nil, nil
+		}
+	}
+	return s.replayEventsFor(runID)
+}
+
+// ActiveRunID returns the active replay run ID. Implements agent.ReplayAnalyzer.
+func (s *Server) ActiveRunID() string {
+	s.replayMu.Lock()
+	defer s.replayMu.Unlock()
+	return s.replayRunID
+}
+
+// ReplayEventDetail returns a single event by sequence number from a run.
+// Implements agent.ReplayAnalyzer.
+func (s *Server) ReplayEventDetail(runID string, seq int) (*session.ReplayEvent, error) {
+	events, err := s.ReplayEvents(runID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range events {
+		if events[i].Seq == seq {
+			return &events[i], nil
+		}
+	}
+	return nil, fmt.Errorf("event with seq %d not found in run %s", seq, runID)
+}
+
+// ReplayCandidates computes the candidate list for a replay event.
+// Implements agent.ReplayAnalyzer.
+func (s *Server) ReplayCandidates(runID string, seq int, scope string) (*agent.ReplayCandidateResult, error) {
+	events, err := s.ReplayEvents(runID)
+	if err != nil {
+		return nil, err
+	}
+	if len(events) == 0 {
+		return nil, fmt.Errorf("no events found for run %s", runID)
+	}
+	var ev *session.ReplayEvent
+	for i := range events {
+		if events[i].Seq == seq {
+			ev = &events[i]
+			break
+		}
+	}
+	if ev == nil {
+		return nil, fmt.Errorf("event with seq %d not found", seq)
+	}
+
+	cfg := s.runMatchConfig(ev.RunID)
+	matching, allPending := s.buildReplayCandidates(ev, events, cfg)
+
+	pool := matching
+	if scope == "all" {
+		pool = allPending
+	}
+
+	result := &agent.ReplayCandidateResult{
+		Scope:   scope,
+		Total:   map[string]int{"matching": len(matching), "pending": len(allPending)},
+		Entries: make([]agent.ReplayCandidateEntry, len(pool)),
+	}
+	for i, c := range pool {
+		result.Entries[i] = agent.ReplayCandidateEntry{
+			EntryID:       c.EntryID,
+			Entry:         c.Entry,
+			Method:        c.Method,
+			URL:           c.URL,
+			Tag:           c.Tag,
+			ConsumedBySeq: c.ConsumedBySeq,
+			DiffCount:     c.DiffCount,
+		}
+	}
+	return result, nil
+}
+
+// ReplayDiff returns the detailed URL diff between a replay event's incoming
+// request and a specific recorded entry. Implements agent.ReplayAnalyzer.
+func (s *Server) ReplayDiff(runID string, seq int, entryID string) (*agent.ReplayDiffResult, error) {
+	events, err := s.ReplayEvents(runID)
+	if err != nil {
+		return nil, err
+	}
+	if len(events) == 0 {
+		return nil, fmt.Errorf("no events found for run %s", runID)
+	}
+	var ev *session.ReplayEvent
+	for i := range events {
+		if events[i].Seq == seq {
+			ev = &events[i]
+			break
+		}
+	}
+	if ev == nil {
+		return nil, fmt.Errorf("event with id %d not found in run %s", seq, runID)
+	}
+
+	// Find the entry in the history store.
+	hist := s.hist()
+	if hist == nil {
+		return nil, fmt.Errorf("no history store available")
+	}
+	entry, err := hist.Get(entryID)
+	if err != nil {
+		return nil, fmt.Errorf("entry %s: %w", entryID, err)
+	}
+
+	cfg := s.runMatchConfig(ev.RunID)
+	diff := session.DiffURL(ev.URL, entry.Request.URL, cfg)
+
+	return &agent.ReplayDiffResult{
+		RunID:   runID,
+		Seq:     seq,
+		EntryID: entryID,
+		Diff:    *diff,
+	}, nil
 }
 
 func (s *Server) recomputeTotal() {
@@ -2409,7 +2555,7 @@ func (s *Server) handleReplayRuns(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	runs, err := session.ListReplayRuns(s.replayLogDir)
+	runs, err := s.ListReplayRuns()
 	if err != nil {
 		runs = nil
 	}

@@ -286,3 +286,89 @@ func TestScope_SetHistoryStoreRotation(t *testing.T) {
 		t.Errorf("post-rotation entry host = %q, want b.com", page.Entries[0].Host)
 	}
 }
+
+func TestScope_ReplayMode_GateBypass(t *testing.T) {
+	hist := newTestHistory(t)
+	a := saveTestEntry(t, hist, "a.com", "", 200)
+	b := saveTestEntry(t, hist, "b.com", "", 200)
+
+	// Gate off, no replay - nothing visible.
+	fs := &mockFilterStore{gate: false}
+	sc := NewScope(hist, fs, nil, nil)
+	if page := sc.ListEntries(history.Filters{}, 0, 10); len(page.Entries) != 0 {
+		t.Fatalf("gate off + no replay: expected 0 entries, got %d", len(page.Entries))
+	}
+
+	// Gate off + replay - all entries visible, no filter profile.
+	sc.SetReplayMode(true)
+	page := sc.ListEntries(history.Filters{}, 0, 10)
+	if len(page.Entries) != 2 {
+		t.Fatalf("replay mode: expected 2 entries, got %d", len(page.Entries))
+	}
+	if !sc.IsVisible(a.ID) || !sc.IsVisible(b.ID) {
+		t.Error("replay mode: all entries must be visible")
+	}
+	if sc.GateEnabled() {
+		t.Error("GateEnabled must still reflect the filter store (off), not replay mode")
+	}
+}
+
+func TestScope_ReplayMode_NoFilterProfile(t *testing.T) {
+	hist := newTestHistory(t)
+	saveTestEntry(t, hist, "a.com", "", 200)
+	saveTestEntry(t, hist, "b.com", "", 200)
+
+	// Agent filter profile restricts to a.com, gate on.
+	fs := &mockFilterStore{gate: true, filters: history.Filters{Host: []string{"a.com"}, MatchMode: "all"}}
+	sc := NewScope(hist, fs, nil, nil)
+	if page := sc.ListEntries(history.Filters{}, 0, 10); page.VisibleCount != 1 {
+		t.Fatalf("record mode: expected 1 entry (filter profile), got %d", page.VisibleCount)
+	}
+
+	// Replay mode - filter profile ignored, all entries returned.
+	sc.SetReplayMode(true)
+	page := sc.ListEntries(history.Filters{}, 0, 10)
+	if page.VisibleCount != 2 {
+		t.Fatalf("replay mode: expected 2 entries (no filter profile), got %d", page.VisibleCount)
+	}
+}
+
+func TestScope_ReplayMode_VisibleHosts(t *testing.T) {
+	hist := newTestHistory(t)
+	saveTestEntry(t, hist, "a.com", "", 200)
+	saveTestEntry(t, hist, "b.com", "", 200)
+	fs := &mockFilterStore{gate: false}
+	sc := NewScope(hist, fs, nil, nil)
+
+	// Gate off, no replay - empty.
+	if hosts := sc.VisibleHosts(); len(hosts) != 0 {
+		t.Fatalf("gate off: expected empty, got %v", hosts)
+	}
+
+	// Replay mode - all hosts.
+	sc.SetReplayMode(true)
+	hosts := sc.VisibleHosts()
+	if len(hosts) != 2 {
+		t.Fatalf("replay mode: expected 2 hosts, got %v", hosts)
+	}
+}
+
+func TestScope_ReplayMode_FilterValues(t *testing.T) {
+	hist := newTestHistory(t)
+	saveTestEntryFull(t, hist, "GET", "a.com", "/x", 200)
+	saveTestEntryFull(t, hist, "POST", "b.com", "/y", 500)
+	fs := &mockFilterStore{gate: false}
+	sc := NewScope(hist, fs, nil, nil)
+
+	// Gate off, no replay - empty.
+	if v := sc.FilterValues("host"); len(v) != 0 {
+		t.Fatalf("gate off: expected empty, got %v", v)
+	}
+
+	// Replay mode - all values.
+	sc.SetReplayMode(true)
+	v := sc.FilterValues("host")
+	if len(v) != 2 {
+		t.Fatalf("replay mode: expected 2 hosts, got %v", v)
+	}
+}

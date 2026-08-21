@@ -179,3 +179,35 @@ func TestEntryDetail_SanitizesAndEnriches(t *testing.T) {
 		t.Errorf("BodyFile must survive on the binary record only")
 	}
 }
+
+func TestEntryDetail_ReplayMode_NoSanitize(t *testing.T) {
+	hist := newTestHistory(t)
+	e := &history.Entry{
+		ID: "replay-entry",
+		Request: history.RequestRecord{
+			Method:  "GET",
+			URL:     "http://api.com/x",
+			Host:    "api.com",
+			Headers: map[string][]string{"Authorization": {"Bearer realtoken123"}},
+		},
+		Response: &history.ResponseRecord{
+			Status:  200,
+			Headers: map[string][]string{"Set-Cookie": {"session=abc"}},
+		},
+	}
+
+	got := EntryDetail(hist.Dir(), e, true) // replayMode = true
+
+	if got.Request.Headers["Authorization"][0] != "Bearer realtoken123" {
+		t.Errorf("replay mode must NOT sanitize request auth, got %q", got.Request.Headers["Authorization"][0])
+	}
+	if got.Response.Headers["Set-Cookie"][0] != "session=abc" {
+		t.Errorf("replay mode must NOT sanitize response Set-Cookie, got %q", got.Response.Headers["Set-Cookie"][0])
+	}
+
+	// Default (no replayMode) still sanitizes.
+	got2 := EntryDetail(hist.Dir(), e)
+	if got2.Request.Headers["Authorization"][0] == "Bearer realtoken123" {
+		t.Error("default mode must still sanitize")
+	}
+}

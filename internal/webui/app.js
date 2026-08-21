@@ -104,7 +104,6 @@ initHeader('headerActions', [
   },
   {
     id: 'agentEnabledToggle',
-    hiddenIn: ['replay'],
     html: '<label class="agent-view-toggle" id="agentEnabledToggle"><input type="checkbox" id="agentEnabled" title="Enable the agent MCP (resets to off on every start)"><span>Agent enabled</span></label>',
     events: { change: agentEnabledChange },
   },

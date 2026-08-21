@@ -89,6 +89,34 @@ func (rs *ReplayServer) SetRulesEngine(engine *rules.Engine) {
 	rs.rulesEngine = engine
 }
 
+// RunLister lists replay runs with their active state. Implemented by
+// ReplayServer.
+type RunLister interface {
+	ListReplayRuns() ([]RunSummary, error)
+}
+
+// ListReplayRuns returns summaries of every replay run stored under the log
+// root, newest first. The currently active run (if any) is marked Active.
+func (rs *ReplayServer) ListReplayRuns() ([]RunSummary, error) {
+	if rs.logRoot == "" {
+		return []RunSummary{}, nil
+	}
+	runs, err := ListReplayRuns(rs.logRoot)
+	if err != nil {
+		return nil, err
+	}
+	rs.logMu.Lock()
+	active := ""
+	if rs.log != nil {
+		active = rs.log.RunID()
+	}
+	rs.logMu.Unlock()
+	for i := range runs {
+		runs[i].Active = runs[i].RunID == active
+	}
+	return runs, nil
+}
+
 // Close finalizes the active run log.
 func (rs *ReplayServer) Close() error {
 	rs.logMu.Lock()
