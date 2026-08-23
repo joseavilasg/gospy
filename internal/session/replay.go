@@ -67,10 +67,16 @@ func (rs *ReplayServer) SetReplayNotifier(fn func(ReplayEvent)) {
 	rs.notifier = fn
 }
 
-// SetMatchConfig replaces the match config used for matching and persisted as
-// the run's snapshot. Takes effect immediately.
-func (rs *ReplayServer) SetMatchConfig(cfg *MatchConfig) {
+// StartNewRun replaces the match config, finalizes the current run log, and
+// resets the queue so the next request starts a fresh replay run.
+func (rs *ReplayServer) StartNewRun(cfg *MatchConfig) {
 	rs.cfg = cfg
+	rs.logMu.Lock()
+	if rs.log != nil {
+		rs.log.Close()
+		rs.log = nil
+	}
+	rs.logMu.Unlock()
 }
 
 // SetOriginResolver registers a callback that resolves the client process of

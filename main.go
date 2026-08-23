@@ -366,6 +366,7 @@ func runReplay(caCert *ca.CA, addr, sessionDir, matchConfig, uiAddr, dataDir str
 	srv.SetReplayNotifier(webSrv.ReplayNotifier())
 	srv.SetRulesEngine(ruleEngine)
 	webSrv.SetRunLister(srv)
+	webSrv.SetReplayStarter(srv)
 
 	mcpScope := agent.NewScope(hist, filterStore, ignoreStore, focusStore)
 	mcpScope.SetReplayMode(true)

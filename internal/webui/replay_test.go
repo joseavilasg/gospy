@@ -1717,3 +1717,68 @@ func TestReplayHeaderStatsPluralization(t *testing.T) {
 		t.Fatal("app.js: pluralLabel must not blindly append 's' to words ending in a sibilant")
 	}
 }
+
+type mockReplayStarter struct {
+	last *session.MatchConfig
+}
+
+func (m *mockReplayStarter) StartNewRun(cfg *session.MatchConfig) {
+	m.last = cfg
+}
+
+func TestReplayStartEndpoint_ReplayMode(t *testing.T) {
+	s, _, _ := newReplayServer(t)
+	mock := &mockReplayStarter{}
+	s.SetReplayStarter(mock)
+
+	body := `{"ignore_query_params":["ts","ver"],"ignore_hosts":["ads.example.com"],"host_rules":[{"host":"live.example.com","ignore_query_params":["uid"]}]}`
+	rec := httptest.NewRecorder()
+	s.handleReplayStart(rec, httptest.NewRequest(http.MethodPost, "/api/replay/start", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if mock.last == nil {
+		t.Fatal("StartNewRun was not called")
+	}
+	if len(mock.last.IgnoreQueryParams) != 2 {
+		t.Fatalf("expected 2 ignored params, got %d", len(mock.last.IgnoreQueryParams))
+	}
+	if len(mock.last.IgnoreHosts) != 1 {
+		t.Fatalf("expected 1 ignored host, got %d", len(mock.last.IgnoreHosts))
+	}
+	if len(mock.last.HostRules) != 1 {
+		t.Fatalf("expected 1 host rule, got %d", len(mock.last.HostRules))
+	}
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON response: %v", err)
+	}
+	if v, ok := resp["ignored_params"].(float64); !ok || v != 2 {
+		t.Fatalf("response ignored_params: expected 2, got %v", resp["ignored_params"])
+	}
+}
+
+func TestReplayStartEndpoint_RecordMode(t *testing.T) {
+	s, _, _ := newTestServer(t)
+	s.SetReplayMode(false)
+	mock := &mockReplayStarter{}
+	s.SetReplayStarter(mock)
+
+	rec := httptest.NewRecorder()
+	s.handleReplayStart(rec, httptest.NewRequest(http.MethodPost, "/api/replay/start", strings.NewReader(`{}`)))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", rec.Code)
+	}
+	if mock.last != nil {
+		t.Fatal("StartNewRun should not have been called")
+	}
+}
+
+func TestReplayStartEndpoint_WrongMethod(t *testing.T) {
+	s, _, _ := newReplayServer(t)
+	rec := httptest.NewRecorder()
+	s.handleReplayStart(rec, httptest.NewRequest(http.MethodGet, "/api/replay/start", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", rec.Code)
+	}
+}

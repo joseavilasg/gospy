@@ -128,7 +128,8 @@ type Server struct {
 	replayEvents  []session.ReplayEvent
 	replayClients map[chan session.ReplayEvent]struct{}
 
-	runLister session.RunLister // backend that knows the active run
+	runLister     session.RunLister // backend that knows the active run
+	replayStarter ReplayStarter     // backend that accepts replay start (replay only)
 }
 
 // recordingEvent is the recording-state payload pushed to SSE clients.
@@ -342,6 +343,18 @@ type RunLister = session.RunLister
 // SetRunLister injects the backend that knows which replay run is active.
 func (s *Server) SetRunLister(l RunLister) {
 	s.runLister = l
+}
+
+// ReplayStarter is the backend interface that starts a new replay run.
+// session.ReplayServer satisfies this via its StartNewRun method.
+type ReplayStarter interface {
+	StartNewRun(cfg *session.MatchConfig)
+}
+
+// SetReplayStarter injects the backend that starts new replay runs (replay
+// mode only).
+func (s *Server) SetReplayStarter(starter ReplayStarter) {
+	s.replayStarter = starter
 }
 
 // ListReplayRuns returns summaries of every replay run for this session, with
@@ -632,6 +645,7 @@ func (s *Server) ListenAndServe() error {
 	mux.HandleFunc("/api/replay/events", s.handleReplayEventsList)
 	mux.HandleFunc("/api/replay/events/", s.handleReplayEventsSub)
 	mux.HandleFunc("/api/replay/filter-values", s.handleReplayFilterValues)
+	mux.HandleFunc("/api/replay/start", s.handleReplayStart)
 
 	LogWebUI(s.addr)
 
@@ -891,6 +905,40 @@ func (s *Server) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, map[string]string{"session": dir, "name": name})
+}
+
+// handleReplayStart starts a new replay run with the given match config.
+// Only available in replay mode; mirrors POST /api/session/start for record
+// mode. Finalizes the previous run and resets the queue so the next request
+// starts a fresh run.
+func (s *Server) handleReplayStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.replayMode {
+		http.Error(w, "replay start is replay-only", http.StatusConflict)
+		return
+	}
+	if s.replayStarter == nil {
+		http.Error(w, "replay server not available", http.StatusInternalServerError)
+		return
+	}
+	var cfg session.MatchConfig
+	if r.Body != nil {
+		dec := json.NewDecoder(r.Body)
+		if err := dec.Decode(&cfg); err != nil && err != io.EOF {
+			http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	s.replayStarter.StartNewRun(&cfg)
+	s.writeJSON(w, map[string]interface{}{
+		"ignored_params": len(cfg.IgnoreQueryParams),
+		"ignore_hosts":   len(cfg.IgnoreHosts),
+		"host_rules":     len(cfg.HostRules),
+	})
 }
 
 func (s *Server) handleAgentView(w http.ResponseWriter, r *http.Request) {

@@ -203,7 +203,7 @@ func TestMatchConfigMissing(t *testing.T) {
 func TestReplayRunWritesMatchConfig(t *testing.T) {
 	rs, h, logRoot := newLoggingReplayServer(t)
 	cfg := &MatchConfig{IgnoreQueryParams: []string{"sig"}}
-	rs.SetMatchConfig(cfg)
+	rs.StartNewRun(cfg)
 
 	if err := h.Save(&history.Entry{
 		ID:        "e1",
