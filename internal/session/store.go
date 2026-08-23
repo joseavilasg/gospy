@@ -20,6 +20,9 @@ const (
 	ResultHit
 	// ResultExhausted: every recorded entry has already been consumed.
 	ResultExhausted
+	// ResultIgnored: the host matches an ignore_hosts entry; no match
+	// was attempted and the request was rejected with a 404.
+	ResultIgnored
 )
 
 func (r MatchResult) String() string {
@@ -30,6 +33,8 @@ func (r MatchResult) String() string {
 		return "hit"
 	case ResultExhausted:
 		return "exhausted"
+	case ResultIgnored:
+		return "ignored"
 	default:
 		return "unknown"
 	}
@@ -68,6 +73,10 @@ func (r *ReplayStore) Match(method, rawURL string, cfg *MatchConfig) (*history.E
 func (r *ReplayStore) MatchDetailed(method, rawURL string, cfg *MatchConfig) (*history.Entry, MatchResult, []UnconsumedEntry, int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if r.isIgnoredHost(rawURL, cfg) {
+		return nil, ResultIgnored, nil, 0
+	}
 
 	r.ensureQueue(cfg)
 	key := matchKey(method, rawURL, cfg)
@@ -143,16 +152,37 @@ func normalizeURL(rawURL string, cfg *MatchConfig) string {
 			return rawURL
 		}
 	}
-	if cfg != nil && len(cfg.IgnoreQueryParams) > 0 {
-		q := u.Query()
-		for _, key := range cfg.IgnoreQueryParams {
-			q.Del(key)
+	if cfg != nil {
+		if keys := cfg.EffectiveIgnoreParams(u.Host, u.Path); len(keys) > 0 {
+			q := u.Query()
+			for _, key := range keys {
+				q.Del(key)
+			}
+			u.RawQuery = q.Encode()
 		}
-		u.RawQuery = q.Encode()
 	}
 	result := u.Scheme + "://" + strings.ToLower(u.Host) + u.Path
 	if u.RawQuery != "" {
 		result += "?" + u.RawQuery
 	}
 	return result
+}
+
+// isIgnoredHost reports whether the request URL's host (lowercased, including
+// port when non-default) is in the cfg.IgnoreHosts list.
+func (r *ReplayStore) isIgnoredHost(rawURL string, cfg *MatchConfig) bool {
+	if cfg == nil || len(cfg.IgnoreHosts) == 0 {
+		return false
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	host := strings.ToLower(u.Host)
+	for _, h := range cfg.IgnoreHosts {
+		if strings.ToLower(h) == host {
+			return true
+		}
+	}
+	return false
 }

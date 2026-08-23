@@ -374,3 +374,85 @@ func TestNormalizeURL(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeURL_HostRules(t *testing.T) {
+	tests := []struct {
+		raw  string
+		cfg  *MatchConfig
+		want string
+	}{
+		{
+			raw: "https://live.example.com/hls/master.m3u8?uid=123&ver=2&ts=99",
+			cfg: &MatchConfig{
+				HostRules: []HostRule{
+					{Host: "live.example.com", PathPrefix: "/hls/", IgnoreQueryParams: []string{"uid"}},
+				},
+			},
+			want: "https://live.example.com/hls/master.m3u8?ts=99&ver=2",
+		},
+		{
+			raw: "https://other.example.com/hls/master.m3u8?uid=123",
+			cfg: &MatchConfig{
+				HostRules: []HostRule{
+					{Host: "live.example.com", PathPrefix: "/hls/", IgnoreQueryParams: []string{"uid"}},
+				},
+			},
+			want: "https://other.example.com/hls/master.m3u8?uid=123",
+		},
+		{
+			raw: "https://live.example.com/dash/manifest.mpd?uid=123",
+			cfg: &MatchConfig{
+				HostRules: []HostRule{
+					{Host: "live.example.com", PathPrefix: "/hls/", IgnoreQueryParams: []string{"uid"}},
+				},
+			},
+			want: "https://live.example.com/dash/manifest.mpd?uid=123",
+		},
+	}
+	for _, tc := range tests {
+		got := normalizeURL(tc.raw, tc.cfg)
+		if got != tc.want {
+			t.Errorf("normalizeURL(%q) = %q, want %q", tc.raw, got, tc.want)
+		}
+	}
+}
+
+func TestMatchDetailed_IgnoreHost(t *testing.T) {
+	rs, h := newReplay(t)
+	saveTestEntry(t, h, "e1", "GET", "https://live.example.com/hls/master.m3u8", 200, time.Now())
+	saveTestEntry(t, h, "e2", "GET", "https://other.example.com/hls/seg1.ts", 200, time.Now())
+	cfg := &MatchConfig{IgnoreHosts: []string{"live.example.com"}}
+
+	entry, result, _, _ := rs.MatchDetailed("GET", "https://live.example.com/hls/master.m3u8", cfg)
+	if result != ResultIgnored {
+		t.Errorf("ignored host: result = %v, want ResultIgnored", result)
+	}
+	if entry != nil {
+		t.Errorf("ignored host: entry should be nil, got %v", entry)
+	}
+
+	entry2, result2, _, _ := rs.MatchDetailed("GET", "https://other.example.com/hls/seg1.ts", cfg)
+	if result2 != ResultHit {
+		t.Errorf("other host: result = %v, want ResultHit", result2)
+	}
+	if entry2 == nil || entry2.ID != "e2" {
+		t.Errorf("other host: entry = %v, want e2", entry2)
+	}
+}
+
+func TestMatchDetailed_IgnoreHostWithPort(t *testing.T) {
+	rs, h := newReplay(t)
+	saveTestEntry(t, h, "e1", "GET", "https://live.example.com:8443/hls/master.m3u8", 200, time.Now())
+	cfg := &MatchConfig{IgnoreHosts: []string{"live.example.com:8443"}}
+
+	_, result, _, _ := rs.MatchDetailed("GET", "https://live.example.com:8443/hls/master.m3u8", cfg)
+	if result != ResultIgnored {
+		t.Errorf("ignored host with port: result = %v, want ResultIgnored", result)
+	}
+}
+
+func TestResultIgnoredString(t *testing.T) {
+	if s := ResultIgnored.String(); s != "ignored" {
+		t.Errorf("ResultIgnored.String() = %q, want %q", s, "ignored")
+	}
+}

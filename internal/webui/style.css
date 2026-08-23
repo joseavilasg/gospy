@@ -1864,6 +1864,16 @@ pre.body-content {
   font-weight: 600;
 }
 
+.replay-badge-ignored {
+  color: var(--text-dim);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--sp-1) var(--sp-6);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
 .agent-badge {
   color: var(--orange);
   flex-shrink: 0;
@@ -3036,6 +3046,10 @@ body.resizing {
 
 .replay-event-exhausted .replay-event-result {
   color: var(--red-strong);
+}
+
+.replay-event-ignored .replay-event-result {
+  color: var(--text-dim);
 }
 
 .replay-event-empty {

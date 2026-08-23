@@ -1,6 +1,7 @@
 package session
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -257,5 +258,86 @@ func TestReplayServerSetOriginResolver(t *testing.T) {
 	}
 	if len(got) == 0 {
 		t.Fatal("origin resolver was never invoked")
+	}
+}
+
+func TestDiffURLHostRules(t *testing.T) {
+	incoming := "https://live.example.com/hls/master.m3u8?uid=123&ver=2&ts=99"
+	recorded := "https://live.example.com/hls/master.m3u8?uid=456&ver=2&ts=99"
+	cfg := &MatchConfig{
+		HostRules: []HostRule{
+			{Host: "live.example.com", PathPrefix: "/hls/", IgnoreQueryParams: []string{"uid"}},
+		},
+	}
+	diff := DiffURL(incoming, recorded, cfg)
+	if diff.HostPath.Match != true {
+		t.Errorf("host_rules diff: HostPath.Match = false, want true")
+	}
+	if diff.DiffCount != 0 {
+		t.Errorf("host_rules diff: DiffCount = %d, want 0", diff.DiffCount)
+	}
+	// uid should appear as DiffIgnored, ver as DiffMatch
+	foundUID := false
+	foundVer := false
+	for _, p := range diff.Params {
+		if p.Key == "uid" && p.Status == DiffIgnored {
+			foundUID = true
+		}
+		if p.Key == "ver" && p.Status == DiffMatch {
+			foundVer = true
+		}
+	}
+	if !foundUID {
+		t.Error("host_rules diff: uid should be DiffIgnored")
+	}
+	if !foundVer {
+		t.Error("host_rules diff: ver should be DiffMatch")
+	}
+}
+
+func TestDiffURLHostRulesNoMatch(t *testing.T) {
+	incoming := "https://other.example.com/hls/master.m3u8?uid=123"
+	recorded := "https://other.example.com/hls/master.m3u8?uid=456"
+	cfg := &MatchConfig{
+		HostRules: []HostRule{
+			{Host: "live.example.com", PathPrefix: "/hls/", IgnoreQueryParams: []string{"uid"}},
+		},
+	}
+	diff := DiffURL(incoming, recorded, cfg)
+	// Non-matching host_rule: uid should NOT be ignored — it should be DiffMismatch
+	for _, p := range diff.Params {
+		if p.Key == "uid" {
+			if p.Status != DiffMismatch {
+				t.Errorf("non-matching host_rule: uid should mismatch, got %v", p.Status)
+			}
+			return
+		}
+	}
+	t.Error("uid param not found in diff")
+}
+
+func TestReplayIgnoredHost(t *testing.T) {
+	rs, h := newReplayServer(t)
+	if err := h.Save(&history.Entry{
+		ID:        "e1",
+		Timestamp: time.Now(),
+		Request:   history.RequestRecord{Method: "GET", URL: "https://live.example.com/hls/master.m3u8", Host: "live.example.com"},
+		Response:  &history.ResponseRecord{Status: 200},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// Override match config with ignore_hosts.
+	rs.cfg = &MatchConfig{IgnoreHosts: []string{"live.example.com"}}
+
+	resp := callHandleRequest(t, rs, "GET", "https://live.example.com/hls/master.m3u8")
+	if resp == nil {
+		t.Fatal("nil response")
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+	if got := resp.Header.Get("X-Gospy-Replay"); got != "ignored" {
+		t.Errorf("X-Gospy-Replay = %q, want %q", got, "ignored")
 	}
 }

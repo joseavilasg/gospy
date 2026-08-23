@@ -219,6 +219,16 @@ func (rs *ReplayServer) handleRequest(req *http.Request, ctx *goproxy.ProxyCtx) 
 			}
 		}
 		LogReplayMiss(req.Method, url)
+	case ResultIgnored:
+		missText := MissBody(req.Method, url)
+		resp = &http.Response{
+			StatusCode:    http.StatusNotFound,
+			Header:        http.Header{"X-Gospy-Replay": {"ignored"}},
+			Body:          io.NopCloser(strings.NewReader(missText)),
+			ContentLength: int64(len(missText)),
+			Request:       req,
+		}
+		LogReplayMiss(req.Method, url)
 	default:
 		if ruleResp != nil {
 			resp = ruleResp

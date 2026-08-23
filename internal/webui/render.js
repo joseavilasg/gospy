@@ -975,7 +975,7 @@ function actionBannerHtml(record) {
 
 function replayEventRow(ev, selected) {
   const sel = selected ? ' selected' : '';
-  const icon = ev.result === 'hit' ? '✓' : ev.result === 'miss' ? '✗' : '‼';
+  const icon = ev.result === 'hit' ? '✓' : ev.result === 'miss' ? '✗' : ev.result === 'ignored' ? '⊘' : '‼';
   const time = ev.ts ? `<span class="replay-event-time">${new Date(ev.ts).toLocaleTimeString()}</span>` : '';
   const ruleBadge = ev.appliedAction ? `<span class="replay-event-rule replay-event-rule-${escapeHtml(ev.appliedAction)}" title="${ev.ruleName ? `Rule: ${escapeHtml(ev.ruleName)}` : ''}">${actionLabel(ev.appliedAction)}</span>` : '';
   return `<div class="replay-event replay-event-${ev.result}${sel}" data-action="replay-event-detail" data-run="${escapeHtml(ev.runId)}" data-seq="${ev.seq}" title="${new Date(ev.ts).toLocaleString()}">
@@ -1176,7 +1176,7 @@ export function renderReplayEventDetail(detail, activeTab = 'match') {
   const req = ev.request || {};
   const headers = req.headers || {};
 
-  const icon = ev.result === 'hit' ? '✓' : ev.result === 'miss' ? '✗' : '‼';
+  const icon = ev.result === 'hit' ? '✓' : ev.result === 'miss' ? '✗' : ev.result === 'ignored' ? '⊘' : '‼';
 
   const requestBodyHtml = (() => {
     if (req.body) return `<pre>${escapeHtml(req.body)}</pre>`;
@@ -1268,6 +1268,7 @@ function buildReplayResponseTab(detail) {
   let statusHtml = `<pre>${status}</pre>`;
   if (ev.result === 'miss') statusHtml = `<pre>${status} — replay miss</pre>`;
   if (ev.result === 'exhausted') statusHtml = `<pre>${status} — replay exhausted</pre>`;
+  if (ev.result === 'ignored') statusHtml = `<pre>${status} — host ignored (ignore_hosts)</pre>`;
 
   let headersHtml;
   let bodyHtml = '';
@@ -1318,14 +1319,22 @@ export function renderReplayMatch(resp, ctx, keepScroll) {
   const result = (ctx && ctx.result) || '';
   const seq = (ctx && ctx.seq) || 0;
   const selected = entries.find(c => c.entryId === resp.selectedEntryId);
-  const ignored = (resp.matchConfig && resp.matchConfig.ignore_query_params) || [];
+  const ignored = (resp?.matchConfig?.ignore_query_params) || [];
+  const hostRules = (resp?.matchConfig?.host_rules) || [];
 
   let title = 'Select a candidate to compare';
   if (result === 'hit') title = `Matched · seq ${seq} · recorded`;
   else if (total.matching === 0 && resp.scope === 'all') title = 'No candidate shares this host+path — showing all pending';
 
-  const ignoredNote = ignored.length > 0
-    ? `<span class="replay-config-note" title="ignore_query_params used for this run">ignoring: ${escapeHtml(ignored.join(', '))}</span>`
+  const ignoredParts = [];
+  if (ignored.length > 0) ignoredParts.push(`params: ${escapeHtml(ignored.join(', '))}`);
+  for (const hr of hostRules) {
+    if (hr.ignore_query_params && hr.ignore_query_params.length > 0) {
+      ignoredParts.push(`${escapeHtml(hr.host)}${hr.path_prefix ? hr.path_prefix : ''}: ${escapeHtml(hr.ignore_query_params.join(', '))}`);
+    }
+  }
+  const ignoredNote = ignoredParts.length > 0
+    ? `<span class="replay-config-note" title="query params ignored for this run">ignoring: ${ignoredParts.join(' · ')}</span>`
     : '';
 
   const segHtml = `

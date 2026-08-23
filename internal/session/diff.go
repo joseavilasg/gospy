@@ -66,6 +66,7 @@ type pair struct{ key, val string }
 // lowercase, ignore_query_params stripped, query re-encoded when ignores are
 // configured) so the diff statuses always agree with the match decision.
 // Ignored pairs are captured separately, in decoded form, for display.
+// EffectiveIgnoreParams merges global and host_rules ignores before stripping.
 func decompose(rawURL string, cfg *MatchConfig) (hostPath string, pairs, ignored []pair) {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Scheme == "" {
@@ -78,7 +79,7 @@ func decompose(rawURL string, cfg *MatchConfig) (hostPath string, pairs, ignored
 
 	ignore := make(map[string]bool)
 	if cfg != nil {
-		for _, k := range cfg.IgnoreQueryParams {
+		for _, k := range cfg.EffectiveIgnoreParams(u.Host, u.Path) {
 			ignore[k] = true
 		}
 	}
