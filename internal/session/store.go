@@ -74,9 +74,7 @@ func (r *ReplayStore) MatchDetailed(method, rawURL string, cfg *MatchConfig) (*h
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.isIgnoredHost(rawURL, cfg) {
-		return nil, ResultIgnored, nil, 0
-	}
+	requestIgnored := r.isIgnoredHost(rawURL, cfg)
 
 	r.ensureQueue(cfg)
 	key := matchKey(method, rawURL, cfg)
@@ -84,6 +82,10 @@ func (r *ReplayStore) MatchDetailed(method, rawURL string, cfg *MatchConfig) (*h
 	pendingCount := 0
 	for i, le := range r.queue {
 		if r.consumed[i] {
+			continue
+		}
+		if r.isIgnoredHost(le.URL, cfg) {
+			r.consumed[i] = true
 			continue
 		}
 		pendingCount++
@@ -98,7 +100,13 @@ func (r *ReplayStore) MatchDetailed(method, rawURL string, cfg *MatchConfig) (*h
 		pending = append(pending, UnconsumedEntry{ID: le.ID})
 	}
 	if pendingCount > 0 {
+		if requestIgnored {
+			return nil, ResultIgnored, nil, 0
+		}
 		return nil, ResultMiss, pending, pendingCount
+	}
+	if requestIgnored {
+		return nil, ResultIgnored, nil, 0
 	}
 	return nil, ResultExhausted, nil, 0
 }

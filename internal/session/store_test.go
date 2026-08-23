@@ -456,3 +456,90 @@ func TestResultIgnoredString(t *testing.T) {
 		t.Errorf("ResultIgnored.String() = %q, want %q", s, "ignored")
 	}
 }
+
+func TestMatchDetailed_IgnoredHostDrainsQueue(t *testing.T) {
+	rs, h := newReplay(t)
+	saveTestEntry(t, h, "e1", "GET", "https://ads.example.com/banner.js", 200, time.Now())
+	saveTestEntry(t, h, "e2", "GET", "https://live.example.com/hls/seg1.ts", 200, time.Now().Add(time.Second))
+	cfg := &MatchConfig{IgnoreHosts: []string{"ads.example.com"}}
+
+	// Request for the non-ignored host - should drain the ignored entry and match e2.
+	entry, result, _, _ := rs.MatchDetailed("GET", "https://live.example.com/hls/seg1.ts", cfg)
+	if result != ResultHit {
+		t.Fatalf("result = %v, want ResultHit", result)
+	}
+	if entry == nil || entry.ID != "e2" {
+		t.Fatalf("entry = %v, want e2", entry)
+	}
+
+	// e1 (ads.example.com) was drained from the queue; next miss should show exhaustion.
+	_, result, _, _ = rs.MatchDetailed("GET", "https://live.example.com/hls/seg2.ts", cfg)
+	if result != ResultExhausted {
+		t.Fatalf("after drain: result = %v, want ResultExhausted", result)
+	}
+}
+
+func TestMatchDetailed_MixedQueueExhaustion(t *testing.T) {
+	rs, h := newReplay(t)
+	saveTestEntry(t, h, "e1", "GET", "https://ads.example.com/banner.js", 200, time.Now())
+	saveTestEntry(t, h, "e2", "GET", "https://ads.example.com/tracker.js", 200, time.Now().Add(time.Second))
+	saveTestEntry(t, h, "e3", "GET", "https://live.example.com/hls/seg1.ts", 200, time.Now().Add(2*time.Second))
+	cfg := &MatchConfig{IgnoreHosts: []string{"ads.example.com"}}
+
+	// Consume e3 (the only non-ignored entry).
+	entry, result, _, _ := rs.MatchDetailed("GET", "https://live.example.com/hls/seg1.ts", cfg)
+	if result != ResultHit || entry.ID != "e3" {
+		t.Fatalf("first match: result=%v entry=%v, want Hit/e3", result, entry)
+	}
+
+	// Next request: queue should be exhausted (e1 and e2 were drained, e3 consumed).
+	_, result, _, _ = rs.MatchDetailed("GET", "https://live.example.com/hls/seg1.ts", cfg)
+	if result != ResultExhausted {
+		t.Fatalf("after drain+consume: result = %v, want ResultExhausted", result)
+	}
+}
+
+func TestMatchDetailed_IgnoredRequestWithPendingNonIgnored(t *testing.T) {
+	rs, h := newReplay(t)
+	saveTestEntry(t, h, "e1", "GET", "https://ads.example.com/banner.js", 200, time.Now())
+	saveTestEntry(t, h, "e2", "GET", "https://live.example.com/hls/seg1.ts", 200, time.Now().Add(time.Second))
+	cfg := &MatchConfig{IgnoreHosts: []string{"ads.example.com"}}
+
+	// Request from ignored host - e1 gets drained, e2 remains pending but
+	// since the request itself is ignored, result is ResultIgnored.
+	_, result, _, pendingCount := rs.MatchDetailed("GET", "https://ads.example.com/page", cfg)
+	if result != ResultIgnored {
+		t.Fatalf("result = %v, want ResultIgnored", result)
+	}
+	if pendingCount != 0 {
+		t.Fatalf("pendingCount = %d, want 0 (ignored requests don't expose pending)", pendingCount)
+	}
+
+	// Now a normal request should still find e2.
+	entry, result, _, _ := rs.MatchDetailed("GET", "https://live.example.com/hls/seg1.ts", cfg)
+	if result != ResultHit || entry.ID != "e2" {
+		t.Fatalf("after ignored request: result=%v entry=%v, want Hit/e2", result, entry)
+	}
+}
+
+func TestMatchDetailed_IgnoredHostProgress(t *testing.T) {
+	rs, h := newReplay(t)
+	saveTestEntry(t, h, "e1", "GET", "https://ads.example.com/banner.js", 200, time.Now())
+	saveTestEntry(t, h, "e2", "GET", "https://ads.example.com/tracker.js", 200, time.Now().Add(time.Second))
+	saveTestEntry(t, h, "e3", "GET", "https://live.example.com/hls/seg1.ts", 200, time.Now().Add(2*time.Second))
+	cfg := &MatchConfig{IgnoreHosts: []string{"ads.example.com"}}
+
+	// Consume e3 - e1 and e2 should be drained in the same call.
+	rs.MatchDetailed("GET", "https://live.example.com/hls/seg1.ts", cfg)
+
+	consumed, total, exhausted := rs.Progress(cfg)
+	if total != 3 {
+		t.Fatalf("total = %d, want 3", total)
+	}
+	if consumed != 3 {
+		t.Fatalf("consumed = %d, want 3 (ignored entries count as consumed)", consumed)
+	}
+	if !exhausted {
+		t.Fatal("exhausted = false, want true")
+	}
+}
