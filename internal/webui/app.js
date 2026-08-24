@@ -355,12 +355,13 @@ function showReplayDetail(detail, activeTab) {
   _lastReplayDetail = detail;
   _lastDetailEntry = null;
   renderReplayEventDetail(detail, activeTab);
+  renderCurrentContent('response');
 }
 
 // ── Browser history routing ────────────────────────────────────────────────
 // The hash (#/...) is the single source of truth for the detail view: every
-// navigation handler only calls navigate(), and applyRoute() — wired to
-// hashchange — reproduces the view from the URL. Back/forward therefore
+// navigation handler only calls navigate(), and applyRoute() - wired to
+// hashchange - reproduces the view from the URL. Back/forward therefore
 // re-apply a previous route instead of relying on in-memory state, and a
 // refresh deep-links back into the exact view.
 function navigate(route) {

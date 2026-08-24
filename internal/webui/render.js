@@ -1275,17 +1275,25 @@ function buildReplayResponseTab(detail) {
   let bodyHtml = '';
   if (srv) {
     headersHtml = buildHeaderRows(srv.headers || {});
-    if (srv.body) bodyHtml = `<pre>${escapeHtml(srv.body)}</pre>`;
-    else if (srv.bodyFile) bodyHtml = `<a class="replay-entry-link" data-action="replay-body" data-run="${escapeHtml(ev.runId)}" data-seq="${ev.seq}" data-target="served" href="#">Download body (${srv.bodySize || ''} bytes)</a>`;
+    if (srv.body || srv.bodyFile) {
+      const ctRaw = srv.headers?.['content-type'] || srv.headers?.['Content-Type'];
+      const ct = Array.isArray(ctRaw) ? ctRaw[0] || '' : ctRaw || '';
+      bodyHtml = buildBodyViewer('response', srv, srv.body || '', srv.rawBody || '', srv.compression || '', false, '', ct, false, '', '', false, '', '', false, srv.bodyFile || '', srv.bodySize || 0, '', srv.isBinaryBody || false, false);
+    }
   } else if (ev.result === 'hit' && res) {
     const resHeaders = res.headers || {};
     headersHtml = buildHeaderRows(resHeaders) +
       `<div class="header-row"><span class="header-key">X-Gospy-Replay:</span><span class="header-value">hit</span></div>`;
-    if (res.body) bodyHtml = `<pre>${escapeHtml(res.body)}</pre>`;
-    else if (res.bodyFile && ev.entryId) bodyHtml = `<a class="replay-entry-link" data-action="replay-entry-body" data-run="${escapeHtml(ev.runId)}" data-id="${escapeHtml(ev.entryId)}" data-target="response" href="#">Download body (${res.bodySize || ''} bytes)</a>`;
+    if (res.body || res.bodyFile) {
+      const ctRaw = res.headers?.['content-type'] || res.headers?.['Content-Type'];
+      const ct = Array.isArray(ctRaw) ? ctRaw[0] || '' : ctRaw || '';
+      bodyHtml = buildBodyViewer('response', res, res.body || '', res.rawBody || '', res.compression || '', false, '', ct, false, '', '', false, '', '', false, res.bodyFile || '', res.bodySize || 0, ev.entryId || '', res.isBinaryBody || false, false);
+    }
   } else {
     headersHtml = `<div class="header-row"><span class="header-key">X-Gospy-Replay:</span><span class="header-value">${escapeHtml(ev.result)}</span></div>`;
-    if (detail.syntheticBody) bodyHtml = `<pre>${escapeHtml(detail.syntheticBody)}</pre>`;
+    if (detail.syntheticBody) {
+      bodyHtml = `<div class="section-panel"><div class="section-header"><span class="section-title">Body</span></div><div class="content-block"><pre>${escapeHtml(detail.syntheticBody)}</pre></div></div>`;
+    }
   }
 
   return `
@@ -1297,10 +1305,7 @@ function buildReplayResponseTab(detail) {
             <div class="section-header"><span class="section-title">Headers</span></div>
             <div class="content-block"><div class="headers-container">${headersHtml}</div></div>
         </div>
-        ${bodyHtml ? `<div class="section-panel">
-            <div class="section-header"><span class="section-title">Body</span></div>
-            <div class="content-block">${bodyHtml}</div>
-        </div>` : ''}
+        ${bodyHtml}
     `;
 }
 

@@ -2858,6 +2858,13 @@ func (s *Server) handleReplayEventDetail(w http.ResponseWriter, r *http.Request,
 		http.NotFound(w, r)
 		return
 	}
+	if ev.ServedResponse != nil && ev.ServedResponse.BodyFile != "" && !ev.ServedResponse.IsBinaryBody && ev.ServedResponse.Body == "" {
+		if dir, err := session.ReplayRunDir(s.replayLogDir, runID); err == nil {
+			if preview, ok := readBodyPreview(filepath.Join(dir, "bin", ev.ServedResponse.BodyFile), maxBodyLen); ok {
+				ev.ServedResponse.Body = preview
+			}
+		}
+	}
 	resp := replayDetailResponse{Event: *ev, MatchConfig: s.runMatchConfig(runID)}
 	resp.ClientSignature = s.resolveClientSignature(ev.ClientPath)
 	if ev.Result == "hit" && ev.EntryID != "" {

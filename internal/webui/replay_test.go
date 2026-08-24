@@ -190,15 +190,14 @@ func TestReplayRulesFrontend(t *testing.T) {
 		t.Fatal("app.js: the replay event detail create-rule must dispatch to the replay prefill")
 	}
 	if !strings.Contains(rnd, "const srv = ev.servedResponse;") ||
-		!strings.Contains(rnd, `data-target="served"`) {
-		t.Fatal("render.js: the response tab must render the rule-served response (and its body link) when present")
+		!strings.Contains(rnd, "buildBodyViewer('response', srv") {
+		t.Fatal("render.js: the response tab must render the rule-served response via buildBodyViewer when present")
 	}
 	if !strings.Contains(src, `?target=${encodeURIComponent(target)}`) {
 		t.Fatal("app.js: the replay-body fetch must pass the served target to the endpoint")
 	}
-	if !strings.Contains(rnd, "${bodyHtml ? `<div class=\"section-panel\">") ||
-		strings.Contains(rnd, "Empty body") {
-		t.Fatal("render.js: the response tab must omit the Body section when the response has no body, never print an 'Empty body' placeholder")
+	if strings.Contains(rnd, "Empty body") {
+		t.Fatal("render.js: the response tab must never print an 'Empty body' placeholder")
 	}
 }
 
