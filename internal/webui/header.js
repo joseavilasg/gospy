@@ -24,6 +24,15 @@ export function setHeaderMode(nextMode) {
 }
 
 function render() {
+  // Snapshot checkbox states before innerHTML wipe restores them after DOM rebuild.
+  const cbStates = {};
+  for (const item of items) {
+    const el = document.getElementById(item.id);
+    if (!el) continue;
+    const cb = el.querySelector('input[type="checkbox"]');
+    if (cb) cbStates[item.id] = cb.checked;
+  }
+
   const visible = items.filter((item) => !(item.hiddenIn || []).includes(mode));
   let html = '';
   let hasPrev = false;
@@ -38,6 +47,10 @@ function render() {
     if (!el) continue;
     const hidden = (item.hiddenIn || []).includes(mode);
     el.style.display = hidden ? 'none' : '';
+    if (cbStates[item.id] !== undefined) {
+      const cb = el.querySelector('input[type="checkbox"]');
+      if (cb) cb.checked = cbStates[item.id];
+    }
     if (hidden || !item.events) continue;
     for (const [type, handler] of Object.entries(item.events)) {
       el.addEventListener(type, handler);
