@@ -1874,6 +1874,16 @@ pre.body-content {
   font-weight: 600;
 }
 
+.replay-badge-repeat {
+  color: var(--cyan);
+  background: rgba(0, 188, 212, 0.15);
+  border: 1px solid var(--blue-dark);
+  border-radius: var(--radius-md);
+  padding: var(--sp-1) var(--sp-6);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
 .agent-badge {
   color: var(--orange);
   flex-shrink: 0;

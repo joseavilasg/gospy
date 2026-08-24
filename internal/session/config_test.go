@@ -322,3 +322,40 @@ func TestLoadMatchConfig_Missing(t *testing.T) {
 		t.Error("expected error for missing file")
 	}
 }
+
+func TestMatchConfig_JSONRoundtrip_RepeatOnMiss(t *testing.T) {
+	in := `[
+		{"match":{"host":"pcw-api.iq.com","path":{"prefix":"/api/vtype"}},"ignore_query_params":["callback","deviceId"],"repeat_on_miss":true}
+	]`
+	var cfg MatchConfig
+	if err := json.Unmarshal([]byte(in), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(cfg) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(cfg))
+	}
+	r := cfg[0]
+	if !r.RepeatOnMiss {
+		t.Error("expected RepeatOnMiss=true")
+	}
+	if len(r.IgnoreQueryParams) != 2 {
+		t.Errorf("expected 2 ignore params, got %d", len(r.IgnoreQueryParams))
+	}
+	if r.Match.Host == nil || r.Match.Host.Value() != "pcw-api.iq.com" {
+		t.Error("host mismatch")
+	}
+	if r.Match.Path == nil || r.Match.Path.Type() != "prefix" {
+		t.Error("path should be prefix")
+	}
+	out, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var cfg2 MatchConfig
+	if err := json.Unmarshal(out, &cfg2); err != nil {
+		t.Fatalf("re-unmarshal: %v", err)
+	}
+	if !cfg2[0].RepeatOnMiss {
+		t.Error("roundtrip lost repeat_on_miss")
+	}
+}

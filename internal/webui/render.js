@@ -1269,6 +1269,7 @@ function buildReplayResponseTab(detail) {
   if (ev.result === 'miss') statusHtml = `<pre>${status} — replay miss</pre>`;
   if (ev.result === 'exhausted') statusHtml = `<pre>${status} — replay exhausted</pre>`;
   if (ev.result === 'ignored') statusHtml = `<pre>${status} — ignored</pre>`;
+  if (ev.result === 'repeat') statusHtml = `<pre>${status} — repeat (cached)</pre>`;
 
   let headersHtml;
   let bodyHtml = '';

@@ -729,3 +729,146 @@ func TestReplayRulesPassthroughNoOverride(t *testing.T) {
 		t.Fatal("passthrough must not capture a served response: the recorded response is served as-is")
 	}
 }
+
+func TestReplayRepeatOnMiss(t *testing.T) {
+	rs, h, logRoot := newLoggingReplayServer(t)
+
+	// One entry recorded without query params (normalized form).
+	entry := &history.Entry{
+		ID:        "vtype1",
+		Timestamp: time.Now(),
+		Request:   history.RequestRecord{Method: "GET", URL: "https://pcw-api.iq.com/api/vtype", Host: "pcw-api.iq.com"},
+		Response:  &history.ResponseRecord{Status: 200, Headers: map[string][]string{"Content-Type": {"application/json"}}, BodyFile: "vtype1-resp.bin"},
+	}
+	if err := h.Save(entry); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if _, err := h.SaveBinaryBody("vtype1", "resp", []byte(`{"tm":"t","vf":"v","authKey":"k"}`)); err != nil {
+		t.Fatalf("SaveBinaryBody: %v", err)
+	}
+
+	// Config: repeat_on_miss + ignore_query_params.
+	cfg := MatchConfig{
+		{
+			Match:             MatchFields{Host: &Match{kind: matchExact, val: "pcw-api.iq.com"}, Path: &Match{kind: matchPrefix, val: "/api/vtype"}},
+			IgnoreQueryParams: []string{"callback", "deviceId"},
+			RepeatOnMiss:      true,
+		},
+	}
+	rs.StartNewRun(&cfg)
+
+	// First call: ignored params stripped → normalizes to same key as entry → hit.
+	resp1 := callHandleRequest(t, rs, "GET", "https://pcw-api.iq.com/api/vtype?callback=jQuery&deviceId=abc123")
+	if resp1.StatusCode != 200 {
+		t.Fatalf("first call: expected 200, got %d", resp1.StatusCode)
+	}
+	if got := resp1.Header.Get("X-Gospy-Replay"); got != "hit" {
+		t.Fatalf("first call: expected X-Gospy-Replay: hit, got %q", got)
+	}
+
+	// Second call: same URL, queue exhausted → repeat serves cached response.
+	resp2 := callHandleRequest(t, rs, "GET", "https://pcw-api.iq.com/api/vtype?callback=jQuery&deviceId=abc123")
+	if resp2.StatusCode != 200 {
+		t.Fatalf("second call: expected 200, got %d", resp2.StatusCode)
+	}
+	if got := resp2.Header.Get("X-Gospy-Replay"); got != "repeat" {
+		t.Fatalf("second call: expected X-Gospy-Replay: repeat, got %q", got)
+	}
+	body, err := io.ReadAll(resp2.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if string(body) != `{"tm":"t","vf":"v","authKey":"k"}` {
+		t.Fatalf("second call: unexpected body %q", body)
+	}
+
+	// Third call: still repeat (cache persists within the run).
+	resp3 := callHandleRequest(t, rs, "GET", "https://pcw-api.iq.com/api/vtype?callback=X")
+	if resp3.StatusCode != 200 {
+		t.Fatalf("third call: expected 200, got %d", resp3.StatusCode)
+	}
+	if got := resp3.Header.Get("X-Gospy-Replay"); got != "repeat" {
+		t.Fatalf("third call: expected X-Gospy-Replay: repeat, got %q", got)
+	}
+
+	// Verify events: hit, repeat, repeat.
+	summaries, _ := ListReplayRuns(logRoot)
+	dir, err := ReplayRunDir(logRoot, summaries[0].RunID)
+	if err != nil {
+		t.Fatalf("ReplayRunDir: %v", err)
+	}
+	events, err := LoadReplayRun(dir)
+	if err != nil {
+		t.Fatalf("LoadReplayRun: %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("expected 3 events, got %d", len(events))
+	}
+	if events[0].Result != "hit" {
+		t.Errorf("event 0: expected hit, got %s", events[0].Result)
+	}
+	if events[1].Result != "repeat" {
+		t.Errorf("event 1: expected repeat, got %s", events[1].Result)
+	}
+	if events[2].Result != "repeat" {
+		t.Errorf("event 2: expected repeat, got %s", events[2].Result)
+	}
+}
+
+func TestReplayRepeatOnMiss_NoCache(t *testing.T) {
+	rs, _, _ := newLoggingReplayServer(t)
+
+	// Config with repeat_on_miss, no entries in the store at all.
+	// Request for a URL that has no matching queue entry → exhausted.
+	cfg := MatchConfig{
+		{
+			Match:        MatchFields{Host: &Match{kind: matchExact, val: "api.example.com"}},
+			RepeatOnMiss: true,
+		},
+	}
+	rs.StartNewRun(&cfg)
+
+	// Call with no cached entry and no queue entry → exhausted (queue is empty).
+	resp := callHandleRequest(t, rs, "GET", "https://api.example.com/data")
+	if resp.StatusCode != http.StatusGone {
+		t.Fatalf("expected 410, got %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("X-Gospy-Replay"); got != "exhausted" {
+		t.Fatalf("expected X-Gospy-Replay: exhausted, got %q", got)
+	}
+}
+
+func TestReplayRepeatOnMiss_CacheClearedOnNewRun(t *testing.T) {
+	rs, h, _ := newLoggingReplayServer(t)
+
+	entry := &history.Entry{
+		ID:        "r1",
+		Timestamp: time.Now(),
+		Request:   history.RequestRecord{Method: "GET", URL: "https://api.example.com/data", Host: "api.example.com"},
+		Response:  &history.ResponseRecord{Status: 200},
+	}
+	if err := h.Save(entry); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// First run: hit + repeat.
+	cfg1 := MatchConfig{
+		{Match: MatchFields{Host: &Match{kind: matchExact, val: "api.example.com"}}, RepeatOnMiss: true},
+	}
+	rs.StartNewRun(&cfg1)
+	callHandleRequest(t, rs, "GET", "https://api.example.com/data")
+	resp := callHandleRequest(t, rs, "GET", "https://api.example.com/data")
+	if resp.StatusCode != 200 || resp.Header.Get("X-Gospy-Replay") != "repeat" {
+		t.Fatalf("expected repeat, got status=%d replay=%s", resp.StatusCode, resp.Header.Get("X-Gospy-Replay"))
+	}
+
+	// New run with fresh config → queue rebuilds, entry is unconsumed again.
+	cfg2 := MatchConfig{
+		{Match: MatchFields{Host: &Match{kind: matchExact, val: "api.example.com"}}, RepeatOnMiss: true},
+	}
+	rs.StartNewRun(&cfg2)
+	resp2 := callHandleRequest(t, rs, "GET", "https://api.example.com/data")
+	if resp2.StatusCode != 200 || resp2.Header.Get("X-Gospy-Replay") != "hit" {
+		t.Fatalf("expected hit after new run, got status=%d replay=%s", resp2.StatusCode, resp2.Header.Get("X-Gospy-Replay"))
+	}
+}

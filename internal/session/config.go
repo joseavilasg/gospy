@@ -121,6 +121,7 @@ type MatchRule struct {
 	Match             MatchFields `json:"match"`
 	Ignore            bool        `json:"ignore,omitempty"`
 	IgnoreQueryParams []string    `json:"ignore_query_params,omitempty"`
+	RepeatOnMiss      bool        `json:"repeat_on_miss,omitempty"`
 }
 
 // MatchConfig is the ordered list of match rules applied during replay.

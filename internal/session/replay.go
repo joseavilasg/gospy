@@ -29,6 +29,7 @@ type ReplayServer struct {
 	notifier       func(ReplayEvent)
 	originResolver OriginResolver
 	rulesEngine    *rules.Engine
+	repeatCache    map[int]string // rule index → last matched entry ID
 }
 
 func NewReplayServer(addr string, caCert *ca.CA, session *ReplayStore, cfg *MatchConfig) *ReplayServer {
@@ -71,6 +72,7 @@ func (rs *ReplayServer) SetReplayNotifier(fn func(ReplayEvent)) {
 // resets the queue so the next request starts a fresh replay run.
 func (rs *ReplayServer) StartNewRun(cfg *MatchConfig) {
 	rs.cfg = cfg
+	rs.repeatCache = make(map[int]string)
 	rs.logMu.Lock()
 	if rs.log != nil {
 		rs.log.Close()
@@ -168,7 +170,6 @@ func (rs *ReplayServer) handleRequest(req *http.Request, ctx *goproxy.ProxyCtx) 
 		Method:    req.Method,
 		URL:       url,
 		Request:   rec,
-		Result:    result.String(),
 	}
 	if rule != nil && rule.Action != rules.ActionPassthrough {
 		ev.AppliedAction = string(rule.Action)
@@ -208,23 +209,53 @@ func (rs *ReplayServer) handleRequest(req *http.Request, ctx *goproxy.ProxyCtx) 
 		ev.EntryID = entry.ID
 		ev.MatchedURL = entry.Request.URL
 		LogReplayHit(req.Method, url, resp.StatusCode)
-	case ResultMiss:
-		ev.Unconsumed = unconsumed
-		ev.TotalPending = totalPending
-		if ruleResp != nil {
-			resp = ruleResp
-			resp.Header.Set("X-Gospy-Replay", "miss")
-		} else {
-			missText := MissBody(req.Method, url)
-			resp = &http.Response{
-				StatusCode:    http.StatusNotFound,
-				Header:        http.Header{"X-Gospy-Replay": {"miss"}},
-				Body:          io.NopCloser(strings.NewReader(missText)),
-				ContentLength: int64(len(missText)),
-				Request:       req,
+		if idx := FindMatchingRuleIndex(url, rs.cfg); idx >= 0 && rs.cfg != nil {
+			if (*rs.cfg)[idx].RepeatOnMiss {
+				if rs.repeatCache == nil {
+					rs.repeatCache = make(map[int]string)
+				}
+				rs.repeatCache[idx] = entry.ID
 			}
 		}
-		LogReplayMiss(req.Method, url)
+	case ResultMiss:
+		if entry := rs.repeatOnMiss(req.Method, url); entry != nil {
+			resp, buildErr = buildResponse(entry, req, rs.session.Dir())
+			if buildErr != nil {
+				LogReplayMiss(req.Method, url)
+				errText := "replay error: " + buildErr.Error()
+				resp = &http.Response{
+					StatusCode:    http.StatusInternalServerError,
+					Header:        make(http.Header),
+					Body:          io.NopCloser(strings.NewReader(errText)),
+					ContentLength: int64(len(errText)),
+					Request:       req,
+				}
+			} else {
+				result = ResultRepeat
+				resp.Header.Set("X-Gospy-Replay", "repeat")
+				ev.EntryID = entry.ID
+				ev.MatchedURL = entry.Request.URL
+				LogReplayRepeat(req.Method, url, resp.StatusCode)
+			}
+		}
+		if resp == nil {
+			ev.Unconsumed = unconsumed
+			ev.TotalPending = totalPending
+			if ruleResp != nil {
+				resp = ruleResp
+				resp.Header.Set("X-Gospy-Replay", "miss")
+			} else {
+				missText := MissBody(req.Method, url)
+				resp = &http.Response{
+					StatusCode:    http.StatusNotFound,
+					Header:        http.Header{"X-Gospy-Replay": {"miss"}},
+					Body:          io.NopCloser(strings.NewReader(missText)),
+					ContentLength: int64(len(missText)),
+					Request:       req,
+				}
+			}
+			LogReplayMiss(req.Method, url)
+		}
 	case ResultIgnored:
 		missText := MissBody(req.Method, url)
 		resp = &http.Response{
@@ -236,20 +267,42 @@ func (rs *ReplayServer) handleRequest(req *http.Request, ctx *goproxy.ProxyCtx) 
 		}
 		LogReplayMiss(req.Method, url)
 	default:
-		if ruleResp != nil {
-			resp = ruleResp
-			resp.Header.Set("X-Gospy-Replay", "exhausted")
-		} else {
-			exhaustedText := ExhaustedBody()
-			resp = &http.Response{
-				StatusCode:    http.StatusGone,
-				Header:        http.Header{"X-Gospy-Replay": {"exhausted"}},
-				Body:          io.NopCloser(strings.NewReader(exhaustedText)),
-				ContentLength: int64(len(exhaustedText)),
-				Request:       req,
+		if entry := rs.repeatOnMiss(req.Method, url); entry != nil {
+			resp, buildErr = buildResponse(entry, req, rs.session.Dir())
+			if buildErr != nil {
+				LogReplayMiss(req.Method, url)
+				errText := "replay error: " + buildErr.Error()
+				resp = &http.Response{
+					StatusCode:    http.StatusInternalServerError,
+					Header:        make(http.Header),
+					Body:          io.NopCloser(strings.NewReader(errText)),
+					ContentLength: int64(len(errText)),
+					Request:       req,
+				}
+			} else {
+				result = ResultRepeat
+				resp.Header.Set("X-Gospy-Replay", "repeat")
+				ev.EntryID = entry.ID
+				ev.MatchedURL = entry.Request.URL
+				LogReplayRepeat(req.Method, url, resp.StatusCode)
 			}
 		}
-		LogReplayExhausted(req.Method, url)
+		if resp == nil {
+			if ruleResp != nil {
+				resp = ruleResp
+				resp.Header.Set("X-Gospy-Replay", "exhausted")
+			} else {
+				exhaustedText := ExhaustedBody()
+				resp = &http.Response{
+					StatusCode:    http.StatusGone,
+					Header:        http.Header{"X-Gospy-Replay": {"exhausted"}},
+					Body:          io.NopCloser(strings.NewReader(exhaustedText)),
+					ContentLength: int64(len(exhaustedText)),
+					Request:       req,
+				}
+			}
+			LogReplayExhausted(req.Method, url)
+		}
 	}
 	ev.Status = resp.StatusCode
 
@@ -258,6 +311,7 @@ func (rs *ReplayServer) handleRequest(req *http.Request, ctx *goproxy.ProxyCtx) 
 		ev.ServedResponse, srvRaw = captureServedResponse(resp)
 	}
 
+	ev.Result = result.String()
 	rs.emit(&ev, rawBody, srvRaw)
 	return nil, resp
 }
@@ -454,4 +508,30 @@ func LogReplayMiss(method, url string) {
 
 func LogReplayExhausted(method, url string) {
 	fmt.Printf("[REPLAY] EXHAUSTED %s %s\n", method, url)
+}
+
+func LogReplayRepeat(method, url string, status int) {
+	fmt.Printf("[REPLAY] REPEAT %s %s → %d\n", method, url, status)
+}
+
+// repeatOnMiss checks whether a rule with repeat_on_miss matches the request
+// and has a cached entry from a previous hit. Returns the entry to serve, or
+// nil when repeat does not apply.
+func (rs *ReplayServer) repeatOnMiss(method, rawURL string) *history.Entry {
+	if rs.cfg == nil || rs.repeatCache == nil {
+		return nil
+	}
+	idx := FindMatchingRuleIndex(rawURL, rs.cfg)
+	if idx < 0 || !(*rs.cfg)[idx].RepeatOnMiss {
+		return nil
+	}
+	entryID, ok := rs.repeatCache[idx]
+	if !ok || entryID == "" {
+		return nil
+	}
+	entry, err := rs.session.h.Get(entryID)
+	if err != nil {
+		return nil
+	}
+	return entry
 }

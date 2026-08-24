@@ -23,6 +23,10 @@ const (
 	// ResultIgnored: the host matches an ignore_hosts entry; no match
 	// was attempted and the request was rejected with a 404.
 	ResultIgnored
+	// ResultRepeat: the queue had no unconsumed entry but a rule with
+	// repeat_on_miss matched; the last recorded response for that rule
+	// was served again.
+	ResultRepeat
 )
 
 func (r MatchResult) String() string {
@@ -35,6 +39,8 @@ func (r MatchResult) String() string {
 		return "exhausted"
 	case ResultIgnored:
 		return "ignored"
+	case ResultRepeat:
+		return "repeat"
 	default:
 		return "unknown"
 	}
@@ -109,6 +115,25 @@ func (r *ReplayStore) MatchDetailed(method, rawURL string, cfg *MatchConfig) (*h
 		return nil, ResultIgnored, nil, 0
 	}
 	return nil, ResultExhausted, nil, 0
+}
+
+// FindMatchingRuleIndex returns the index of the first rule whose match fields
+// satisfy the given URL, or -1 if no rule matches.
+func FindMatchingRuleIndex(rawURL string, cfg *MatchConfig) int {
+	if cfg == nil {
+		return -1
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return -1
+	}
+	host, path := strings.ToLower(u.Host), u.Path
+	for i, r := range *cfg {
+		if isRuleMatch(host, path, r) {
+			return i
+		}
+	}
+	return -1
 }
 
 // Progress reports how many recorded entries have been consumed, the queue
