@@ -1731,7 +1731,7 @@ func TestReplayStartEndpoint_ReplayMode(t *testing.T) {
 	mock := &mockReplayStarter{}
 	s.SetReplayStarter(mock)
 
-	body := `{"ignore_query_params":["ts","ver"],"ignore_hosts":["ads.example.com"],"host_rules":[{"host":"live.example.com","ignore_query_params":["uid"]}]}`
+	body := `[{"match":{},"ignore_query_params":["ts","ver"]},{"match":{"host":"ads.example.com"},"ignore":true},{"match":{"host":"live.example.com"},"ignore_query_params":["uid"]}]`
 	rec := httptest.NewRecorder()
 	s.handleReplayStart(rec, httptest.NewRequest(http.MethodPost, "/api/replay/start", strings.NewReader(body)))
 	if rec.Code != http.StatusOK {
@@ -1740,21 +1740,21 @@ func TestReplayStartEndpoint_ReplayMode(t *testing.T) {
 	if mock.last == nil {
 		t.Fatal("StartNewRun was not called")
 	}
-	if len(mock.last.IgnoreQueryParams) != 2 {
-		t.Fatalf("expected 2 ignored params, got %d", len(mock.last.IgnoreQueryParams))
-	}
-	if len(mock.last.IgnoreHosts) != 1 {
-		t.Fatalf("expected 1 ignored host, got %d", len(mock.last.IgnoreHosts))
-	}
-	if len(mock.last.HostRules) != 1 {
-		t.Fatalf("expected 1 host rule, got %d", len(mock.last.HostRules))
+	if len(*mock.last) != 3 {
+		t.Fatalf("expected 3 rules, got %d", len(*mock.last))
 	}
 	var resp map[string]interface{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("invalid JSON response: %v", err)
 	}
-	if v, ok := resp["ignored_params"].(float64); !ok || v != 2 {
-		t.Fatalf("response ignored_params: expected 2, got %v", resp["ignored_params"])
+	if v, ok := resp["rules"].(float64); !ok || v != 3 {
+		t.Fatalf("response rules: expected 3, got %v", resp["rules"])
+	}
+	if v, ok := resp["ignored"].(float64); !ok || v != 1 {
+		t.Fatalf("response ignored: expected 1, got %v", resp["ignored"])
+	}
+	if v, ok := resp["param_rules"].(float64); !ok || v != 2 {
+		t.Fatalf("response param_rules: expected 2, got %v", resp["param_rules"])
 	}
 }
 

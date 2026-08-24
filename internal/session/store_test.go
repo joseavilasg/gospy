@@ -91,7 +91,7 @@ func TestMatchWithIgnoreQueryParams(t *testing.T) {
 	saveTestEntry(t, h, "t1", "GET", "https://api.example.com/endpoint?token=abc&id=123", 200, time.Now())
 	saveTestEntry(t, h, "t2", "GET", "https://api.example.com/endpoint?token=def&id=999", 200, time.Now().Add(time.Second))
 
-	cfg := &MatchConfig{IgnoreQueryParams: []string{"token"}}
+	cfg := &MatchConfig{{Match: MatchFields{}, IgnoreQueryParams: []string{"token"}}}
 
 	matched, result := rs.Match("GET", "https://api.example.com/endpoint?token=xyz&id=123", cfg)
 	if matched == nil || result != ResultHit {
@@ -353,7 +353,7 @@ func TestNormalizeURL(t *testing.T) {
 	}{
 		{
 			raw:  "https://example.com/path?q=1&token=a",
-			cfg:  &MatchConfig{IgnoreQueryParams: []string{"token"}},
+			cfg:  &MatchConfig{{Match: MatchFields{}, IgnoreQueryParams: []string{"token"}}},
 			want: "https://example.com/path?q=1",
 		},
 		{
@@ -363,7 +363,7 @@ func TestNormalizeURL(t *testing.T) {
 		},
 		{
 			raw:  "http://a.com:8080/x?y=z",
-			cfg:  &MatchConfig{IgnoreQueryParams: []string{"token"}},
+			cfg:  &MatchConfig{{Match: MatchFields{}, IgnoreQueryParams: []string{"token"}}},
 			want: "http://a.com:8080/x?y=z",
 		},
 	}
@@ -384,8 +384,12 @@ func TestNormalizeURL_HostRules(t *testing.T) {
 		{
 			raw: "https://live.example.com/hls/master.m3u8?uid=123&ver=2&ts=99",
 			cfg: &MatchConfig{
-				HostRules: []HostRule{
-					{Host: "live.example.com", PathPrefix: "/hls/", IgnoreQueryParams: []string{"uid"}},
+				{
+					Match: MatchFields{
+						Host: &Match{kind: matchExact, val: "live.example.com"},
+						Path: &Match{kind: matchPrefix, val: "/hls/"},
+					},
+					IgnoreQueryParams: []string{"uid"},
 				},
 			},
 			want: "https://live.example.com/hls/master.m3u8?ts=99&ver=2",
@@ -393,8 +397,12 @@ func TestNormalizeURL_HostRules(t *testing.T) {
 		{
 			raw: "https://other.example.com/hls/master.m3u8?uid=123",
 			cfg: &MatchConfig{
-				HostRules: []HostRule{
-					{Host: "live.example.com", PathPrefix: "/hls/", IgnoreQueryParams: []string{"uid"}},
+				{
+					Match: MatchFields{
+						Host: &Match{kind: matchExact, val: "live.example.com"},
+						Path: &Match{kind: matchPrefix, val: "/hls/"},
+					},
+					IgnoreQueryParams: []string{"uid"},
 				},
 			},
 			want: "https://other.example.com/hls/master.m3u8?uid=123",
@@ -402,8 +410,12 @@ func TestNormalizeURL_HostRules(t *testing.T) {
 		{
 			raw: "https://live.example.com/dash/manifest.mpd?uid=123",
 			cfg: &MatchConfig{
-				HostRules: []HostRule{
-					{Host: "live.example.com", PathPrefix: "/hls/", IgnoreQueryParams: []string{"uid"}},
+				{
+					Match: MatchFields{
+						Host: &Match{kind: matchExact, val: "live.example.com"},
+						Path: &Match{kind: matchPrefix, val: "/hls/"},
+					},
+					IgnoreQueryParams: []string{"uid"},
 				},
 			},
 			want: "https://live.example.com/dash/manifest.mpd?uid=123",
@@ -421,7 +433,9 @@ func TestMatchDetailed_IgnoreHost(t *testing.T) {
 	rs, h := newReplay(t)
 	saveTestEntry(t, h, "e1", "GET", "https://live.example.com/hls/master.m3u8", 200, time.Now())
 	saveTestEntry(t, h, "e2", "GET", "https://other.example.com/hls/seg1.ts", 200, time.Now())
-	cfg := &MatchConfig{IgnoreHosts: []string{"live.example.com"}}
+	cfg := &MatchConfig{
+		{Match: MatchFields{Host: &Match{kind: matchExact, val: "live.example.com"}}, Ignore: true},
+	}
 
 	entry, result, _, _ := rs.MatchDetailed("GET", "https://live.example.com/hls/master.m3u8", cfg)
 	if result != ResultIgnored {
@@ -443,7 +457,9 @@ func TestMatchDetailed_IgnoreHost(t *testing.T) {
 func TestMatchDetailed_IgnoreHostWithPort(t *testing.T) {
 	rs, h := newReplay(t)
 	saveTestEntry(t, h, "e1", "GET", "https://live.example.com:8443/hls/master.m3u8", 200, time.Now())
-	cfg := &MatchConfig{IgnoreHosts: []string{"live.example.com:8443"}}
+	cfg := &MatchConfig{
+		{Match: MatchFields{Host: &Match{kind: matchExact, val: "live.example.com:8443"}}, Ignore: true},
+	}
 
 	_, result, _, _ := rs.MatchDetailed("GET", "https://live.example.com:8443/hls/master.m3u8", cfg)
 	if result != ResultIgnored {
@@ -461,7 +477,9 @@ func TestMatchDetailed_IgnoredHostDrainsQueue(t *testing.T) {
 	rs, h := newReplay(t)
 	saveTestEntry(t, h, "e1", "GET", "https://ads.example.com/banner.js", 200, time.Now())
 	saveTestEntry(t, h, "e2", "GET", "https://live.example.com/hls/seg1.ts", 200, time.Now().Add(time.Second))
-	cfg := &MatchConfig{IgnoreHosts: []string{"ads.example.com"}}
+	cfg := &MatchConfig{
+		{Match: MatchFields{Host: &Match{kind: matchExact, val: "ads.example.com"}}, Ignore: true},
+	}
 
 	// Request for the non-ignored host - should drain the ignored entry and match e2.
 	entry, result, _, _ := rs.MatchDetailed("GET", "https://live.example.com/hls/seg1.ts", cfg)
@@ -484,7 +502,9 @@ func TestMatchDetailed_MixedQueueExhaustion(t *testing.T) {
 	saveTestEntry(t, h, "e1", "GET", "https://ads.example.com/banner.js", 200, time.Now())
 	saveTestEntry(t, h, "e2", "GET", "https://ads.example.com/tracker.js", 200, time.Now().Add(time.Second))
 	saveTestEntry(t, h, "e3", "GET", "https://live.example.com/hls/seg1.ts", 200, time.Now().Add(2*time.Second))
-	cfg := &MatchConfig{IgnoreHosts: []string{"ads.example.com"}}
+	cfg := &MatchConfig{
+		{Match: MatchFields{Host: &Match{kind: matchExact, val: "ads.example.com"}}, Ignore: true},
+	}
 
 	// Consume e3 (the only non-ignored entry).
 	entry, result, _, _ := rs.MatchDetailed("GET", "https://live.example.com/hls/seg1.ts", cfg)
@@ -503,7 +523,9 @@ func TestMatchDetailed_IgnoredRequestWithPendingNonIgnored(t *testing.T) {
 	rs, h := newReplay(t)
 	saveTestEntry(t, h, "e1", "GET", "https://ads.example.com/banner.js", 200, time.Now())
 	saveTestEntry(t, h, "e2", "GET", "https://live.example.com/hls/seg1.ts", 200, time.Now().Add(time.Second))
-	cfg := &MatchConfig{IgnoreHosts: []string{"ads.example.com"}}
+	cfg := &MatchConfig{
+		{Match: MatchFields{Host: &Match{kind: matchExact, val: "ads.example.com"}}, Ignore: true},
+	}
 
 	// Request from ignored host - e1 gets drained, e2 remains pending but
 	// since the request itself is ignored, result is ResultIgnored.
@@ -527,7 +549,9 @@ func TestMatchDetailed_IgnoredHostProgress(t *testing.T) {
 	saveTestEntry(t, h, "e1", "GET", "https://ads.example.com/banner.js", 200, time.Now())
 	saveTestEntry(t, h, "e2", "GET", "https://ads.example.com/tracker.js", 200, time.Now().Add(time.Second))
 	saveTestEntry(t, h, "e3", "GET", "https://live.example.com/hls/seg1.ts", 200, time.Now().Add(2*time.Second))
-	cfg := &MatchConfig{IgnoreHosts: []string{"ads.example.com"}}
+	cfg := &MatchConfig{
+		{Match: MatchFields{Host: &Match{kind: matchExact, val: "ads.example.com"}}, Ignore: true},
+	}
 
 	// Consume e3 - e1 and e2 should be drained in the same call.
 	rs.MatchDetailed("GET", "https://live.example.com/hls/seg1.ts", cfg)

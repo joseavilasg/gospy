@@ -1268,7 +1268,7 @@ function buildReplayResponseTab(detail) {
   let statusHtml = `<pre>${status}</pre>`;
   if (ev.result === 'miss') statusHtml = `<pre>${status} — replay miss</pre>`;
   if (ev.result === 'exhausted') statusHtml = `<pre>${status} — replay exhausted</pre>`;
-  if (ev.result === 'ignored') statusHtml = `<pre>${status} — host ignored (ignore_hosts)</pre>`;
+  if (ev.result === 'ignored') statusHtml = `<pre>${status} — ignored</pre>`;
 
   let headersHtml;
   let bodyHtml = '';
@@ -1319,18 +1319,27 @@ export function renderReplayMatch(resp, ctx, keepScroll) {
   const result = (ctx && ctx.result) || '';
   const seq = (ctx && ctx.seq) || 0;
   const selected = entries.find(c => c.entryId === resp.selectedEntryId);
-  const ignored = (resp?.matchConfig?.ignore_query_params) || [];
-  const hostRules = (resp?.matchConfig?.host_rules) || [];
+  const ignored = (resp?.matchConfig) || [];
 
   let title = 'Select a candidate to compare';
   if (result === 'hit') title = `Matched · seq ${seq} · recorded`;
   else if (total.matching === 0 && resp.scope === 'all') title = 'No candidate shares this host+path — showing all pending';
 
   const ignoredParts = [];
-  if (ignored.length > 0) ignoredParts.push(`params: ${escapeHtml(ignored.join(', '))}`);
-  for (const hr of hostRules) {
-    if (hr.ignore_query_params && hr.ignore_query_params.length > 0) {
-      ignoredParts.push(`${escapeHtml(hr.host)}${hr.path_prefix ? hr.path_prefix : ''}: ${escapeHtml(hr.ignore_query_params.join(', '))}`);
+  for (const rule of ignored) {
+    if (rule.ignore_query_params && rule.ignore_query_params.length > 0) {
+      const m = rule.match || {};
+      let label = '';
+      if (m.host) {
+        const hv = m.host.exact || m.host.prefix || m.host.suffix || '';
+        label = escapeHtml(hv);
+      }
+      if (m.path) {
+        const pv = m.path.exact || m.path.prefix || m.path.suffix || '';
+        label += escapeHtml(pv);
+      }
+      if (!label) label = '*';
+      ignoredParts.push(`${label}: ${escapeHtml(rule.ignore_query_params.join(', '))}`);
     }
   }
   const ignoredNote = ignoredParts.length > 0

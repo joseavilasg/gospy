@@ -74,7 +74,7 @@ func (r *ReplayStore) MatchDetailed(method, rawURL string, cfg *MatchConfig) (*h
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	requestIgnored := r.isIgnoredHost(rawURL, cfg)
+	requestIgnored := IsIgnored(rawURL, cfg)
 
 	r.ensureQueue(cfg)
 	key := matchKey(method, rawURL, cfg)
@@ -84,7 +84,7 @@ func (r *ReplayStore) MatchDetailed(method, rawURL string, cfg *MatchConfig) (*h
 		if r.consumed[i] {
 			continue
 		}
-		if r.isIgnoredHost(le.URL, cfg) {
+		if IsIgnored(le.URL, cfg) {
 			r.consumed[i] = true
 			continue
 		}
@@ -161,7 +161,7 @@ func normalizeURL(rawURL string, cfg *MatchConfig) string {
 		}
 	}
 	if cfg != nil {
-		if keys := cfg.EffectiveIgnoreParams(u.Host, u.Path); len(keys) > 0 {
+		if keys := EffectiveIgnoreParams(rawURL, cfg); len(keys) > 0 {
 			q := u.Query()
 			for _, key := range keys {
 				q.Del(key)
@@ -174,23 +174,4 @@ func normalizeURL(rawURL string, cfg *MatchConfig) string {
 		result += "?" + u.RawQuery
 	}
 	return result
-}
-
-// isIgnoredHost reports whether the request URL's host (lowercased, including
-// port when non-default) is in the cfg.IgnoreHosts list.
-func (r *ReplayStore) isIgnoredHost(rawURL string, cfg *MatchConfig) bool {
-	if cfg == nil || len(cfg.IgnoreHosts) == 0 {
-		return false
-	}
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Host == "" {
-		return false
-	}
-	host := strings.ToLower(u.Host)
-	for _, h := range cfg.IgnoreHosts {
-		if strings.ToLower(h) == host {
-			return true
-		}
-	}
-	return false
 }

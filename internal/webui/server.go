@@ -934,10 +934,19 @@ func (s *Server) handleReplayStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.replayStarter.StartNewRun(&cfg)
+	var ignored, paramRules int
+	for _, r := range cfg {
+		if r.Ignore {
+			ignored++
+		}
+		if len(r.IgnoreQueryParams) > 0 {
+			paramRules++
+		}
+	}
 	s.writeJSON(w, map[string]interface{}{
-		"ignored_params": len(cfg.IgnoreQueryParams),
-		"ignore_hosts":   len(cfg.IgnoreHosts),
-		"host_rules":     len(cfg.HostRules),
+		"rules":       len(cfg),
+		"ignored":     ignored,
+		"param_rules": paramRules,
 	})
 }
 

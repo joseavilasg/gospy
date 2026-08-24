@@ -87,7 +87,7 @@ func TestDiffURLHostPathMismatch(t *testing.T) {
 }
 
 func TestDiffURLIgnored(t *testing.T) {
-	cfg := &MatchConfig{IgnoreQueryParams: []string{"token"}}
+	cfg := &MatchConfig{{Match: MatchFields{}, IgnoreQueryParams: []string{"token"}}}
 	d := DiffURL(
 		"https://api.example.com/endpoint?token=abc&id=123",
 		"https://api.example.com/endpoint?token=xyz&id=123",
@@ -109,9 +109,7 @@ func TestDiffURLIgnored(t *testing.T) {
 }
 
 func TestDiffURLEncodingConsistency(t *testing.T) {
-	// %20 and + canonicalize identically once the query is re-encoded under a
-	// config with ignores, so the diff must report a match.
-	cfg := &MatchConfig{IgnoreQueryParams: []string{"sig"}}
+	cfg := &MatchConfig{{Match: MatchFields{}, IgnoreQueryParams: []string{"sig"}}}
 	d := DiffURL(
 		"https://api.example.com/x?a=hello%20world&sig=1",
 		"https://api.example.com/x?a=hello+world&sig=2",
@@ -152,7 +150,7 @@ func TestDiffURLSchemeLess(t *testing.T) {
 // match keys being equal (same method), so the diff never shows a "clean"
 // candidate the queue would not have matched.
 func TestDiffCountAgreesWithMatchKey(t *testing.T) {
-	cfg := &MatchConfig{IgnoreQueryParams: []string{"token"}}
+	cfg := &MatchConfig{{Match: MatchFields{}, IgnoreQueryParams: []string{"token"}}}
 	cases := []struct {
 		incoming, recorded string
 		agree              bool
@@ -177,7 +175,9 @@ func TestDiffCountAgreesWithMatchKey(t *testing.T) {
 
 func TestMatchConfigRoundtrip(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &MatchConfig{IgnoreQueryParams: []string{"token", "ts"}}
+	cfg := &MatchConfig{
+		{Match: MatchFields{}, IgnoreQueryParams: []string{"token", "ts"}},
+	}
 	if err := WriteMatchConfig(dir, cfg); err != nil {
 		t.Fatalf("WriteMatchConfig: %v", err)
 	}
@@ -185,8 +185,12 @@ func TestMatchConfigRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadMatchConfig: %v", err)
 	}
-	if len(got.IgnoreQueryParams) != 2 || got.IgnoreQueryParams[0] != "token" || got.IgnoreQueryParams[1] != "ts" {
-		t.Fatalf("unexpected roundtrip config: %+v", got)
+	if got == nil || len(*got) != 1 {
+		t.Fatalf("expected 1 rule, got %+v", got)
+	}
+	r := (*got)[0]
+	if len(r.IgnoreQueryParams) != 2 || r.IgnoreQueryParams[0] != "token" || r.IgnoreQueryParams[1] != "ts" {
+		t.Fatalf("unexpected roundtrip config: %+v", r)
 	}
 }
 
@@ -195,14 +199,16 @@ func TestMatchConfigMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadMatchConfig on missing file: %v", err)
 	}
-	if cfg == nil || len(cfg.IgnoreQueryParams) != 0 {
+	if cfg == nil || len(*cfg) != 0 {
 		t.Fatalf("expected empty config, got %+v", cfg)
 	}
 }
 
 func TestReplayRunWritesMatchConfig(t *testing.T) {
 	rs, h, logRoot := newLoggingReplayServer(t)
-	cfg := &MatchConfig{IgnoreQueryParams: []string{"sig"}}
+	cfg := &MatchConfig{
+		{Match: MatchFields{}, IgnoreQueryParams: []string{"sig"}},
+	}
 	rs.StartNewRun(cfg)
 
 	if err := h.Save(&history.Entry{
@@ -231,8 +237,12 @@ func TestReplayRunWritesMatchConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadMatchConfig: %v", err)
 	}
-	if len(got.IgnoreQueryParams) != 1 || got.IgnoreQueryParams[0] != "sig" {
-		t.Fatalf("unexpected persisted config: %+v", got)
+	if got == nil || len(*got) != 1 {
+		t.Fatalf("expected 1 rule, got %+v", got)
+	}
+	r := (*got)[0]
+	if len(r.IgnoreQueryParams) != 1 || r.IgnoreQueryParams[0] != "sig" {
+		t.Fatalf("unexpected persisted config: %+v", r)
 	}
 }
 
@@ -265,8 +275,12 @@ func TestDiffURLHostRules(t *testing.T) {
 	incoming := "https://live.example.com/hls/master.m3u8?uid=123&ver=2&ts=99"
 	recorded := "https://live.example.com/hls/master.m3u8?uid=456&ver=2&ts=99"
 	cfg := &MatchConfig{
-		HostRules: []HostRule{
-			{Host: "live.example.com", PathPrefix: "/hls/", IgnoreQueryParams: []string{"uid"}},
+		{
+			Match: MatchFields{
+				Host: &Match{kind: matchExact, val: "live.example.com"},
+				Path: &Match{kind: matchPrefix, val: "/hls/"},
+			},
+			IgnoreQueryParams: []string{"uid"},
 		},
 	}
 	diff := DiffURL(incoming, recorded, cfg)
@@ -299,8 +313,12 @@ func TestDiffURLHostRulesNoMatch(t *testing.T) {
 	incoming := "https://other.example.com/hls/master.m3u8?uid=123"
 	recorded := "https://other.example.com/hls/master.m3u8?uid=456"
 	cfg := &MatchConfig{
-		HostRules: []HostRule{
-			{Host: "live.example.com", PathPrefix: "/hls/", IgnoreQueryParams: []string{"uid"}},
+		{
+			Match: MatchFields{
+				Host: &Match{kind: matchExact, val: "live.example.com"},
+				Path: &Match{kind: matchPrefix, val: "/hls/"},
+			},
+			IgnoreQueryParams: []string{"uid"},
 		},
 	}
 	diff := DiffURL(incoming, recorded, cfg)
@@ -327,8 +345,10 @@ func TestReplayIgnoredHost(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	// Override match config with ignore_hosts.
-	rs.cfg = &MatchConfig{IgnoreHosts: []string{"live.example.com"}}
+	// Override match config with ignore rule for this host.
+	rs.cfg = &MatchConfig{
+		{Match: MatchFields{Host: &Match{kind: matchExact, val: "live.example.com"}}, Ignore: true},
+	}
 
 	resp := callHandleRequest(t, rs, "GET", "https://live.example.com/hls/master.m3u8")
 	if resp == nil {

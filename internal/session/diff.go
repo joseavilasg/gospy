@@ -79,7 +79,7 @@ func decompose(rawURL string, cfg *MatchConfig) (hostPath string, pairs, ignored
 
 	ignore := make(map[string]bool)
 	if cfg != nil {
-		for _, k := range cfg.EffectiveIgnoreParams(u.Host, u.Path) {
+		for _, k := range EffectiveIgnoreParams(rawURL, cfg) {
 			ignore[k] = true
 		}
 	}
