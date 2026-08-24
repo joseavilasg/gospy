@@ -1089,9 +1089,9 @@ export function renderReplayFeed(opts) {
   }
 }
 
-export function setReplayFeed(events, hasMore) {
+export function setReplayFeed(events, hasMore, preserveScroll) {
   const feed = document.getElementById('replayFeed');
-  if (feed) feed.scrollTop = 0;
+  if (feed && !preserveScroll) feed.scrollTop = 0;
   _feedEvents = events;
   _feedHasMore = hasMore;
   _feedOffsets = null;

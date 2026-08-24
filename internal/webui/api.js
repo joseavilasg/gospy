@@ -293,6 +293,7 @@ export function getFeedFilters() {
 }
 
 export async function loadReplayFeed(runId) {
+  const sameRun = feedRunId === runId;
   feedRunId = runId;
   if (!runId) { clearReplayFeed(); return; }
   try {
@@ -301,7 +302,7 @@ export async function loadReplayFeed(runId) {
     if (_feedHostFilter) url += `&host=${encodeURIComponent(_feedHostFilter)}`;
     const resp = await fetch(url);
     const data = await resp.json();
-    setReplayFeed(data.events || [], !!data.hasMore);
+    setReplayFeed(data.events || [], !!data.hasMore, sameRun);
   } catch (e) {
     console.error('Failed to load replay feed:', e);
     clearReplayFeed();
