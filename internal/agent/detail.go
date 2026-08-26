@@ -9,7 +9,13 @@ import (
 	"gospy/internal/history"
 )
 
-const hexDumpMaxLines = 20
+const (
+	hexDumpMaxLines = 20
+	// maxBodyPreview caps the body text loaded from a file for the agent MCP.
+	// 64 KB keeps context usage reasonable while covering most JSON/HTML
+	// responses; larger bodies get a truncation marker.
+	maxBodyPreview = 64 * 1024
+)
 
 // EntryDetail returns a copy of the entry as served to the agent: every header
 // set runs through SanitizeHeaders (unless replayMode is true, where raw
@@ -47,6 +53,8 @@ func sanitizeRequestRecord(dir string, rec history.RequestRecord, sanitize bool)
 	}
 	if rec.BodyFile != "" && rec.IsBinaryBody {
 		rec.BodyHex = readHexDump(dir, rec.BodyFile)
+	} else if rec.BodyFile != "" && rec.Body == "" {
+		rec.Body = readBodyFile(dir, rec.BodyFile)
 	}
 	return rec
 }
@@ -60,6 +68,8 @@ func sanitizeResponseRecord(dir string, rec history.ResponseRecord, sanitize boo
 	}
 	if rec.BodyFile != "" && rec.IsBinaryBody {
 		rec.BodyHex = readHexDump(dir, rec.BodyFile)
+	} else if rec.BodyFile != "" && rec.Body == "" {
+		rec.Body = readBodyFile(dir, rec.BodyFile)
 	}
 	return rec
 }
@@ -78,6 +88,20 @@ func readHexDump(dir, bodyFile string) string {
 		return ""
 	}
 	return generateHexDump(data, hexDumpMaxLines)
+}
+
+// readBodyFile reads up to maxBodyPreview bytes from a body file stored in
+// the bin/ directory. Returns a truncated string with a marker when the file
+// exceeds the limit.
+func readBodyFile(dir, bodyFile string) string {
+	data, err := os.ReadFile(filepath.Join(dir, "bin", bodyFile))
+	if err != nil {
+		return ""
+	}
+	if len(data) > maxBodyPreview {
+		return string(data[:maxBodyPreview]) + "\n... [truncated - body too large]"
+	}
+	return string(data)
 }
 
 // generateHexDump mirrors the WebUI's hex dump rendering.

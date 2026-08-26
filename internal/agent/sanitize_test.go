@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -209,5 +211,152 @@ func TestEntryDetail_ReplayMode_NoSanitize(t *testing.T) {
 	got2 := EntryDetail(hist.Dir(), e)
 	if got2.Request.Headers["Authorization"][0] == "Bearer realtoken123" {
 		t.Error("default mode must still sanitize")
+	}
+}
+
+func TestEntryDetail_LoadsBodyFromDiskFile(t *testing.T) {
+	hist := newTestHistory(t)
+
+	bodyContent := `{"data":"from disk","items":[1,2,3]}`
+	binFile, err := hist.SaveBinaryBody("disk-entry", "resp", []byte(bodyContent))
+	if err != nil {
+		t.Fatalf("SaveBinaryBody: %v", err)
+	}
+
+	e := &history.Entry{
+		ID: "disk-entry",
+		Request: history.RequestRecord{
+			Method: "GET",
+			URL:    "http://api.example.com/data",
+			Host:   "api.example.com",
+		},
+		Response: &history.ResponseRecord{
+			Status:   200,
+			Headers:  map[string][]string{"Content-Type": {"application/json"}},
+			BodyFile: binFile,
+			BodySize: int64(len(bodyContent)),
+		},
+	}
+
+	got := EntryDetail(hist.Dir(), e)
+
+	if got.Response.Body != bodyContent {
+		t.Errorf("body not loaded from file, got %q", got.Response.Body)
+	}
+}
+
+func TestEntryDetail_LoadsRequestBodyFromDiskFile(t *testing.T) {
+	hist := newTestHistory(t)
+
+	bodyContent := "raw POST body payload"
+	binFile, err := hist.SaveBinaryBody("req-body-entry", "req", []byte(bodyContent))
+	if err != nil {
+		t.Fatalf("SaveBinaryBody: %v", err)
+	}
+
+	e := &history.Entry{
+		ID: "req-body-entry",
+		Request: history.RequestRecord{
+			Method:   "POST",
+			URL:      "http://api.example.com/submit",
+			Host:     "api.example.com",
+			BodyFile: binFile,
+		},
+		Response: &history.ResponseRecord{Status: 200},
+	}
+
+	got := EntryDetail(hist.Dir(), e)
+
+	if got.Request.Body != bodyContent {
+		t.Errorf("request body not loaded from file, got %q", got.Request.Body)
+	}
+}
+
+func TestEntryDetail_BodyFileTruncation(t *testing.T) {
+	hist := newTestHistory(t)
+
+	bigBody := strings.Repeat("x", maxBodyPreview+1000)
+	binFile, err := hist.SaveBinaryBody("big-entry", "resp", []byte(bigBody))
+	if err != nil {
+		t.Fatalf("SaveBinaryBody: %v", err)
+	}
+
+	e := &history.Entry{
+		ID: "big-entry",
+		Request: history.RequestRecord{
+			Method: "GET",
+			URL:    "http://api.example.com/huge",
+			Host:   "api.example.com",
+		},
+		Response: &history.ResponseRecord{
+			Status:   200,
+			BodyFile: binFile,
+			BodySize: int64(len(bigBody)),
+		},
+	}
+
+	got := EntryDetail(hist.Dir(), e)
+
+	if len(got.Response.Body) <= maxBodyPreview {
+		t.Errorf("expected truncation, body length %d <= maxBodyPreview %d", len(got.Response.Body), maxBodyPreview)
+	}
+	if !strings.Contains(got.Response.Body, "... [truncated - body too large]") {
+		t.Error("truncation marker missing")
+	}
+}
+
+func TestEntryDetail_BinaryBodyStillGetsHexDump(t *testing.T) {
+	hist := newTestHistory(t)
+
+	e := &history.Entry{
+		ID: "binary-entry",
+		Request: history.RequestRecord{
+			Method: "GET",
+			URL:    "http://api.example.com/binary",
+			Host:   "api.example.com",
+		},
+		Response: &history.ResponseRecord{
+			Status:       200,
+			BodyFile:     "binary-entry-resp.bin",
+			IsBinaryBody: true,
+			BodySize:     4,
+		},
+	}
+
+	// Write the binary file to disk.
+	binDir := filepath.Join(hist.Dir(), "bin")
+	os.MkdirAll(binDir, 0755)
+	os.WriteFile(filepath.Join(binDir, "binary-entry-resp.bin"), []byte{0xDE, 0xAD, 0xBE, 0xEF}, 0644)
+
+	got := EntryDetail(hist.Dir(), e)
+
+	if got.Response.Body != "" {
+		t.Errorf("binary body must not be loaded as text, got %q", got.Response.Body)
+	}
+	if !strings.Contains(got.Response.BodyHex, "de ad be ef") {
+		t.Errorf("binary body hex dump expected, got %q", got.Response.BodyHex)
+	}
+}
+
+func TestEntryDetail_BodyFileNotFoundGraceful(t *testing.T) {
+	hist := newTestHistory(t)
+
+	e := &history.Entry{
+		ID: "missing-file-entry",
+		Request: history.RequestRecord{
+			Method: "GET",
+			URL:    "http://api.example.com/missing",
+			Host:   "api.example.com",
+		},
+		Response: &history.ResponseRecord{
+			Status:   200,
+			BodyFile: "nonexistent-file.bin",
+		},
+	}
+
+	got := EntryDetail(hist.Dir(), e)
+
+	if got.Response.Body != "" {
+		t.Errorf("missing file should yield empty body, got %q", got.Response.Body)
 	}
 }
