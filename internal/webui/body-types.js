@@ -80,6 +80,8 @@ export function postRenderBody(target) {
   const type = detectBodyTypeFromDOM(target);
   const config = getTypeConfig(type);
   if (config?.postRender) config.postRender(target);
+  const s = JSON.parse(localStorage.getItem('gospy-panels') || '{}');
+  if (s.bodyView && s.bodyView !== 'pretty') setBodyView(target, s.bodyView);
 }
 
 export function isEditable(bodyType) {
@@ -114,6 +116,9 @@ export function setBodyView(target, view) {
   const type = detectBodyTypeFromDOM(target);
   const config = getTypeConfig(type);
   if (config?.setView) config.setView(target, view);
+  const s = JSON.parse(localStorage.getItem('gospy-panels') || '{}');
+  s.bodyView = view;
+  localStorage.setItem('gospy-panels', JSON.stringify(s));
 }
 
 export function copyBody(target) {

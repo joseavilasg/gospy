@@ -268,7 +268,8 @@ function buildBodyViewer(target, entry, body, rawBody, compression, hasEdited, e
   const bodyType = detectBodyType(contentType, entry, isBinaryBody);
   if (!isEditable(bodyType)) canEdit = false;
 
-  const viewModeHtml = `<button class="body-tool body-view active" data-action="set-view" data-target="${target}" data-view="pretty">Pretty</button><button class="body-tool body-view" data-action="set-view" data-target="${target}" data-view="raw">Raw</button>`;
+  const savedBodyView = getPanelState('bodyView') || 'pretty';
+  const viewModeHtml = `<button class="body-tool body-view${savedBodyView === 'pretty' ? ' active' : ''}" data-action="set-view" data-target="${target}" data-view="pretty">Pretty</button><button class="body-tool body-view${savedBodyView === 'raw' ? ' active' : ''}" data-action="set-view" data-target="${target}" data-view="raw">Raw</button>`;
 
   const hasOtherContent = hasEdited || (isModified && modifiedBody) || (isMocked && mockedBody);
   const defaultContent = (isMocked && mockedBody) ? 'mocked' : 'original';
@@ -700,6 +701,27 @@ export function renderFocusedList() {
     `).join('');
 }
 
+function _savePanels() {
+  const s = JSON.parse(localStorage.getItem('gospy-panels') || '{}');
+  s.replay = document.getElementById('replayPanel')?.classList.contains('open') || false;
+  s.rules = document.getElementById('rulesPanel')?.classList.contains('open') || false;
+  s.ignored = document.getElementById('ignoredPanel')?.classList.contains('open') || false;
+  s.focused = document.getElementById('focusedPanel')?.classList.contains('open') || false;
+  s.matchConfig = document.getElementById('matchConfigSidebar')?.classList.contains('open') || false;
+  localStorage.setItem('gospy-panels', JSON.stringify(s));
+}
+
+function _savePanelView(key, val) {
+  const s = JSON.parse(localStorage.getItem('gospy-panels') || '{}');
+  s[key] = val;
+  localStorage.setItem('gospy-panels', JSON.stringify(s));
+}
+
+export function getPanelState(key) {
+  const s = JSON.parse(localStorage.getItem('gospy-panels') || '{}');
+  return s[key];
+}
+
 function closeAllPanels() {
   document.getElementById('ignoredPanel').classList.remove('open');
   document.getElementById('focusedPanel').classList.remove('open');
@@ -712,6 +734,7 @@ export function toggleReplayPanel() {
   const wasOpen = panel.classList.contains('open');
   closeAllPanels();
   if (!wasOpen) panel.classList.add('open');
+  _savePanels();
 }
 
 export function toggleIgnoredPanel() {
@@ -719,6 +742,7 @@ export function toggleIgnoredPanel() {
   const wasOpen = panel.classList.contains('open');
   closeAllPanels();
   if (!wasOpen) panel.classList.add('open');
+  _savePanels();
 }
 
 export function toggleFocusedPanel() {
@@ -726,6 +750,7 @@ export function toggleFocusedPanel() {
   const wasOpen = panel.classList.contains('open');
   closeAllPanels();
   if (!wasOpen) panel.classList.add('open');
+  _savePanels();
 }
 
 export function renderRulesList() {
@@ -787,6 +812,7 @@ export function toggleRulesPanel() {
   const wasOpen = panel.classList.contains('open');
   closeAllPanels();
   if (!wasOpen) panel.classList.add('open');
+  _savePanels();
 }
 
 export function openRuleModal(rule) {
@@ -1626,7 +1652,7 @@ export function renderMatchConfigSidebar(matchConfig, highlightIdx) {
   body._highlightIdx = highlightIdx;
 
   const activeTab = document.querySelector('.match-config-tab.active');
-  const view = (activeTab && activeTab.dataset.view) || 'pretty';
+  const view = getPanelState('matchConfigView') || (activeTab && activeTab.dataset.view) || 'pretty';
   body._matchConfigView = view;
   if (view === 'raw') {
     setMatchConfigView('raw');
@@ -1637,6 +1663,7 @@ export function setMatchConfigView(view) {
   const body = document.getElementById('matchConfigBody');
   if (!body) return;
   body._matchConfigView = view;
+  _savePanelView('matchConfigView', view);
 
   if (view === 'raw') {
     let container = body.querySelector('.match-config-raw');

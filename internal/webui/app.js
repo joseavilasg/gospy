@@ -1,6 +1,6 @@
 import { setFilterText, setFocusEnabled, setAgentPreview, setAgentEnabled, setAgentExposed, agentExposed, applyFullList, setLastTimestamp, selectedId, setSelectedId, requests, rules, setRules, setSignatureCache, visibleCount, getReplayMode, setReplayMode, setReplayServed, setReplayComplete, markReplayServed } from './state.js';
 import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch, setOnSelectedUpdated, loadMore, setOnReplayUpdate, setOnRecordingStoppedUpdate, loadReplayRuns, loadReplayFeed, loadReplayFeedOlder, loadReplayEventDetail, loadReplayCandidates, loadReplayCandidateDiff, setFeedResultFilter, setFeedHostFilter, loadReplayFilterValues } from './api.js';
-import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, toggleReplayPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, openRuleModalFromReplayEvent, buildResponseTab, ITEM_HEIGHT, appendReplayFeedEvent, onReplayFeedScroll, setOnReplayFeedLoadOlder, renderReplayEventDetail, renderReplayMatch, renderMatchCandidates, selectReplayFeedEvent, setReplayEntryView, renderUrlViewInner, loadSignatureInfo, renderMatchConfigSidebar, setMatchConfigView, highlightMatchConfigRule } from './render.js';
+import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, toggleReplayPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, openRuleModalFromReplayEvent, buildResponseTab, ITEM_HEIGHT, appendReplayFeedEvent, onReplayFeedScroll, setOnReplayFeedLoadOlder, renderReplayEventDetail, renderReplayMatch, renderMatchCandidates, selectReplayFeedEvent, setReplayEntryView, renderUrlViewInner, loadSignatureInfo, renderMatchConfigSidebar, setMatchConfigView, highlightMatchConfigRule, getPanelState } from './render.js';
 import { parseRoute, buildHash } from './routes.js';
 import { makeResizable } from './resize.js';
 import { initHeader, setHeaderMode } from './header.js';
@@ -274,6 +274,9 @@ function toggleMatchConfigSidebar() {
   const sidebar = document.getElementById('matchConfigSidebar');
   if (sidebar) sidebar.classList.toggle('open', _matchConfigOpen);
   if (_matchConfigOpen) renderMatchConfigSidebarFromDetail();
+  const s = JSON.parse(localStorage.getItem('gospy-panels') || '{}');
+  s.matchConfig = _matchConfigOpen;
+  localStorage.setItem('gospy-panels', JSON.stringify(s));
 }
 
 function openMatchConfigSidebar(ruleIdx) {
@@ -294,7 +297,9 @@ function initMatchConfigSidebar() {
   if (closeBtn) closeBtn.addEventListener('click', toggleMatchConfigSidebar);
 
   const tabs = document.querySelectorAll('.match-config-tab');
+  const savedView = getPanelState('matchConfigView') || 'pretty';
   tabs.forEach(tab => {
+    tab.classList.toggle('active', tab.dataset.view === savedView);
     tab.addEventListener('click', () => {
       tabs.forEach(t => t.classList.remove('active'));
       tab.classList.add('active');
@@ -315,6 +320,9 @@ function syncReplay(rp) {
     _matchConfigOpen = false;
     const mcs = document.getElementById('matchConfigSidebar');
     if (mcs) mcs.classList.remove('open');
+    const s = JSON.parse(localStorage.getItem('gospy-panels') || '{}');
+    s.matchConfig = false;
+    localStorage.setItem('gospy-panels', JSON.stringify(s));
     setHeaderMode('normal');
     document.getElementById('replayPanel').classList.remove('open');
     return;
@@ -501,6 +509,7 @@ function showReplayDetail(detail, activeTab) {
   _lastDetailEntry = null;
   renderReplayEventDetail(detail, activeTab);
   renderCurrentContent('response');
+  if (_matchConfigOpen) renderMatchConfigSidebarFromDetail();
 }
 
 // ── Browser history routing ────────────────────────────────────────────────
@@ -559,7 +568,10 @@ function applyRouteFull(route) {
       break;
     case 'replay': {
       const panel = document.getElementById('replayPanel');
-      if (panel && !panel.classList.contains('open')) toggleReplayPanel();
+      if (panel && !panel.classList.contains('open')) {
+        const saved = JSON.parse(localStorage.getItem('gospy-panels') || '{}');
+        if (saved.replay !== false) panel.classList.add('open');
+      }
       ensureReplayFeedView(route.run).then(() => selectReplayFeedEvent(route.run, route.seq));
       loadReplayEventDetail(route.run, route.seq).then(detail => {
         showReplayDetail(detail, route.tab);
@@ -1432,9 +1444,22 @@ document.getElementById('container').classList.toggle('list-hidden', listHidden)
 document.getElementById('toggleListBtn').classList.toggle('active', !listHidden);
 initMatchConfigSidebar();
 
+function restorePanelState() {
+  const s = JSON.parse(localStorage.getItem('gospy-panels') || '{}');
+  const ids = { replay: 'replayPanel', rules: 'rulesPanel', ignored: 'ignoredPanel', focused: 'focusedPanel' };
+  for (const [key, id] of Object.entries(ids)) {
+    if (s[key]) document.getElementById(id)?.classList.add('open');
+  }
+  if (s.matchConfig && getReplayMode()) {
+    _matchConfigOpen = true;
+    document.getElementById('matchConfigSidebar')?.classList.add('open');
+  }
+}
+
 initTabCoordination(resumeActivity, pauseActivity);
 
 loadRequests().then(() => {
+  restorePanelState();
   applyRoute();
   if (getReplayMode()) {
     loadRules();
