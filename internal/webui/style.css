@@ -3176,7 +3176,7 @@ body.resizing-h {
   display: flex;
   align-items: center;
   gap: var(--sp-5);
-  flex-wrap: wrap;
+  justify-content: space-between;
   border: 1px solid var(--border-subtle);
   border-left: 3px solid var(--accent);
   border-radius: var(--radius-md);
@@ -3201,7 +3201,6 @@ body.resizing-h {
 }
 
 .rule-banner-link {
-  margin-left: auto;
   color: var(--text-muted);
   cursor: pointer;
   white-space: nowrap;
