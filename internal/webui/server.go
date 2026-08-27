@@ -664,6 +664,7 @@ func handleMonacoFile(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.Header().Set("Content-Type", "application/octet-stream")
 	}
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	http.FileServer(http.FS(monacoFS)).ServeHTTP(w, r)
 }
 

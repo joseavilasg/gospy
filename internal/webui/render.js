@@ -1309,6 +1309,24 @@ function buildReplayResponseTab(detail) {
     `;
 }
 
+// ── Match value helpers ────────────────────────────────────────────────────
+// Match.MarshalJSON serializes exact matches as a bare string ("example.com")
+// and prefix/suffix as objects ({prefix: "..."}). These helpers handle both.
+function matchVal(m) {
+  if (typeof m === 'string') return m;
+  if (m) return m.exact || m.prefix || m.suffix || '';
+  return '';
+}
+function matchKind(m) {
+  if (typeof m === 'string') return 'exact';
+  if (m) {
+    if (m.exact) return 'exact';
+    if (m.prefix) return 'prefix';
+    if (m.suffix) return 'suffix';
+  }
+  return '';
+}
+
 export function renderReplayMatch(resp, ctx, keepScroll) {
   const container = document.getElementById('replayMatchContainer');
   if (!container) return;
@@ -1325,32 +1343,91 @@ export function renderReplayMatch(resp, ctx, keepScroll) {
   const result = (ctx && ctx.result) || '';
   const seq = (ctx && ctx.seq) || 0;
   const selected = entries.find(c => c.entryId === resp.selectedEntryId);
-  const ignored = (resp?.matchConfig) || [];
 
   let title = 'Select a candidate to compare';
   if (result === 'hit') title = `Matched · seq ${seq} · recorded`;
+  else if (result === 'ignored') title = 'Host excluded — recorded traffic shown for reference';
   else if (total.matching === 0 && resp.scope === 'all') title = 'No candidate shares this host+path — showing all pending';
 
-  const ignoredParts = [];
-  for (const rule of ignored) {
-    if (rule.ignore_query_params && rule.ignore_query_params.length > 0) {
-      const m = rule.match || {};
-      let label = '';
-      if (m.host) {
-        const hv = m.host.exact || m.host.prefix || m.host.suffix || '';
-        label = escapeHtml(hv);
+  const matchConfig = (ctx && ctx.matchConfig) || [];
+  const eventUrl = (ctx && ctx.url) || '';
+
+  let matchingRuleIdx = -1;
+  if (eventUrl && matchConfig.length > 0) {
+    let parsed;
+    try { parsed = new URL(eventUrl); } catch (_) { parsed = null; }
+    if (parsed) {
+      const eHost = parsed.hostname.toLowerCase();
+      const ePath = parsed.pathname;
+      for (let i = 0; i < matchConfig.length; i++) {
+        const r = matchConfig[i];
+        const m = r.match || {};
+        let hostOk = true;
+        if (m.host) {
+          const hv = matchVal(m.host).toLowerCase();
+          const hk = matchKind(m.host);
+          if (hk === 'exact') hostOk = eHost === hv;
+          else if (hk === 'prefix') hostOk = eHost.startsWith(hv);
+          else if (hk === 'suffix') hostOk = eHost.endsWith(hv);
+        }
+        let pathOk = true;
+        if (m.path) {
+          const pv = matchVal(m.path);
+          const pk = matchKind(m.path);
+          if (pk === 'exact') pathOk = ePath === pv;
+          else if (pk === 'prefix') pathOk = ePath.startsWith(pv);
+          else if (pk === 'suffix') pathOk = ePath.endsWith(pv);
+        }
+        if (hostOk && pathOk) { matchingRuleIdx = i; break; }
       }
-      if (m.path) {
-        const pv = m.path.exact || m.path.prefix || m.path.suffix || '';
-        label += escapeHtml(pv);
-      }
-      if (!label) label = '*';
-      ignoredParts.push(`${label}: ${escapeHtml(rule.ignore_query_params.join(', '))}`);
     }
   }
-  const ignoredNote = ignoredParts.length > 0
-    ? `<span class="replay-config-note" title="query params ignored for this run">ignoring: ${ignoredParts.join(' · ')}</span>`
-    : '';
+
+  let bannerHtml = '';
+  if (matchingRuleIdx >= 0) {
+    const r = matchConfig[matchingRuleIdx];
+    const m = r.match || {};
+    let ruleLabel = '';
+    if (m.host) {
+      const hv = matchVal(m.host);
+      const star = matchKind(m.host) !== 'exact' ? '*' : '';
+      ruleLabel += escapeHtml(hv) + star;
+    }
+    if (m.path) {
+      const pv = matchVal(m.path);
+      const star = matchKind(m.path) !== 'exact' ? '*' : '';
+      ruleLabel += escapeHtml(pv) + star;
+    }
+    if (!ruleLabel) ruleLabel = '*';
+
+    const flagParts = [];
+    if (r.ignore_query_params && r.ignore_query_params.length > 0) {
+      flagParts.push(`ignoring <span class="rule-banner-hl">${escapeHtml(r.ignore_query_params.join(', '))}</span>`);
+    }
+    if (r.ignore) flagParts.push('host excluded (<span class="rule-banner-hl">ignore: true</span>)');
+    if (r.repeat_on_miss) flagParts.push('repeat_on_miss');
+
+    const flagsHtml = flagParts.length > 0 ? ' — ' + flagParts.join(' · ') : '';
+
+    bannerHtml = `
+      <div class="rule-banner">
+        <span class="rule-banner-icon">⚙</span>
+        <span class="rule-banner-text">${ruleLabel}${flagsHtml}</span>
+        <span class="rule-banner-link" data-action="match-config-sidebar" data-rule-idx="${matchingRuleIdx}">View in config →</span>
+      </div>`;
+  } else if (matchConfig.length > 0) {
+    const hasFlags = matchConfig.some(r =>
+      (r.ignore_query_params && r.ignore_query_params.length > 0) || r.ignore || r.repeat_on_miss
+    );
+    if (hasFlags) {
+      bannerHtml = `
+        <div class="rule-banner">
+          <span class="rule-banner-icon">⚙</span>
+          <span class="rule-banner-text">Match config active — <span class="rule-banner-hl">${matchConfig.length} rules</span></span>
+          <span class="rule-banner-link" data-action="match-config-sidebar">View config →</span>
+        </div>`;
+    }
+  }
 
   const segHtml = `
     <div class="match-scope-head">
@@ -1392,7 +1469,8 @@ export function renderReplayMatch(resp, ctx, keepScroll) {
     : '<div class="replay-event-empty">Select a candidate to see its diff.</div>';
 
   container.innerHTML = `
-        <div class="replay-section-title">${escapeHtml(title)}${ignoredNote}</div>
+        ${bannerHtml}
+        <div class="replay-section-title">${escapeHtml(title)}</div>
         ${consumedHtml}
         <div class="match-layout">
             ${listHtml}
@@ -1487,4 +1565,109 @@ export function renderReplayDiff(diff, selected) {
   }).join('');
 
   return `<div class="diff-table">${headerRow}${hostPathRow}${paramsHtml}</div>`;
+}
+
+// ── Match config sidebar ─────────────────────────────────────────────────
+
+export function renderMatchConfigSidebar(matchConfig, highlightIdx) {
+  const body = document.getElementById('matchConfigBody');
+  if (!body) return;
+  if (!matchConfig || matchConfig.length === 0) {
+    body.innerHTML = '<div class="replay-event-empty">No match config for this run.</div>';
+    return;
+  }
+
+  const prettyHtml = matchConfig.map((r, i) => {
+    const m = r.match || {};
+    let hostText = '';
+    if (m.host) {
+      const hv = matchVal(m.host);
+      const kind = matchKind(m.host);
+      hostText = escapeHtml(hv);
+      if (kind !== 'exact') hostText += `<span class="match-config-rule-type">${kind}</span>`;
+    } else {
+      hostText = '<span style="color:var(--text-dim)">*</span>';
+    }
+    let pathText = '';
+    if (m.path) {
+      const pv = matchVal(m.path);
+      const kind = matchKind(m.path);
+      pathText = ` <span class="match-config-rule-path">${escapeHtml(pv)}`;
+      if (kind !== 'exact') pathText += `<span class="match-config-rule-type">${kind}</span>`;
+      pathText += '</span>';
+    }
+
+    const flagParts = [];
+    if (r.ignore_query_params && r.ignore_query_params.length > 0) {
+      flagParts.push(`ignoring: <span class="hl">${escapeHtml(r.ignore_query_params.join(', '))}</span>`);
+    }
+    if (r.ignore) flagParts.push('host excluded (<span class="hl">ignore: true</span>)');
+    if (r.repeat_on_miss) flagParts.push('repeat_on_miss');
+    const flagsHtml = flagParts.length > 0
+      ? `<div class="match-config-rule-flags">${flagParts.join(' · ')}</div>`
+      : '';
+
+    const hlClass = i === highlightIdx ? ' highlight' : '';
+    return `<div class="match-config-rule${hlClass}" data-rule-idx="${i}">
+      <div class="match-config-rule-host">${hostText}${pathText}</div>
+      ${flagsHtml}
+    </div>`;
+  }).join('');
+
+  if (body._monacoEditor) {
+    body._monacoEditor.dispose();
+    body._monacoEditor = null;
+  }
+
+  body.innerHTML = `<div class="match-config-pretty">${prettyHtml}</div>`;
+
+  body._matchConfigRaw = JSON.stringify(matchConfig, null, 2);
+  body._matchConfigData = matchConfig;
+  body._highlightIdx = highlightIdx;
+
+  const activeTab = document.querySelector('.match-config-tab.active');
+  const view = (activeTab && activeTab.dataset.view) || 'pretty';
+  body._matchConfigView = view;
+  if (view === 'raw') {
+    setMatchConfigView('raw');
+  }
+}
+
+export function setMatchConfigView(view) {
+  const body = document.getElementById('matchConfigBody');
+  if (!body) return;
+  body._matchConfigView = view;
+
+  if (view === 'raw') {
+    let container = body.querySelector('.match-config-raw');
+    if (!container) {
+      body.innerHTML = '<div class="match-config-raw" style="height:100%"></div>';
+      container = body.querySelector('.match-config-raw');
+    }
+    if (body._monacoEditor) {
+      body._monacoEditor.layout();
+    } else if (container && typeof createMonacoEditor === 'function') {
+      createMonacoEditor(container, body._matchConfigRaw || '[]', 'json').then(editor => {
+        editor.updateOptions({ readOnly: true, domReadOnly: true });
+        body._monacoEditor = editor;
+      });
+    }
+  } else {
+    if (body._monacoEditor) {
+      body._monacoEditor.dispose();
+      body._monacoEditor = null;
+    }
+    renderMatchConfigSidebar(body._matchConfigData, body._highlightIdx);
+  }
+}
+
+export function highlightMatchConfigRule(idx) {
+  const body = document.getElementById('matchConfigBody');
+  if (!body) return;
+  const rules = body.querySelectorAll('.match-config-rule');
+  rules.forEach((el, i) => {
+    el.classList.toggle('highlight', i === idx);
+  });
+  const target = body.querySelector(`.match-config-rule[data-rule-idx="${idx}"]`);
+  if (target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }

@@ -1,6 +1,6 @@
 import { setFilterText, setFocusEnabled, setAgentPreview, setAgentEnabled, setAgentExposed, agentExposed, applyFullList, setLastTimestamp, selectedId, setSelectedId, requests, rules, setRules, setSignatureCache, visibleCount, getReplayMode, setReplayMode, setReplayServed, setReplayComplete, markReplayServed } from './state.js';
 import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch, setOnSelectedUpdated, loadMore, setOnReplayUpdate, setOnRecordingStoppedUpdate, loadReplayRuns, loadReplayFeed, loadReplayFeedOlder, loadReplayEventDetail, loadReplayCandidates, loadReplayCandidateDiff, setFeedResultFilter, setFeedHostFilter, loadReplayFilterValues } from './api.js';
-import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, toggleReplayPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, openRuleModalFromReplayEvent, buildResponseTab, ITEM_HEIGHT, appendReplayFeedEvent, onReplayFeedScroll, setOnReplayFeedLoadOlder, renderReplayEventDetail, renderReplayMatch, renderMatchCandidates, selectReplayFeedEvent, setReplayEntryView, renderUrlViewInner, loadSignatureInfo } from './render.js';
+import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, toggleReplayPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, openRuleModalFromReplayEvent, buildResponseTab, ITEM_HEIGHT, appendReplayFeedEvent, onReplayFeedScroll, setOnReplayFeedLoadOlder, renderReplayEventDetail, renderReplayMatch, renderMatchCandidates, selectReplayFeedEvent, setReplayEntryView, renderUrlViewInner, loadSignatureInfo, renderMatchConfigSidebar, setMatchConfigView, highlightMatchConfigRule } from './render.js';
 import { parseRoute, buildHash } from './routes.js';
 import { makeResizable } from './resize.js';
 import { initHeader, setHeaderMode } from './header.js';
@@ -136,6 +136,12 @@ initHeader('headerActions', [
     events: { click: toggleRulesPanel },
   },
   {
+    id: 'matchConfigBtn',
+    hiddenIn: ['normal'],
+    html: '<button class="btn" id="matchConfigBtn" title="Match config (replay only)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> Match config</button>',
+    events: { click: toggleMatchConfigSidebar },
+  },
+  {
     id: 'replayChip',
     hiddenIn: ['normal'],
     html: '<button class="btn replay-chip" id="replayChip" title="Replay activity (Ctrl+J)"><span class="replay-chip-label">REPLAY</span> <span class="badge" id="replayChipProgress">0/0</span><span class="replay-chip-exhausted" id="replayChipExhausted" style="display:none">EXHAUSTED</span></button>',
@@ -168,6 +174,43 @@ function applyReplayLayout() {
   if (banner) banner.style.display = 'none';
 }
 
+// ── Match config sidebar ──────────────────────────────────────────────
+let _matchConfigOpen = false;
+
+function toggleMatchConfigSidebar() {
+  _matchConfigOpen = !_matchConfigOpen;
+  const sidebar = document.getElementById('matchConfigSidebar');
+  if (sidebar) sidebar.classList.toggle('open', _matchConfigOpen);
+  if (_matchConfigOpen) renderMatchConfigSidebarFromDetail();
+}
+
+function openMatchConfigSidebar(ruleIdx) {
+  _matchConfigOpen = true;
+  const sidebar = document.getElementById('matchConfigSidebar');
+  if (sidebar) sidebar.classList.add('open');
+  renderMatchConfigSidebarFromDetail();
+  if (ruleIdx != null && ruleIdx >= 0) highlightMatchConfigRule(ruleIdx);
+}
+
+function renderMatchConfigSidebarFromDetail() {
+  const cfg = (_lastReplayDetail && _lastReplayDetail.matchConfig) || null;
+  renderMatchConfigSidebar(cfg);
+}
+
+function initMatchConfigSidebar() {
+  const closeBtn = document.getElementById('matchConfigClose');
+  if (closeBtn) closeBtn.addEventListener('click', toggleMatchConfigSidebar);
+
+  const tabs = document.querySelectorAll('.match-config-tab');
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      tabs.forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      setMatchConfigView(tab.dataset.view);
+    });
+  });
+}
+
 function renderFeedFor(runId) {
   loadReplayFeed(runId);
 }
@@ -177,6 +220,9 @@ function syncReplay(rp) {
   if (!rp) {
     closeReplayStream();
     _activeRunId = null;
+    _matchConfigOpen = false;
+    const mcs = document.getElementById('matchConfigSidebar');
+    if (mcs) mcs.classList.remove('open');
     setHeaderMode('normal');
     document.getElementById('replayPanel').classList.remove('open');
     return;
@@ -320,7 +366,12 @@ function loadMatchTab(run, seq, scope, q, rowsOnly) {
     _matchQueries = {};
   }
   _matchState = { run, seq, scope, q: q || '' };
-  _matchEventCtx = { result: (_lastReplayDetail && _lastReplayDetail.event ? _lastReplayDetail.event.result : '') || '', seq };
+  _matchEventCtx = {
+    result: (_lastReplayDetail && _lastReplayDetail.event ? _lastReplayDetail.event.result : '') || '',
+    seq,
+    url: (_lastReplayDetail && _lastReplayDetail.event ? _lastReplayDetail.event.url : '') || '',
+    matchConfig: (_lastReplayDetail && _lastReplayDetail.matchConfig) || null,
+  };
   return loadReplayCandidates(run, seq, scope, q || '').then(resp => {
     if (scope === 'matching' && resp && resp.total && resp.total.matching === 0 && !(resp.entries && resp.entries.length)) {
       _matchState.scope = 'all';
@@ -526,6 +577,13 @@ async function updateReplayHostFilter(runId) {
 makeResizable(document.getElementById('replayDrag'), document.getElementById('replayPanel'), {
   persistKey: 'gospy-replay-panel-h',
   min: 120,
+});
+
+makeResizable(document.getElementById('matchConfigDrag'), document.getElementById('matchConfigSidebar'), {
+  direction: 'horizontal',
+  persistKey: 'gospy-match-config-sidebar-w',
+  min: 250,
+  max: () => window.innerWidth * 0.5,
 });
 
 document.getElementById('focusAddBtn').addEventListener('click', () => {
@@ -856,6 +914,11 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
         .then(r => r.json()).then(() => refreshDetail())
         .catch(e => console.error('Revert headers failed:', e));
       break;
+    case 'match-config-sidebar': {
+      const idx = parseInt(btn.dataset.ruleIdx, 10);
+      openMatchConfigSidebar(isNaN(idx) ? null : idx);
+      break;
+    }
   }
   if (btn.dataset.action !== 'toggle-menu') {
     closeAllKebabMenus();
@@ -1273,6 +1336,7 @@ document.getElementById('toggleListBtn').addEventListener('click', () => {
 const listHidden = localStorage.getItem('gospy-list-hidden') === 'true';
 document.getElementById('container').classList.toggle('list-hidden', listHidden);
 document.getElementById('toggleListBtn').classList.toggle('active', !listHidden);
+initMatchConfigSidebar();
 
 loadRequests().then(() => {
   applyRoute();
@@ -1811,6 +1875,10 @@ document.addEventListener('keydown', (e) => {
     if (!document.getElementById('replayChip')) return;
     e.preventDefault();
     replayChipClick();
+  } else if (k === 'i') {
+    if (!getReplayMode()) return;
+    e.preventDefault();
+    toggleMatchConfigSidebar();
   }
 });
 
