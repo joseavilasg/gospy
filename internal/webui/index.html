@@ -278,9 +278,18 @@
     </div>
   </div>
 
+  <div class="tab-overlay" id="tabOverlay">
+    <div class="tab-overlay-card">
+      <h3>Gospy is open in another tab</h3>
+      <p>This session has been paused to avoid conflicts.</p>
+      <button id="tabOverlayTakeover">Continue here</button>
+    </div>
+  </div>
+
   <script src="json-viewer.js"></script>
   <script src="monaco/vs/loader.js"></script>
   <script src="monaco-init.js"></script>
+  <script>initMonaco();</script>
   <script type="module" src="app.js"></script>
 </body>
 

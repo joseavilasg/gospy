@@ -13,6 +13,98 @@ let _lastDetailEntry = null;
 let _streamEventSource = null;
 let _streamState = null; // { id, text, truncated, bodySize }
 
+// ── Tab coordination: prevent multiple gospy tabs ────────────────────────
+const _tabId = crypto.randomUUID();
+let _tabRole = 'primary';
+let _tabChannel = null;
+let _heartbeatTimer = null;
+let _activityPaused = false;
+let _onBecamePrimary = null;
+let _onBecameSecondary = null;
+
+function initTabCoordination(onPrimary, onSecondary) {
+  _onBecamePrimary = onPrimary;
+  _onBecameSecondary = onSecondary;
+
+  _tabChannel = new BroadcastChannel('gospy-tab-coordination');
+  _tabChannel.onmessage = (e) => _handleTabMessage(e.data);
+
+  _tabChannel.postMessage({ type: 'new-primary', tabId: _tabId });
+  _startHeartbeat();
+
+  window.addEventListener('beforeunload', () => {
+    _tabChannel.postMessage({ type: 'yield', tabId: _tabId });
+    _stopHeartbeat();
+  });
+
+  document.getElementById('tabOverlayTakeover').addEventListener('click', () => {
+    if (_tabRole === 'secondary') _becomePrimary();
+  });
+}
+
+function _handleTabMessage(msg) {
+  if (msg.tabId === _tabId) return;
+  if (msg.type === 'new-primary' && _tabRole === 'primary') {
+    _becomeSecondary();
+  }
+}
+
+function _becomePrimary() {
+  _tabRole = 'primary';
+  _activityPaused = false;
+  document.getElementById('tabOverlay').classList.remove('visible');
+  _tabChannel.postMessage({ type: 'new-primary', tabId: _tabId });
+  _startHeartbeat();
+  if (_onBecamePrimary) _onBecamePrimary();
+}
+
+function _becomeSecondary() {
+  _tabRole = 'secondary';
+  _activityPaused = true;
+  document.getElementById('tabOverlay').classList.add('visible');
+  _stopHeartbeat();
+  if (_onBecameSecondary) _onBecameSecondary();
+}
+
+function _startHeartbeat() {
+  _stopHeartbeat();
+  _heartbeatTimer = setInterval(() => {
+    _tabChannel.postMessage({ type: 'heartbeat', tabId: _tabId });
+  }, 2000);
+}
+
+function _stopHeartbeat() {
+  if (_heartbeatTimer) { clearInterval(_heartbeatTimer); _heartbeatTimer = null; }
+}
+
+function pauseActivity() {
+  _activityPaused = true;
+  if (eventSource) { eventSource.close(); eventSource = null; }
+  if (recordingEventSource) { recordingEventSource.close(); recordingEventSource = null; }
+  if (_replayStreamSrc) { _replayStreamSrc.close(); _replayStreamSrc = null; }
+  if (_sseReconnectTimer) { clearTimeout(_sseReconnectTimer); _sseReconnectTimer = null; }
+  if (_recordingReconnectTimer) { clearTimeout(_recordingReconnectTimer); _recordingReconnectTimer = null; }
+  if (_autoRefreshTimer) { clearInterval(_autoRefreshTimer); _autoRefreshTimer = null; }
+  if (_replayKeepaliveTimer) { clearInterval(_replayKeepaliveTimer); _replayKeepaliveTimer = null; }
+}
+
+function resumeActivity() {
+  _activityPaused = false;
+  loadRequests();
+  connectSSE();
+  connectRecordingEvents();
+  ensureReplayStream();
+  _autoRefreshTimer = setInterval(() => {
+    if (_activityPaused) return;
+    if (document.getElementById('autoRefresh').checked) { loadRequests(); }
+  }, 2000);
+  _replayKeepaliveTimer = setInterval(() => {
+    ensureReplayStream();
+  }, 3000);
+}
+
+// ── End tab coordination ─────────────────────────────────────────────────
+
 document.getElementById('filterInput').addEventListener('input', (e) => {
   setFilterText(e.target.value.trim());
   queueCriteriaSave();
@@ -263,6 +355,7 @@ function closeReplayStream() {
 }
 
 function connectReplayStream() {
+  if (_activityPaused) return;
   if (_replayStreamSrc && _replayStreamSrc.readyState !== EventSource.CLOSED) return;
   const src = new EventSource('/api/replay/events/stream');
   _replayStreamSrc = src;
@@ -292,12 +385,13 @@ function connectReplayStream() {
 }
 
 function ensureReplayStream() {
+  if (_activityPaused) return;
   if (getReplayMode() && (!_replayStreamSrc || _replayStreamSrc.readyState === EventSource.CLOSED)) {
     connectReplayStream();
   }
 }
 
-setInterval(() => {
+let _replayKeepaliveTimer = setInterval(() => {
   ensureReplayStream();
 }, 3000);
 
@@ -1338,6 +1432,8 @@ document.getElementById('container').classList.toggle('list-hidden', listHidden)
 document.getElementById('toggleListBtn').classList.toggle('active', !listHidden);
 initMatchConfigSidebar();
 
+initTabCoordination(resumeActivity, pauseActivity);
+
 loadRequests().then(() => {
   applyRoute();
   if (getReplayMode()) {
@@ -1353,7 +1449,8 @@ loadRequests().then(() => {
   connectRecordingEvents();
 });
 restoreBodyFilter();
-setInterval(() => {
+let _autoRefreshTimer = setInterval(() => {
+  if (_activityPaused) return;
   if (document.getElementById('autoRefresh').checked) { loadRequests(); }
 }, 2000);
 
@@ -1886,7 +1983,9 @@ renderFilterChips();
 
 // SSE for signature updates
 let eventSource = null;
+let _sseReconnectTimer = null;
 function connectSSE() {
+  if (_activityPaused) return;
   eventSource = new EventSource('/api/process/events');
   eventSource.onmessage = (e) => {
     try {
@@ -1908,14 +2007,16 @@ function connectSSE() {
   };
   eventSource.onerror = () => {
     eventSource.close();
-    setTimeout(connectSSE, 3000);
+    if (!_activityPaused) _sseReconnectTimer = setTimeout(connectSSE, 3000);
   };
 }
 
 // SSE for the recording-stopped state: the banner must appear the moment the
 // record max-duration cut fires, without waiting for a list refetch.
 let recordingEventSource = null;
+let _recordingReconnectTimer = null;
 function connectRecordingEvents() {
+  if (_activityPaused) return;
   recordingEventSource = new EventSource('/api/recording/events');
   recordingEventSource.onmessage = (e) => {
     try {
@@ -1925,6 +2026,6 @@ function connectRecordingEvents() {
   };
   recordingEventSource.onerror = () => {
     recordingEventSource.close();
-    setTimeout(connectRecordingEvents, 3000);
+    if (!_activityPaused) _recordingReconnectTimer = setTimeout(connectRecordingEvents, 3000);
   };
 }
