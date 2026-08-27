@@ -1659,6 +1659,8 @@ export function renderMatchConfigSidebar(matchConfig, highlightIdx) {
   }
 }
 
+let _monacoGen = 0;
+
 export function setMatchConfigView(view) {
   const body = document.getElementById('matchConfigBody');
   if (!body) return;
@@ -1674,12 +1676,15 @@ export function setMatchConfigView(view) {
     if (body._monacoEditor) {
       body._monacoEditor.layout();
     } else if (container && typeof createMonacoEditor === 'function') {
+      const gen = ++_monacoGen;
       createMonacoEditor(container, body._matchConfigRaw || '[]', 'json').then(editor => {
+        if (gen !== _monacoGen) { editor.dispose(); return; }
         editor.updateOptions({ readOnly: true, domReadOnly: true });
         body._monacoEditor = editor;
       });
     }
   } else {
+    _monacoGen++;
     if (body._monacoEditor) {
       body._monacoEditor.dispose();
       body._monacoEditor = null;

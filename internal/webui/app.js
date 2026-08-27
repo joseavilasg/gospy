@@ -284,7 +284,17 @@ function openMatchConfigSidebar(ruleIdx) {
   const sidebar = document.getElementById('matchConfigSidebar');
   if (sidebar) sidebar.classList.add('open');
   renderMatchConfigSidebarFromDetail();
-  if (ruleIdx != null && ruleIdx >= 0) highlightMatchConfigRule(ruleIdx);
+  if (ruleIdx != null && ruleIdx >= 0) {
+    const body = document.getElementById('matchConfigBody');
+    if (body && body._matchConfigView === 'raw') {
+      const tabs = document.querySelectorAll('.match-config-tab');
+      tabs.forEach(t => t.classList.remove('active'));
+      const prettyTab = document.querySelector('.match-config-tab[data-view="pretty"]');
+      if (prettyTab) prettyTab.classList.add('active');
+      setMatchConfigView('pretty');
+    }
+    highlightMatchConfigRule(ruleIdx);
+  }
 }
 
 function renderMatchConfigSidebarFromDetail() {
