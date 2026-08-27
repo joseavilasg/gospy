@@ -494,7 +494,7 @@ export function renderDetail(req, activeTab = 'request') {
         </div>`;
   }
 
-  panel.innerHTML = `
+  panel.querySelector('.detail-panel-content').innerHTML = `
         ${actionBanner}
         ${replayEntryView ? replayBreadcrumbHtml(replayEntryView) : ''}
         ${getReplayMode() ? '' : `
@@ -636,6 +636,9 @@ export function showTab(btn, tab) {
   document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
   btn.classList.add('active');
   document.getElementById('tab-' + tab).style.display = 'flex';
+
+  const content = document.querySelector('.detail-panel-content');
+  if (content) content.style.minWidth = tab === 'match' ? '900px' : '';
 
   if (tab === 'origin') {
     loadSignatureInfo();
@@ -1216,7 +1219,7 @@ export function renderReplayEventDetail(detail, activeTab = 'match') {
     return '<div class="replay-event-empty">No body</div>';
   })();
 
-  panel.innerHTML = `
+  panel.querySelector('.detail-panel-content').innerHTML = `
         ${actionBannerHtml(ev)}
         <div class="detail-toolbar">
             <button class="btn-create-rule" data-action="create-rule-from-replay-event" title="Create rule from this event">${SVG_RULE} Rule</button>
@@ -1283,6 +1286,9 @@ export function renderReplayEventDetail(detail, activeTab = 'match') {
         <div id="tab-match" class="tab-content" style="${activeTab === 'match' ? '' : 'display:none'}">
             <div id="replayMatchContainer"><div class="replay-event-empty">Loading candidates…</div></div>
         </div>`;
+
+  const content = panel.querySelector('.detail-panel-content');
+  if (content) content.style.minWidth = activeTab === 'match' ? '900px' : '';
 }
 
 function buildReplayResponseTab(detail) {
@@ -1437,8 +1443,10 @@ export function renderReplayMatch(resp, ctx, keepScroll) {
 
     bannerHtml = `
       <div class="rule-banner">
-        <span class="rule-banner-icon">⚙</span>
-        <span class="rule-banner-text">${ruleLabel}${flagsHtml}</span>
+        <span class="rule-banner-label">
+          <span class="rule-banner-icon">⚙</span>
+          <span class="rule-banner-text">${ruleLabel}${flagsHtml}</span>
+        </span>
         <span class="rule-banner-link" data-action="match-config-sidebar" data-rule-idx="${matchingRuleIdx}">View in config →</span>
       </div>`;
   } else if (matchConfig.length > 0) {
@@ -1448,8 +1456,10 @@ export function renderReplayMatch(resp, ctx, keepScroll) {
     if (hasFlags) {
       bannerHtml = `
         <div class="rule-banner">
-          <span class="rule-banner-icon">⚙</span>
-          <span class="rule-banner-text">Match config active — <span class="rule-banner-hl">${matchConfig.length} rules</span></span>
+          <span class="rule-banner-label">
+            <span class="rule-banner-icon">⚙</span>
+            <span class="rule-banner-text">Match config active — <span class="rule-banner-hl">${matchConfig.length} rules</span></span>
+          </span>
           <span class="rule-banner-link" data-action="match-config-sidebar">View config →</span>
         </div>`;
     }

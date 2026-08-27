@@ -861,10 +861,15 @@ header .stats {
 
 .detail-panel {
   flex: 1;
+  overflow-x: auto;
   overflow-y: auto;
   padding: var(--sp-20);
   overflow-wrap: anywhere;
   background: var(--bg-panel);
+}
+
+.detail-panel-content {
+  min-width: 500px;
 }
 
 .detail-panel:not(:has(.detail-toolbar)) {
@@ -919,6 +924,10 @@ header .stats {
   border-radius: 0 var(--radius-md) var(--radius-md) var(--radius-md);
   padding: var(--sp-15);
   overflow-wrap: anywhere;
+}
+
+#tab-match {
+  min-width: 900px;
 }
 
 .section-panel {
@@ -3184,6 +3193,12 @@ body.resizing-h {
   padding: var(--sp-6) var(--sp-9);
   margin-bottom: var(--sp-10);
   font-size: var(--fs-base);
+}
+
+.rule-banner-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-5);
 }
 
 .rule-banner-icon {
