@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"gospy/internal/history"
+	"gospy/internal/replay"
 	"gospy/internal/session"
 )
 
@@ -825,8 +826,8 @@ func (m *mockReplayAnalyzer) ReplayEventDetail(runID string, seq int) (*session.
 	}
 	return nil, fmt.Errorf("event with seq %d not found in run %s", seq, runID)
 }
-func (m *mockReplayAnalyzer) ReplayCandidates(runID string, seq int, scope string) (*ReplayCandidateResult, error) {
-	return &ReplayCandidateResult{Scope: scope, Entries: []ReplayCandidateEntry{}}, nil
+func (m *mockReplayAnalyzer) ReplayCandidates(runID string, seq int, scope string) ([]replay.Candidate, map[string]int, error) {
+	return []replay.Candidate{}, map[string]int{}, nil
 }
 func (m *mockReplayAnalyzer) ReplayDiff(runID string, seq int, entryID string) (*ReplayDiffResult, error) {
 	return &ReplayDiffResult{RunID: runID, Seq: seq, EntryID: entryID}, nil

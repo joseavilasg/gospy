@@ -15,6 +15,7 @@ import (
 
 	"gospy/internal/history"
 	"gospy/internal/proxy"
+	"gospy/internal/replay"
 	"gospy/internal/session"
 )
 
@@ -1482,7 +1483,7 @@ func TestReplayCandidatesEndpoint(t *testing.T) {
 	if resp.Total["pending"] != 1 {
 		t.Fatalf("expected 1 pending at the event's time, got %v", resp.Total)
 	}
-	byID := map[string]replayCandidate{}
+	byID := map[string]replay.Candidate{}
 	for _, c := range resp.Entries {
 		byID[c.EntryID] = c
 	}
@@ -1602,62 +1603,6 @@ func TestReplayCandidatesEndpoint(t *testing.T) {
 	if diffResp.Entry.EntryID != "e1" || diffResp.Diff == nil || diffResp.Diff.DiffCount != 0 {
 		t.Fatalf("e1 diff must be all-green, got %+v", diffResp)
 	}
-}
-
-// TestFilterReplayCandidates covers the match search predicate: a numeric
-// query matches the entry number exactly (so "19" targets entry 19 and not the
-// HLS segment timestamps that also contain "19"), falling back to the visible
-// substring surface when no entry carries that number, and the surface never
-// includes the scheme or host the candidate rows do not render.
-func TestFilterReplayCandidates(t *testing.T) {
-	seg19 := replayCandidate{EntryID: "e24", Entry: 24, Method: "GET", URL: "https://cdn.mdstrm.com/live/media_5000_20260804T211902_779386.ts", Tag: "pending"}
-	seg29 := replayCandidate{EntryID: "e28", Entry: 28, Method: "GET", URL: "https://cdn.mdstrm.com/live/media_5000_20260804T212938_779411.ts", Tag: "pending"}
-	entry19 := replayCandidate{EntryID: "e19", Entry: 19, Method: "GET", URL: "https://cdn.mdstrm.com/live/media_5000.m3u8", Tag: "pending"}
-	consumed := replayCandidate{EntryID: "e2", Entry: 2, Method: "GET", URL: "https://cdn.mdstrm.com/live/media_5000.m3u8", Tag: "consumed", ConsumedBySeq: 7}
-	pool := []replayCandidate{entry19, seg19, seg29, consumed}
-
-	t.Run("numeric query matches the entry number exactly", func(t *testing.T) {
-		got := filterReplayCandidates(pool, "19")
-		if len(got) != 1 || got[0].Entry != 19 {
-			t.Fatalf("q=19: want only entry 19, got %+v", got)
-		}
-	})
-
-	t.Run("numeric query falls back to the URL surface without an entry hit", func(t *testing.T) {
-		got := filterReplayCandidates(pool, "5000")
-		if len(got) != 4 {
-			t.Fatalf("q=5000: no entry 5000, must fall back to the media_5000 URL matches (all 4), got %d: %+v", len(got), got)
-		}
-	})
-
-	t.Run("host and scheme are not part of the search surface", func(t *testing.T) {
-		if got := filterReplayCandidates(pool, "mdstrm"); len(got) != 0 {
-			t.Fatalf("q=mdstrm: the host must never match the visible-surface search, got %+v", got)
-		}
-		if got := filterReplayCandidates(pool, "https"); len(got) != 0 {
-			t.Fatalf("q=https: the scheme must never match the visible-surface search, got %+v", got)
-		}
-	})
-
-	t.Run("URL path fragments remain searchable", func(t *testing.T) {
-		got := filterReplayCandidates(pool, "T2119")
-		if len(got) != 1 || got[0].Entry != 24 {
-			t.Fatalf("q=T2119: want only the segment carrying that timestamp, got %+v", got)
-		}
-	})
-
-	t.Run("tag text is searchable", func(t *testing.T) {
-		got := filterReplayCandidates(pool, "consumed by seq 7")
-		if len(got) != 1 || got[0].Entry != 2 {
-			t.Fatalf("q=consumed by seq 7: want the consumed entry, got %+v", got)
-		}
-	})
-
-	t.Run("empty query returns the pool untouched", func(t *testing.T) {
-		if got := filterReplayCandidates(pool, ""); len(got) != len(pool) {
-			t.Fatalf("q=\"\": want the whole pool back, got %+v", got)
-		}
-	})
 }
 
 func TestReplaySessionLabelShown(t *testing.T) {

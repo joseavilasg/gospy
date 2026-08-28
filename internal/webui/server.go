@@ -23,6 +23,7 @@ import (
 	"gospy/internal/bodyview"
 	"gospy/internal/history"
 	"gospy/internal/proxy"
+	"gospy/internal/replay"
 	"gospy/internal/rules"
 	"gospy/internal/session"
 )
@@ -491,15 +492,15 @@ func (s *Server) ReplayEventDetail(runID string, seq int) (*session.ReplayEvent,
 	return nil, fmt.Errorf("event with seq %d not found in run %s", seq, runID)
 }
 
-// ReplayCandidates computes the candidate list for a replay event.
-// Implements agent.ReplayAnalyzer.
-func (s *Server) ReplayCandidates(runID string, seq int, scope string) (*agent.ReplayCandidateResult, error) {
+// ReplayCandidates computes the candidate list for a replay event and the
+// matching/pending totals. Implements agent.ReplayAnalyzer.
+func (s *Server) ReplayCandidates(runID string, seq int, scope string) ([]replay.Candidate, map[string]int, error) {
 	events, err := s.ReplayEvents(runID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(events) == 0 {
-		return nil, fmt.Errorf("no events found for run %s", runID)
+		return nil, nil, fmt.Errorf("no events found for run %s", runID)
 	}
 	var ev *session.ReplayEvent
 	for i := range events {
@@ -509,34 +510,18 @@ func (s *Server) ReplayCandidates(runID string, seq int, scope string) (*agent.R
 		}
 	}
 	if ev == nil {
-		return nil, fmt.Errorf("event with seq %d not found", seq)
+		return nil, nil, fmt.Errorf("event with seq %d not found", seq)
 	}
 
 	cfg := s.runMatchConfig(ev.RunID)
-	matching, allPending := s.buildReplayCandidates(ev, events, cfg)
+	matching, allPending := replay.BuildCandidates(ev, events, cfg, s)
 
 	pool := matching
 	if scope == "all" {
 		pool = allPending
 	}
 
-	result := &agent.ReplayCandidateResult{
-		Scope:   scope,
-		Total:   map[string]int{"matching": len(matching), "pending": len(allPending)},
-		Entries: make([]agent.ReplayCandidateEntry, len(pool)),
-	}
-	for i, c := range pool {
-		result.Entries[i] = agent.ReplayCandidateEntry{
-			EntryID:       c.EntryID,
-			Entry:         c.Entry,
-			Method:        c.Method,
-			URL:           c.URL,
-			Tag:           c.Tag,
-			ConsumedBySeq: c.ConsumedBySeq,
-			DiffCount:     c.DiffCount,
-		}
-	}
-	return result, nil
+	return pool, map[string]int{"matching": len(matching), "pending": len(allPending)}, nil
 }
 
 // ReplayDiff returns the detailed URL diff between a replay event's incoming

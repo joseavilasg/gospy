@@ -16,6 +16,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"gospy/internal/history"
+	"gospy/internal/replay"
 	"gospy/internal/session"
 )
 
@@ -36,26 +37,15 @@ type ReplayAnalyzer interface {
 	ListReplayRuns() ([]session.RunSummary, error)
 	ReplayEvents(runID string) ([]session.ReplayEvent, error)
 	ReplayEventDetail(runID string, seq int) (*session.ReplayEvent, error)
-	ReplayCandidates(runID string, seq int, scope string) (*ReplayCandidateResult, error)
+	ReplayCandidates(runID string, seq int, scope string) ([]replay.Candidate, map[string]int, error)
 	ReplayDiff(runID string, seq int, entryID string) (*ReplayDiffResult, error)
 }
 
 // ReplayCandidateResult is the MCP response for list_replay_candidates.
 type ReplayCandidateResult struct {
-	Scope   string                 `json:"scope"`
-	Total   map[string]int         `json:"total"`
-	Entries []ReplayCandidateEntry `json:"entries"`
-}
-
-// ReplayCandidateEntry is one entry in the candidate list.
-type ReplayCandidateEntry struct {
-	EntryID       string `json:"entryId"`
-	Entry         int    `json:"entry"`
-	Method        string `json:"method"`
-	URL           string `json:"url"`
-	Tag           string `json:"tag"`
-	ConsumedBySeq int    `json:"consumedBySeq,omitempty"`
-	DiffCount     int    `json:"diffCount,omitempty"`
+	Scope   string             `json:"scope"`
+	Total   map[string]int     `json:"total"`
+	Entries []replay.Candidate `json:"entries"`
 }
 
 // ReplayDiffResult is the MCP response for replay_diff.
@@ -483,11 +473,15 @@ func (s *Server) handleListReplayCandidates(ctx context.Context, req mcp.CallToo
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	result, err := s.replay.ReplayCandidates(runID, seq, scope)
+	pool, total, err := s.replay.ReplayCandidates(runID, seq, scope)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	return mcp.NewToolResultJSON(result)
+	return mcp.NewToolResultJSON(ReplayCandidateResult{
+		Scope:   scope,
+		Total:   total,
+		Entries: pool,
+	})
 }
 
 func (s *Server) handleReplayDiff(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
