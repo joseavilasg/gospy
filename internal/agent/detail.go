@@ -1,11 +1,10 @@
 package agent
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
+	"gospy/internal/bodyview"
 	"gospy/internal/history"
 )
 
@@ -87,7 +86,7 @@ func readHexDump(dir, bodyFile string) string {
 	if err != nil {
 		return ""
 	}
-	return generateHexDump(data, hexDumpMaxLines)
+	return bodyview.GenerateHexDump(data, hexDumpMaxLines)
 }
 
 // readBodyFile reads up to maxBodyPreview bytes from a body file stored in
@@ -102,42 +101,4 @@ func readBodyFile(dir, bodyFile string) string {
 		return string(data[:maxBodyPreview]) + "\n... [truncated - body too large]"
 	}
 	return string(data)
-}
-
-// generateHexDump mirrors the WebUI's hex dump rendering.
-func generateHexDump(data []byte, maxLines int) string {
-	if len(data) == 0 {
-		return ""
-	}
-	maxBytes := maxLines * 16
-	if len(data) < maxBytes {
-		maxBytes = len(data)
-	}
-	var sb strings.Builder
-	for i := 0; i < maxBytes; i += 16 {
-		end := i + 16
-		if end > maxBytes {
-			end = maxBytes
-		}
-		chunk := data[i:end]
-		fmt.Fprintf(&sb, "%08x: ", i)
-		hex := make([]string, 0, 16)
-		ascii := make([]byte, 0, 16)
-		for j, b := range chunk {
-			hex = append(hex, fmt.Sprintf("%02x", b))
-			if j == 7 {
-				hex = append(hex, "")
-			}
-			if b >= 32 && b <= 126 {
-				ascii = append(ascii, b)
-			} else {
-				ascii = append(ascii, '.')
-			}
-		}
-		fmt.Fprintf(&sb, "%-49s  %s\n", strings.Join(hex, " "), string(ascii))
-	}
-	if len(data) > maxBytes {
-		fmt.Fprintf(&sb, "... (%d more bytes)\n", len(data)-maxBytes)
-	}
-	return sb.String()
 }

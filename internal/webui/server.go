@@ -18,15 +18,13 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	"gospy/internal/agent"
+	"gospy/internal/bodyview"
 	"gospy/internal/history"
 	"gospy/internal/proxy"
 	"gospy/internal/rules"
 	"gospy/internal/session"
-
-	"google.golang.org/protobuf/encoding/protowire"
 )
 
 //go:embed index.html
@@ -1140,244 +1138,6 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 const hexDumpMaxLines = 20
 
-func generateHexDump(data []byte, maxLines int) string {
-	if len(data) == 0 {
-		return ""
-	}
-	maxBytes := maxLines * 16
-	if len(data) < maxBytes {
-		maxBytes = len(data)
-	}
-	var sb strings.Builder
-	for i := 0; i < maxBytes; i += 16 {
-		end := i + 16
-		if end > maxBytes {
-			end = maxBytes
-		}
-		chunk := data[i:end]
-		fmt.Fprintf(&sb, "%08x: ", i)
-		hex := make([]string, 0, 16)
-		ascii := make([]byte, 0, 16)
-		for j, b := range chunk {
-			hex = append(hex, fmt.Sprintf("%02x", b))
-			if j == 7 {
-				hex = append(hex, "")
-			}
-			if b >= 32 && b <= 126 {
-				ascii = append(ascii, b)
-			} else {
-				ascii = append(ascii, '.')
-			}
-		}
-		fmt.Fprintf(&sb, "%-49s  %s\n", strings.Join(hex, " "), string(ascii))
-	}
-	if len(data) > maxBytes {
-		fmt.Fprintf(&sb, "... (%d more bytes)\n", len(data)-maxBytes)
-	}
-	return sb.String()
-}
-
-func isProtobufContentType(ct string) bool {
-	lct := strings.ToLower(ct)
-	return strings.Contains(lct, "protobuf") || strings.Contains(lct, "x-protobuf")
-}
-
-const protobufMaxDepth = 12
-
-func parseProtobufWire(data []byte) []history.ProtobufField {
-	return parseProtobufWireAtDepth(data, 0)
-}
-
-func parseProtobufWireAtDepth(data []byte, depth int) []history.ProtobufField {
-	if depth >= protobufMaxDepth {
-		return nil
-	}
-	var fields []history.ProtobufField
-	offset := 0
-	for len(data) > 0 {
-		num, typ, n := protowire.ConsumeTag(data)
-		if n < 0 {
-			break
-		}
-		data = data[n:]
-
-		fieldStart := offset
-		offset += n
-
-		f := history.ProtobufField{
-			FieldNumber: int(num),
-			ByteOffset:  fieldStart,
-		}
-
-		switch typ {
-		case protowire.VarintType:
-			v, n2 := protowire.ConsumeVarint(data)
-			if n2 < 0 {
-				return fields
-			}
-			f.WireType = "varint"
-			f.ZigzagValue = int64((v >> 1) ^ -(v & 1))
-			if v <= uint64(^uint32(0)) {
-				f.Value = uint32(v)
-			} else {
-				f.Value = v
-			}
-			f.ByteEnd = offset + n2
-			offset += n2
-			data = data[n2:]
-
-		case protowire.Fixed32Type:
-			v, n2 := protowire.ConsumeFixed32(data)
-			if n2 < 0 {
-				return fields
-			}
-			f.WireType = "fixed32"
-			f.Value = v
-			f.ByteEnd = offset + n2
-			offset += n2
-			data = data[n2:]
-
-		case protowire.Fixed64Type:
-			v, n2 := protowire.ConsumeFixed64(data)
-			if n2 < 0 {
-				return fields
-			}
-			f.WireType = "fixed64"
-			f.Value = v
-			f.ByteEnd = offset + n2
-			offset += n2
-			data = data[n2:]
-
-		case protowire.BytesType:
-			v, n2 := protowire.ConsumeBytes(data)
-			if n2 < 0 {
-				return fields
-			}
-			f.ByteSize = len(v)
-			f.ByteEnd = offset + n2
-			offset += n2
-			data = data[n2:]
-
-			subFields := parseProtobufWireAtDepth(v, depth+1)
-			if len(subFields) > 0 {
-				f.WireType = "message"
-				f.SubFields = subFields
-			} else if s, ok := isPrintableUTF8(v); ok {
-				f.WireType = "string"
-				f.Value = s
-			} else {
-				f.WireType = "bytes"
-				f.Value = fmt.Sprintf("%x", v)
-			}
-
-		default:
-			n2 := protowire.ConsumeFieldValue(num, typ, data)
-			if n2 < 0 {
-				return fields
-			}
-			f.WireType = fmt.Sprintf("type(%d)", int(typ))
-			f.ByteEnd = offset + n2
-			offset += n2
-			data = data[n2:]
-		}
-
-		fields = append(fields, f)
-	}
-	return fields
-}
-
-func isPrintableUTF8(b []byte) (string, bool) {
-	if len(b) == 0 {
-		return "", false
-	}
-	if !utf8.Valid(b) {
-		return "", false
-	}
-	s := string(b)
-	for _, r := range s {
-		if r < 32 && r != '\n' && r != '\r' && r != '\t' {
-			return "", false
-		}
-	}
-	return s, true
-}
-
-func extractBoundary(contentType string) string {
-	_, after, ok := strings.Cut(contentType, "boundary=")
-	if !ok {
-		return ""
-	}
-	b := after
-	b = strings.Trim(b, "\"' ")
-	return b
-}
-
-const multipartHexPreviewLines = 20
-
-func parseMultipartBody(data []byte, boundary string) []history.MultipartPart {
-	if boundary == "" || len(data) == 0 {
-		return nil
-	}
-	reader := multipart.NewReader(bytes.NewReader(data), boundary)
-	var parts []history.MultipartPart
-	for {
-		part, err := reader.NextPart()
-		if err != nil {
-			break
-		}
-		name := part.FormName()
-		if name == "" {
-			name = part.FileName()
-		}
-		mp := history.MultipartPart{
-			Name:        name,
-			Filename:    part.FileName(),
-			ContentType: part.Header.Get("Content-Type"),
-		}
-		content, err := io.ReadAll(part)
-		if err != nil {
-			parts = append(parts, mp)
-			continue
-		}
-		mp.Size = len(content)
-		if mp.Filename != "" || (!isLikelyTextContentType(mp.ContentType) && containsNullBytes(content)) {
-			mp.IsBinary = true
-			mp.HexPreview = generateHexDump(content, multipartHexPreviewLines)
-		} else {
-			mp.Value = string(content)
-		}
-		parts = append(parts, mp)
-	}
-	return parts
-}
-
-func isLikelyTextContentType(ct string) bool {
-	ct = strings.ToLower(ct)
-	for _, prefix := range []string{
-		"text/", "application/json", "application/xml",
-		"application/x-www-form-urlencoded", "application/javascript",
-		"application/css", "application/x-yaml", "application/yaml",
-	} {
-		if strings.HasPrefix(ct, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func containsNullBytes(data []byte) bool {
-	limit := 8192
-	if len(data) < limit {
-		limit = len(data)
-	}
-	for _, b := range data[:limit] {
-		if b == 0 {
-			return true
-		}
-	}
-	return false
-}
-
 // entryDetailResponse pairs an entry with its resolved client signature (when
 // already known) so the UI can render the origin verdict without an extra fetch.
 type entryDetailResponse struct {
@@ -1481,15 +1241,15 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 			reqCT = cts[0]
 		}
 		if strings.Contains(strings.ToLower(reqCT), "multipart/form-data") {
-			if boundary := extractBoundary(reqCT); boundary != "" {
+			if boundary := bodyview.ExtractBoundary(reqCT); boundary != "" {
 				if data, err := os.ReadFile(filepath.Join(binDir, entry.Request.BodyFile)); err == nil {
-					entry.Request.ParsedMultipart = parseMultipartBody(data, boundary)
+					entry.Request.ParsedMultipart = bodyview.ParseMultipartBody(data, boundary)
 				}
 			}
 		}
-		if isProtobufContentType(reqCT) {
+		if bodyview.IsProtobufContentType(reqCT) {
 			if data, err := os.ReadFile(filepath.Join(binDir, entry.Request.BodyFile)); err == nil {
-				entry.Request.ParsedProtobuf = parseProtobufWire(data)
+				entry.Request.ParsedProtobuf = bodyview.ParseProtobufWire(data)
 			}
 		}
 	}
@@ -1506,7 +1266,7 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 		}
 		if needHex {
 			if data, err := os.ReadFile(filepath.Join(binDir, entry.Request.BodyFile)); err == nil {
-				entry.Request.BodyHex = generateHexDump(data, hexDumpMaxLines)
+				entry.Request.BodyHex = bodyview.GenerateHexDump(data, hexDumpMaxLines)
 			}
 		}
 	}
@@ -1515,14 +1275,14 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 		if cts, ok := entry.Response.Headers["Content-Type"]; ok && len(cts) > 0 {
 			respCT = cts[0]
 		}
-		if isProtobufContentType(respCT) {
+		if bodyview.IsProtobufContentType(respCT) {
 			if data, err := os.ReadFile(filepath.Join(binDir, entry.Response.BodyFile)); err == nil {
-				entry.Response.ParsedProtobuf = parseProtobufWire(data)
+				entry.Response.ParsedProtobuf = bodyview.ParseProtobufWire(data)
 			}
 		}
 		if entry.Response.IsBinaryBody {
 			if data, err := os.ReadFile(filepath.Join(binDir, entry.Response.BodyFile)); err == nil {
-				entry.Response.BodyHex = generateHexDump(data, hexDumpMaxLines)
+				entry.Response.BodyHex = bodyview.GenerateHexDump(data, hexDumpMaxLines)
 			}
 		}
 		if !entry.Response.IsBinaryBody && entry.Response.Body == "" {
@@ -1533,7 +1293,7 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	if entry.ServerResponse != nil && entry.ServerResponse.BodyFile != "" && entry.ServerResponse.IsBinaryBody {
 		if data, err := os.ReadFile(filepath.Join(binDir, entry.ServerResponse.BodyFile)); err == nil {
-			entry.ServerResponse.BodyHex = generateHexDump(data, hexDumpMaxLines)
+			entry.ServerResponse.BodyHex = bodyview.GenerateHexDump(data, hexDumpMaxLines)
 		}
 	}
 
@@ -1620,7 +1380,7 @@ func (s *Server) handleSaveMultipart(w http.ResponseWriter, r *http.Request, id 
 	if cts, ok := entry.Request.Headers["Content-Type"]; ok && len(cts) > 0 {
 		reqCT = cts[0]
 	}
-	boundary := extractBoundary(reqCT)
+	boundary := bodyview.ExtractBoundary(reqCT)
 	if boundary == "" {
 		http.Error(w, "not multipart/form-data", http.StatusBadRequest)
 		return

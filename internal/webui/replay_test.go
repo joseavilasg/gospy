@@ -162,8 +162,8 @@ func TestReplayRulesFrontend(t *testing.T) {
 	if strings.Contains(src, "id: 'rulesBtn',\n    hiddenIn: ['replay']") {
 		t.Fatal("app.js: the Rules button must be visible in replay mode")
 	}
-	if !strings.Contains(src, "if (getReplayMode()) {\n    loadRules();\n    connectSSE();\n    connectRecordingEvents();\n    return;\n  }") {
-		t.Fatal("app.js: the replay boot must load the rules and connect the signature SSE so the origin tab resolves its 'Analyzing...' state")
+	if !strings.Contains(src, "if (getReplayMode()) {\n    loadRules();\n    connectSSE();\n    return;\n  }") {
+		t.Fatal("app.js: the replay boot must load the rules and connect the signature SSE so the origin tab resolves its 'Analyzing...' state; the recording SSE is intentionally dropped in replay")
 	}
 
 	rnd := strings.ReplaceAll(renderJS, "\r\n", "\n")
