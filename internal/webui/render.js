@@ -1556,6 +1556,7 @@ export function renderMatchCandidates(resp, ctx) {
 function replayCandidateTagText(c) {
   if (c.tag === 'served') return '✓ matched';
   if (c.tag === 'consumed') return `consumed by seq ${c.consumedBySeq}`;
+  if (c.tag === 'ignored') return 'ignored by config';
   if (c.diffCount != null && c.diffCount > 0) return `${c.diffCount} diff${c.diffCount === 1 ? '' : 's'}`;
   if (c.diffCount != null) return 'exact match';
   return 'pending';
@@ -1565,6 +1566,7 @@ function replayCandidateTag(c) {
   let cls = 'replay-tag-pending';
   if (c.tag === 'served') cls = 'replay-tag-served';
   else if (c.tag === 'consumed') cls = 'replay-tag-consumed';
+  else if (c.tag === 'ignored') cls = 'replay-tag-ignored';
   return `<span class="replay-tag ${cls}">${escapeHtml(replayCandidateTagText(c))}</span>`;
 }
 

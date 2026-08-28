@@ -27,11 +27,12 @@ type EntrySource interface {
 
 // Candidate is one recorded entry of the run. Tag reflects the entry's state
 // at the event's time: served (the entry this HIT actually served), consumed
-// (already served by an earlier event) or pending (still unconsumed).
-// PotentialMatch reports whether the entry shares the event's host+path, i.e.
-// it is a viable comparison candidate for this event regardless of its state.
-// DiffCount ranks the pending potential matches and is only computed for
-// them.
+// (already served by an earlier event), pending (still unconsumed and
+// matchable) or ignored (excluded by the match config's ignore rules, so it is
+// never served). PotentialMatch reports whether the entry shares the event's
+// host+path, i.e. it is a viable comparison candidate for this event
+// regardless of its state. DiffCount ranks the pending potential matches and is
+// only computed for them.
 type Candidate struct {
 	EntryID        string `json:"entryId"`
 	Entry          int    `json:"entry"`
@@ -122,9 +123,9 @@ func EventBySeq(events []session.ReplayEvent, seq int) *session.ReplayEvent {
 
 // BuildCandidates builds the candidate universe for an event: every recorded
 // entry of the run in queue order, each tagged with its state at the event's
-// time (served / consumed / pending) and whether it is a potential match for
-// this event (shares the incoming host+path). Consumers select sub-lists from
-// the universe with SelectCandidates.
+// time (served / consumed / pending / ignored) and whether it is a potential
+// match for this event (shares the incoming host+path). Consumers select
+// sub-lists from the universe with SelectCandidates.
 func BuildCandidates(ev *session.ReplayEvent, events []session.ReplayEvent, cfg *session.MatchConfig, src EntrySource) []Candidate {
 	refs := EntryRefs(src.ListEntries())
 	consumed := ConsumedBefore(events, ev.Seq)
@@ -149,6 +150,8 @@ func BuildCandidates(ev *session.ReplayEvent, events []session.ReplayEvent, cfg 
 		} else if ci, ok := consumed[r.ID]; ok {
 			c.Tag = "consumed"
 			c.ConsumedBySeq = ci.ConsumedBySeq
+		} else if session.IsIgnored(r.URL, cfg) {
+			c.Tag = "ignored"
 		} else {
 			c.Tag = "pending"
 			if c.PotentialMatch {
@@ -210,20 +213,24 @@ func rankMatches(cands []Candidate) {
 }
 
 // Counts reports the size of each candidate view over the universe: the
-// number of potential matches (matching) and the number of pending entries
-// (pending), independent of any active selection filter. The WebUI and MCP
-// use it for their view headers so the totals stay stable under search.
+// number of potential matches (matching), pending entries (pending) and
+// entries ignored by the match config (ignored), independent of any active
+// selection filter. The WebUI and MCP use it for their view headers so the
+// totals stay stable under search.
 func Counts(universe []Candidate) map[string]int {
-	matching, pending := 0, 0
+	matching, pending, ignored := 0, 0, 0
 	for _, c := range universe {
 		if c.PotentialMatch {
 			matching++
 		}
-		if c.Tag == "pending" {
+		switch c.Tag {
+		case "pending":
 			pending++
+		case "ignored":
+			ignored++
 		}
 	}
-	return map[string]int{"matching": matching, "pending": pending}
+	return map[string]int{"matching": matching, "pending": pending, "ignored": ignored}
 }
 
 // ConsumedExactCandidate returns the pool entry whose match key equals the

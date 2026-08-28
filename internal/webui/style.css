@@ -3458,6 +3458,11 @@ body.resizing-h {
   color: var(--text-secondary);
 }
 
+.replay-tag-ignored {
+  color: var(--text-secondary);
+  text-decoration: line-through;
+}
+
 .match-diff-col {
   flex: 1;
   min-width: 0;

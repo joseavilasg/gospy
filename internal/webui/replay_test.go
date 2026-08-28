@@ -1429,6 +1429,10 @@ func TestReplayMatchTab(t *testing.T) {
 		strings.Contains(appJS, "btn.dataset.mode, ''") {
 		t.Fatal("app.js: each match view must keep its own search query (per-view _matchQueries, reset on event change) and selecting a candidate must keep the live query")
 	}
+	if !strings.Contains(appJS, "resp?.total?.matching === 0 && resp?.total?.pending > 0") ||
+		!strings.Contains(appJS, "resp?.total?.pending === 0 && resp?.total?.matching > 0") {
+		t.Fatal("app.js: an empty match view must fall back to the other one (matching→pending, pending→matching) only when it has data, so both-empty keeps the tab clickable")
+	}
 
 	if strings.Contains(appJS, "resp.consumed") {
 		t.Fatal("app.js: the consumed warning must be event-level - the selection path must not re-derive it from the clicked row (that toggles the banner and shifts the layout)")

@@ -485,14 +485,23 @@ function loadMatchTab(run, seq, mode, q, rowsOnly) {
     matchConfig: (_lastReplayDetail && _lastReplayDetail.matchConfig) || null,
   };
   return loadReplayCandidates(run, seq, mode, q || '').then(resp => {
-    if (mode === 'matching' && resp && resp.total && resp.total.matching === 0 && !(resp.entries && resp.entries.length)) {
+    if (mode === 'matching' && resp?.total?.matching === 0 && resp?.total?.pending > 0 && !resp?.entries?.length) {
       _matchState.mode = 'pending';
       _matchQueries['pending'] = q || '';
-      if (_currentView && _currentView.kind === 'replay' && _currentView.run === run && _currentView.seq === seq) {
+      if (_currentView?.kind === 'replay' && _currentView?.run === run && _currentView?.seq === seq) {
         _currentView = { ..._currentView, mode: 'pending' };
         history.replaceState(null, '', buildHash(_currentView));
       }
       return loadMatchTab(run, seq, 'pending', q || '');
+    }
+    if (mode === 'pending' && resp?.total?.pending === 0 && resp?.total?.matching > 0 && !resp?.entries?.length) {
+      _matchState.mode = 'matching';
+      _matchQueries['matching'] = q || '';
+      if (_currentView?.kind === 'replay' && _currentView?.run === run && _currentView?.seq === seq) {
+        _currentView = { ..._currentView, mode: 'matching' };
+        history.replaceState(null, '', buildHash(_currentView));
+      }
+      return loadMatchTab(run, seq, 'matching', q || '');
     }
     _matchResp = { ...resp, q: q || '' };
     if (rowsOnly) {

@@ -1,11 +1,23 @@
 package replay
 
 import (
+	"encoding/json"
 	"testing"
 
 	"gospy/internal/history"
 	"gospy/internal/session"
 )
+
+// mustConfig builds a MatchConfig from its JSON form (the only way to
+// construct session.Match patterns from outside the session package).
+func mustConfig(t *testing.T, raw string) *session.MatchConfig {
+	t.Helper()
+	var cfg session.MatchConfig
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatalf("parse match config: %v", err)
+	}
+	return &cfg
+}
 
 // TestFilterCandidates covers the match search predicate: a numeric query
 // matches the entry number exactly (so "19" targets entry 19 and not the HLS
@@ -74,20 +86,21 @@ func (f fakeSource) ListEntries() []*history.ListEntry { return f.list }
 // is a potential match for the event (shares host+path), and the view filters
 // derive the matching and pending lists from it.
 func TestBuildCandidates_Universe(t *testing.T) {
+	cfg := mustConfig(t, `[{"match":{"host":"ads.example.com"},"ignore":true}]`)
 	src := fakeSource{list: []*history.ListEntry{
 		{ID: "e1", Method: "GET", URL: "https://api.example.com/a?x=1", Status: new(200)},
 		{ID: "e2", Method: "GET", URL: "https://api.example.com/a?x=2", Status: new(200)},
 		{ID: "e3", Method: "GET", URL: "https://api.example.com/b", Status: new(200)},
+		{ID: "e4", Method: "GET", URL: "https://ads.example.com/ad.js?cb=9", Status: new(200)},
 	}}
 	events := []session.ReplayEvent{
 		{Seq: 1, Result: "hit", EntryID: "e1", URL: "https://api.example.com/a?x=1", Method: "GET"},
 	}
 	ev := &session.ReplayEvent{Seq: 2, Result: "miss", URL: "https://api.example.com/a?x=2", Method: "GET"}
-	cfg := &session.MatchConfig{}
 
 	universe := BuildCandidates(ev, events, cfg, src)
-	if len(universe) != 3 {
-		t.Fatalf("universe = %d entries, want 3: %+v", len(universe), universe)
+	if len(universe) != 4 {
+		t.Fatalf("universe = %d entries, want 4: %+v", len(universe), universe)
 	}
 
 	byID := map[string]Candidate{}
@@ -95,8 +108,10 @@ func TestBuildCandidates_Universe(t *testing.T) {
 		byID[c.EntryID] = c
 	}
 	// The incoming URL shares host+path with e1 and e2 (same /a), so both are
-	// potential matches; e3 (/b) is not. e1 was consumed by the seq-1 hit, e2
-	// is pending and matches exactly (diff 0), e3 is pending on another path.
+	// potential matches; e3 (/b) and e4 (ads host) are not. e1 was consumed by
+	// the seq-1 hit, e2 is pending and matches exactly (diff 0), e3 is pending
+	// on another path, and e4's host is ignored by the config so it is tagged
+	// ignored -- not pending.
 	if c := byID["e1"]; c.Tag != "consumed" || !c.PotentialMatch {
 		t.Errorf("e1 = %+v, want consumed potential match", c)
 	}
@@ -106,6 +121,9 @@ func TestBuildCandidates_Universe(t *testing.T) {
 	if c := byID["e3"]; c.Tag != "pending" || c.PotentialMatch {
 		t.Errorf("e3 = %+v, want pending non-match", c)
 	}
+	if c := byID["e4"]; c.Tag != "ignored" || c.PotentialMatch || c.DiffCount != 0 {
+		t.Errorf("e4 = %+v, want ignored non-match with no diff count", c)
+	}
 }
 
 // TestSelectCandidates locks the view-filter contract: the matching view
@@ -113,16 +131,17 @@ func TestBuildCandidates_Universe(t *testing.T) {
 // ascending, the pending view (tag=pending) keeps the universe's queue order,
 // and no filter returns the whole universe.
 func TestSelectCandidates(t *testing.T) {
+	cfg := mustConfig(t, `[{"match":{"host":"ads.example.com"},"ignore":true}]`)
 	src := fakeSource{list: []*history.ListEntry{
 		{ID: "e1", Method: "GET", URL: "https://api.example.com/a?x=1", Status: new(200)},
 		{ID: "e2", Method: "GET", URL: "https://api.example.com/a?x=2", Status: new(200)},
 		{ID: "e3", Method: "GET", URL: "https://api.example.com/b", Status: new(200)},
+		{ID: "e4", Method: "GET", URL: "https://ads.example.com/ad.js?cb=9", Status: new(200)},
 	}}
 	events := []session.ReplayEvent{
 		{Seq: 1, Result: "hit", EntryID: "e1", URL: "https://api.example.com/a?x=1", Method: "GET"},
 	}
 	ev := &session.ReplayEvent{Seq: 2, Result: "miss", URL: "https://api.example.com/a?x=2", Method: "GET"}
-	cfg := &session.MatchConfig{}
 	universe := BuildCandidates(ev, events, cfg, src)
 
 	t.Run("matching view ranks served, consumed then pending by diff", func(t *testing.T) {
@@ -138,36 +157,69 @@ func TestSelectCandidates(t *testing.T) {
 		}
 	})
 
-	t.Run("pending view keeps queue order over all pending entries", func(t *testing.T) {
+	t.Run("pending view keeps queue order and excludes ignored entries", func(t *testing.T) {
 		got := SelectCandidates(universe, CandidateFilter{Tag: "pending"})
 		if len(got) != 2 {
-			t.Fatalf("pending = %d, want 2: %+v", len(got), got)
+			t.Fatalf("pending = %d, want 2 (e2, e3, not the ignored e4): %+v", len(got), got)
 		}
 		// The unconsumed entries remain in queue (ordinal) order; e1 was
-		// consumed by the seq-1 hit and never reappears.
+		// consumed by the seq-1 hit and never reappears, and the ignored e4 is
+		// not a pending entry.
 		if got[0].Entry >= got[1].Entry {
 			t.Errorf("pending = %+v, want queue order (Entry ascending)", got)
 		}
 		for _, c := range got {
-			if c.EntryID == "e1" {
-				t.Error("pending must not include the consumed e1")
+			if c.EntryID == "e1" || c.EntryID == "e4" {
+				t.Errorf("pending must not include consumed e1 or ignored e4, got %+v", got)
 			}
 		}
 	})
 
 	t.Run("no filter returns the whole universe", func(t *testing.T) {
 		got := SelectCandidates(universe, CandidateFilter{})
-		if len(got) != 3 {
-			t.Fatalf("all = %d, want 3 entries", len(got))
+		if len(got) != 4 {
+			t.Fatalf("all = %d, want 4 entries", len(got))
 		}
 	})
 
-	t.Run("counts report matching and pending sizes", func(t *testing.T) {
+	t.Run("counts report matching, pending and ignored sizes", func(t *testing.T) {
 		got := Counts(universe)
-		if got["matching"] != 2 || got["pending"] != 2 {
-			t.Errorf("counts = %+v, want matching 2, pending 2", got)
+		if got["matching"] != 2 || got["pending"] != 2 || got["ignored"] != 1 {
+			t.Errorf("counts = %+v, want matching 2, pending 2, ignored 1", got)
 		}
 	})
+
+	t.Run("ignored view selects exactly the ignored entries", func(t *testing.T) {
+		got := SelectCandidates(universe, CandidateFilter{Tag: "ignored"})
+		if len(got) != 1 || got[0].EntryID != "e4" {
+			t.Fatalf("ignored = %+v, want only e4", got)
+		}
+	})
+}
+
+// TestSelectCandidates_IgnoredPotentialInMatching locks that an entry ignored
+// by the config but sharing the event's host+path still appears in the matching
+// view (PotentialMatch=true), tagged ignored so the reason it is not servable
+// stays visible.
+func TestSelectCandidates_IgnoredPotentialInMatching(t *testing.T) {
+	universe := []Candidate{
+		{EntryID: "e1", Entry: 1, URL: "https://api.example.com/a?x=1", Tag: "consumed", PotentialMatch: true},
+		{EntryID: "e2", Entry: 2, URL: "https://api.example.com/a?x=2", Tag: "pending", PotentialMatch: true},
+		{EntryID: "e4", Entry: 4, URL: "https://api.example.com/a?x=9", Tag: "ignored", PotentialMatch: true},
+	}
+	got := SelectCandidates(universe, CandidateFilter{PotentialMatch: new(true)})
+	if len(got) != 3 {
+		t.Fatalf("matching = %d, want the ignored potential match included: %+v", len(got), got)
+	}
+	found := false
+	for _, c := range got {
+		if c.EntryID == "e4" && c.Tag == "ignored" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("matching view must keep the ignored potential match tagged ignored, got %+v", got)
+	}
 }
 
 // TestSelectCandidate_HitServed locks that a hit always selects the served
