@@ -3018,6 +3018,9 @@ body.resizing-h {
 .replay-event-method {
   flex-shrink: 0;
   width: 42px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--accent);
   font-weight: 600;
 }

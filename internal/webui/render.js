@@ -1007,7 +1007,7 @@ function replayEventRow(ev, selected) {
   const icon = ev.result === 'hit' ? '✓' : ev.result === 'miss' ? '✗' : ev.result === 'ignored' ? '⊘' : '‼';
   const time = ev.ts ? `<span class="replay-event-time">${new Date(ev.ts).toLocaleTimeString()}</span>` : '';
   const ruleBadge = ev.appliedAction ? `<span class="replay-event-rule replay-event-rule-${escapeHtml(ev.appliedAction)}" title="${ev.ruleName ? `Rule: ${escapeHtml(ev.ruleName)}` : ''}">${actionLabel(ev.appliedAction)}</span>` : '';
-  return `<div class="replay-event replay-event-${ev.result}${sel}" data-action="replay-event-detail" data-run="${escapeHtml(ev.runId)}" data-seq="${ev.seq}" title="${new Date(ev.ts).toLocaleString()}">
+  return `<div class="replay-event replay-event-${ev.result}${sel}" data-action="replay-event-detail" data-run="${escapeHtml(ev.runId)}" data-seq="${ev.seq}" title="${escapeHtml(ev.method)} · seq ${ev.seq} · ${new Date(ev.ts).toLocaleString()}">
             <span class="replay-event-result">${icon}</span>
             <span class="replay-event-method">${escapeHtml(ev.method)}</span>
             <span class="replay-event-url">${escapeHtml(ev.url)}</span>
