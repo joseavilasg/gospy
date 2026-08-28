@@ -1609,6 +1609,13 @@ export function renderMatchConfigSidebar(matchConfig, highlightIdx) {
   const body = document.getElementById('matchConfigBody');
   if (!body) return;
   if (!matchConfig || matchConfig.length === 0) {
+    if (body._monacoEditor) {
+      body._monacoEditor.dispose();
+      body._monacoEditor = null;
+    }
+    body._matchConfigRaw = '';
+    body._matchConfigData = null;
+    body._matchConfigView = 'empty';
     body.innerHTML = '<div class="replay-event-empty">No match config for this run.</div>';
     return;
   }
@@ -1678,6 +1685,7 @@ export function setMatchConfigView(view) {
   _savePanelView('matchConfigView', view);
 
   if (view === 'raw') {
+    if (body._matchConfigData === null) return;
     let container = body.querySelector('.match-config-raw');
     if (!container) {
       body.innerHTML = '<div class="match-config-raw" style="height:100%"></div>';
