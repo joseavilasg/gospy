@@ -1474,7 +1474,6 @@ loadRequests().then(() => {
   if (getReplayMode()) {
     loadRules();
     connectSSE();
-    connectRecordingEvents();
     return;
   }
   loadIgnored();
@@ -1485,7 +1484,7 @@ loadRequests().then(() => {
 });
 restoreBodyFilter();
 let _autoRefreshTimer = setInterval(() => {
-  if (_activityPaused) return;
+  if (_activityPaused || getReplayMode()) return;
   if (document.getElementById('autoRefresh').checked) { loadRequests(); }
 }, 2000);
 
