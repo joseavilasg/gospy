@@ -616,10 +616,9 @@ function applyRouteDiff(prev, route) {
     } else if (route.candidate !== prev.candidate) {
       if (route.candidate) {
         selectMatchCandidate(route.candidate);
-      } else if (_matchSelectedId && _matchResp) {
+      } else if (_matchResp) {
         _matchSelectedId = null;
-        const resp = { ..._matchResp, q: currentMatchQuery(), selectedEntryId: null, diff: null };
-        renderReplayMatch(resp, _matchEventCtx, true);
+        renderReplayMatch(_matchResp, _matchEventCtx, true);
       }
     }
   }
