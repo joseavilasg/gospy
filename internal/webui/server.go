@@ -492,9 +492,10 @@ func (s *Server) ReplayEventDetail(runID string, seq int) (*session.ReplayEvent,
 	return nil, fmt.Errorf("event with seq %d not found in run %s", seq, runID)
 }
 
-// ReplayCandidates computes the candidate list for a replay event and the
-// matching/pending totals. Implements agent.ReplayAnalyzer.
-func (s *Server) ReplayCandidates(runID string, seq int, scope string) ([]replay.Candidate, map[string]int, error) {
+// ReplayCandidates computes the candidate sub-list of a replay event's
+// universe selected by the given filter, plus the matching/pending view
+// totals. Implements agent.ReplayAnalyzer.
+func (s *Server) ReplayCandidates(runID string, seq int, filter replay.CandidateFilter) ([]replay.Candidate, map[string]int, error) {
 	events, err := s.ReplayEvents(runID)
 	if err != nil {
 		return nil, nil, err
@@ -514,14 +515,9 @@ func (s *Server) ReplayCandidates(runID string, seq int, scope string) ([]replay
 	}
 
 	cfg := s.runMatchConfig(ev.RunID)
-	matching, allPending := replay.BuildCandidates(ev, events, cfg, s)
+	universe := replay.BuildCandidates(ev, events, cfg, s)
 
-	pool := matching
-	if scope == "all" {
-		pool = allPending
-	}
-
-	return pool, map[string]int{"matching": len(matching), "pending": len(allPending)}, nil
+	return replay.SelectCandidates(universe, filter), replay.Counts(universe), nil
 }
 
 // ReplayDiff returns the detailed URL diff between a replay event's incoming

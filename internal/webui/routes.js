@@ -8,7 +8,7 @@
 // Routes:
 //   #/entry/{id}[/{tab}]                             normal detail (request|response|origin)
 //   #/replay/{run}/{seq}[/{tab}]                     replay event detail (+ match)
-//   #/replay/{run}/{seq}/match/{scope}[/{entryId}]   match scope (matching|all) + selected candidate
+//   #/replay/{run}/{seq}/match/{mode}[/{entryId}]    match view (matching|pending) + selected candidate
 //   #/replay/{run}/{seq}/entry/{entryId}/{n}[/{tab}] recorded entry opened from a replay event
 
 const TABS = ['request', 'response', 'origin', 'match'];
@@ -35,19 +35,19 @@ export function parseRoute(hash) {
       return { kind: 'replay-entry', run, seq, entryId, n, tab: parts[6] || 'request' };
     }
     if (third === 'match') {
-      let scope = 'matching';
+      let mode = 'matching';
       let candidate = null;
-      if (parts[4] === 'matching' || parts[4] === 'all') {
-        scope = parts[4];
+      if (parts[4] === 'matching' || parts[4] === 'pending') {
+        mode = parts[4];
         candidate = parts[5] || null;
       } else if (parts[4]) {
         candidate = parts[4];
       }
-      return { kind: 'replay', run, seq, tab: 'match', scope, candidate };
+      return { kind: 'replay', run, seq, tab: 'match', mode, candidate };
     }
     const tab = third || 'match';
     if (!TABS.includes(tab)) return null;
-    if (tab === 'match') return { kind: 'replay', run, seq, tab, scope: 'matching', candidate: null };
+    if (tab === 'match') return { kind: 'replay', run, seq, tab, mode: 'matching', candidate: null };
     return { kind: 'replay', run, seq, tab };
   }
   return null;
@@ -62,11 +62,11 @@ export function buildHash(route) {
     case 'replay': {
       const base = `#/replay/${enc(route.run)}/${route.seq}`;
       if (route.tab && route.tab !== 'match') return `${base}/${route.tab}`;
-      if (route.scope || route.candidate) {
-        const scope = route.scope || 'matching';
+      if (route.mode || route.candidate) {
+        const mode = route.mode || 'matching';
         return route.candidate
-          ? `${base}/match/${scope}/${enc(route.candidate)}`
-          : `${base}/match/${scope}`;
+          ? `${base}/match/${mode}/${enc(route.candidate)}`
+          : `${base}/match/${mode}`;
       }
       return base;
     }

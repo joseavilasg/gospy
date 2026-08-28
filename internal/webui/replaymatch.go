@@ -2,6 +2,7 @@ package webui
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 
 	"gospy/internal/history"
@@ -10,16 +11,16 @@ import (
 )
 
 // replayCandidatesResponse is the HTTP response for the match tab candidate
-// list. Entries, the selected diff and the consumed warning are domain data
-// produced by internal/replay.
+// list. It echoes the filters that produced Entries and carries the selected
+// diff and the consumed warning, all domain data from internal/replay.
 type replayCandidatesResponse struct {
-	Scope       string               `json:"scope"`
-	Total       map[string]int       `json:"total"`
-	Entries     []replay.Candidate   `json:"entries"`
-	SelectedID  string               `json:"selectedEntryId,omitempty"`
-	Diff        *session.DiffResult  `json:"diff,omitempty"`
-	Consumed    *replay.ConsumedInfo `json:"consumed,omitempty"`
-	MatchConfig *session.MatchConfig `json:"matchConfig,omitempty"`
+	Filters     replay.CandidateFilter `json:"filters"`
+	Total       map[string]int         `json:"total"`
+	Entries     []replay.Candidate     `json:"entries"`
+	SelectedID  string                 `json:"selectedEntryId,omitempty"`
+	Diff        *session.DiffResult    `json:"diff,omitempty"`
+	Consumed    *replay.ConsumedInfo   `json:"consumed,omitempty"`
+	MatchConfig *session.MatchConfig   `json:"matchConfig,omitempty"`
 }
 
 type replayCandidateDiffResponse struct {
@@ -47,13 +48,18 @@ func (s *Server) runMatchConfig(runID string) *session.MatchConfig {
 	return cfg
 }
 
-// handleReplayCandidates serves the unified candidate list of a replay event:
-// scope=matching (entries sharing host+path, diff-ranked) or scope=all (the
-// pending queue remaining after the event), with an optional q substring filter. The
-// response carries the default selection, its diff, and - only when the event
-// itself is a miss whose exact match key was already consumed - the consumed
-// info that drives the already-consumed warning (an event property, not tied
-// to the selected row).
+// handleReplayCandidates serves the candidate list of a replay event, selected
+// from the run's candidate universe by the optional per-entry filters
+// potentialMatch (true/false) and tag (served|consumed|pending). Both combine
+// with AND into a view: the WebUI's matching tab sends potentialMatch=true,
+// its pending tab sends tag=pending, and no filter returns the full universe.
+// An optional q substring filter narrows further. The response carries the
+// filters applied, the view totals, the default selection, its diff, and -
+// only when the event itself is a miss whose exact match key was already
+// consumed - the consumed info that drives the already-consumed warning (an
+// event property, not tied to the selected row). SelectCandidates guarantees a
+// selection whenever the view has entries (best match, else the first row), so
+// the diff table always renders.
 func (s *Server) handleReplayCandidates(w http.ResponseWriter, r *http.Request, runID string, seq int) {
 	events, err := s.replayEventsFor(runID)
 	if err != nil {
@@ -66,20 +72,25 @@ func (s *Server) handleReplayCandidates(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	scope := r.URL.Query().Get("scope")
-	if scope != "all" {
-		scope = "matching"
+	var pm *bool
+	if v := r.URL.Query().Get("potentialMatch"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			http.Error(w, "invalid potentialMatch filter: "+v, http.StatusBadRequest)
+			return
+		}
+		pm = &b
 	}
+	tag := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("tag")))
+	filter := replay.CandidateFilter{PotentialMatch: pm, Tag: tag}
+
 	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
 
 	cfg := s.runMatchConfig(ev.RunID)
-	matching, allPending := replay.BuildCandidates(ev, events, cfg, s)
+	universe := replay.BuildCandidates(ev, events, cfg, s)
 	consumed := replay.ConsumedBefore(events, seq)
 
-	pool := matching
-	if scope == "all" {
-		pool = allPending
-	}
+	pool := replay.SelectCandidates(universe, filter)
 	if q != "" {
 		pool = replay.FilterCandidates(pool, q)
 	}
@@ -87,8 +98,8 @@ func (s *Server) handleReplayCandidates(w http.ResponseWriter, r *http.Request, 
 	selected := replay.SelectCandidate(ev, pool, cfg)
 
 	resp := replayCandidatesResponse{
-		Scope:   scope,
-		Total:   map[string]int{"matching": len(matching), "pending": len(allPending)},
+		Filters: filter,
+		Total:   replay.Counts(universe),
 		Entries: pool,
 	}
 	if selected.EntryID != "" {
@@ -100,7 +111,7 @@ func (s *Server) handleReplayCandidates(w http.ResponseWriter, r *http.Request, 
 	// by an earlier request. Hits never carry it, no matter which candidate is
 	// inspected, and its presence never changes with the selected row.
 	if ev.Result == "miss" {
-		if c := replay.ConsumedExactCandidate(ev, matching, cfg); c.EntryID != "" {
+		if c := replay.ConsumedExactCandidate(ev, replay.SelectCandidates(universe, replay.CandidateFilter{PotentialMatch: new(true)}), cfg); c.EntryID != "" {
 			if ci, ok := consumed[c.EntryID]; ok {
 				resp.Consumed = &replay.ConsumedInfo{
 					EntryID:       ci.EntryID,

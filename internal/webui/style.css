@@ -3278,19 +3278,19 @@ body.resizing-h {
   overflow: hidden;
 }
 
-.match-scope-head {
+.match-mode-head {
   padding: var(--sp-6) var(--sp-8);
   border-bottom: 1px solid var(--border-subtle);
 }
 
-.match-scope-seg {
+.match-mode-seg {
   display: flex;
   background: var(--bg-focus);
   border-radius: var(--radius-sm);
   padding: 2px;
 }
 
-.match-scope-btn {
+.match-mode-btn {
   flex: 1;
   text-align: center;
   padding: var(--sp-2) var(--sp-6);
@@ -3303,11 +3303,11 @@ body.resizing-h {
   white-space: nowrap;
 }
 
-.match-scope-btn:hover {
+.match-mode-btn:hover {
   color: var(--text-primary);
 }
 
-.match-scope-btn.active {
+.match-mode-btn.active {
   background: var(--bg-active);
   color: var(--text-primary);
 }

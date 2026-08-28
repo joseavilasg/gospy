@@ -473,26 +473,26 @@ function currentMatchQuery() {
   return input ? input.value : (_matchState && _matchState.q ? _matchState.q : '');
 }
 
-function loadMatchTab(run, seq, scope, q, rowsOnly) {
+function loadMatchTab(run, seq, mode, q, rowsOnly) {
   if (!_matchState || _matchState.run !== run || _matchState.seq !== seq) {
     _matchQueries = {};
   }
-  _matchState = { run, seq, scope, q: q || '' };
+  _matchState = { run, seq, mode, q: q || '' };
   _matchEventCtx = {
     result: (_lastReplayDetail && _lastReplayDetail.event ? _lastReplayDetail.event.result : '') || '',
     seq,
     url: (_lastReplayDetail && _lastReplayDetail.event ? _lastReplayDetail.event.url : '') || '',
     matchConfig: (_lastReplayDetail && _lastReplayDetail.matchConfig) || null,
   };
-  return loadReplayCandidates(run, seq, scope, q || '').then(resp => {
-    if (scope === 'matching' && resp && resp.total && resp.total.matching === 0 && !(resp.entries && resp.entries.length)) {
-      _matchState.scope = 'all';
-      _matchQueries['all'] = q || '';
+  return loadReplayCandidates(run, seq, mode, q || '').then(resp => {
+    if (mode === 'matching' && resp && resp.total && resp.total.matching === 0 && !(resp.entries && resp.entries.length)) {
+      _matchState.mode = 'pending';
+      _matchQueries['pending'] = q || '';
       if (_currentView && _currentView.kind === 'replay' && _currentView.run === run && _currentView.seq === seq) {
-        _currentView = { ..._currentView, scope: 'all' };
+        _currentView = { ..._currentView, mode: 'pending' };
         history.replaceState(null, '', buildHash(_currentView));
       }
-      return loadMatchTab(run, seq, 'all', q || '');
+      return loadMatchTab(run, seq, 'pending', q || '');
     }
     _matchResp = { ...resp, q: q || '' };
     if (rowsOnly) {
@@ -587,8 +587,8 @@ function applyRouteFull(route) {
         showReplayDetail(detail, route.tab);
         if (route.tab === 'origin') loadSignatureInfo();
         if (detail && detail.event) {
-          const scope = route.scope || 'matching';
-          return loadMatchTab(route.run, route.seq, scope, _matchQueries[scope] || '').then(() => {
+          const mode = route.mode || 'matching';
+          return loadMatchTab(route.run, route.seq, mode, _matchQueries[mode] || '').then(() => {
             if (route.candidate) selectMatchCandidate(route.candidate);
           });
         }
@@ -609,8 +609,8 @@ function applyRouteDiff(prev, route) {
     if (route.tab === 'origin') loadSignatureInfo();
   }
   if (route.kind === 'replay' && route.tab === 'match') {
-    if (route.scope !== prev.scope) {
-      loadMatchTab(route.run, route.seq, route.scope, _matchQueries[route.scope] || '').then(() => {
+    if (route.mode !== prev.mode) {
+      loadMatchTab(route.run, route.seq, route.mode, _matchQueries[route.mode] || '').then(() => {
         if (route.candidate) selectMatchCandidate(route.candidate);
       });
     } else if (route.candidate !== prev.candidate) {
@@ -817,8 +817,8 @@ document.getElementById('detailPanel').addEventListener('input', (e) => {
   clearTimeout(_matchSearchTimer);
   _matchSearchTimer = setTimeout(() => {
     if (_matchState) {
-      _matchQueries[_matchState.scope] = e.target.value || '';
-      loadMatchTab(_matchState.run, _matchState.seq, _matchState.scope, e.target.value || '', true);
+      _matchQueries[_matchState.mode] = e.target.value || '';
+      loadMatchTab(_matchState.run, _matchState.seq, _matchState.mode, e.target.value || '', true);
     }
   }, 250);
 });
@@ -929,15 +929,15 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
     }
     case 'replay-candidate':
       if (_matchState) {
-        navigate({ kind: 'replay', run: _matchState.run, seq: _matchState.seq, tab: 'match', scope: _matchState.scope, candidate: btn.dataset.entry });
+        navigate({ kind: 'replay', run: _matchState.run, seq: _matchState.seq, tab: 'match', mode: _matchState.mode, candidate: btn.dataset.entry });
       }
       break;
-    case 'replay-scope': {
+    case 'replay-mode': {
       if (!_matchState) break;
       clearTimeout(_matchSearchTimer);
       const input = document.querySelector('.match-search');
-      if (input) _matchQueries[_matchState.scope] = input.value;
-      navigate({ kind: 'replay', run: _matchState.run, seq: _matchState.seq, tab: 'match', scope: btn.dataset.scope });
+      if (input) _matchQueries[_matchState.mode] = input.value;
+      navigate({ kind: 'replay', run: _matchState.run, seq: _matchState.seq, tab: 'match', mode: btn.dataset.mode });
       break;
     }
     case 'replay-search-clear': {
@@ -947,8 +947,8 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
         input.value = '';
         btn.classList.add('hidden');
         if (_matchState) {
-          _matchQueries[_matchState.scope] = '';
-          loadMatchTab(_matchState.run, _matchState.seq, _matchState.scope, '', true);
+          _matchQueries[_matchState.mode] = '';
+          loadMatchTab(_matchState.run, _matchState.seq, _matchState.mode, '', true);
         }
         input.focus();
       }

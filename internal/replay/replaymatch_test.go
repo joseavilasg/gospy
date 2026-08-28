@@ -69,14 +69,15 @@ type fakeSource struct {
 
 func (f fakeSource) ListEntries() []*history.ListEntry { return f.list }
 
-// TestBuildCandidates_Ordering locks the matching-list ranking contract: the
-// served entry first, then consumed-before, then pending ranked by diff count
-// ascending.
-func TestBuildCandidates_Ordering(t *testing.T) {
+// TestBuildCandidates_Universe locks the candidate universe contract: every
+// recorded entry is tagged with its state at the event's time and whether it
+// is a potential match for the event (shares host+path), and the view filters
+// derive the matching and pending lists from it.
+func TestBuildCandidates_Universe(t *testing.T) {
 	src := fakeSource{list: []*history.ListEntry{
-		{ID: "e1", Method: "GET", URL: "https://api.example.com/a?x=1", Status: intPtr(200)},
-		{ID: "e2", Method: "GET", URL: "https://api.example.com/a?x=2", Status: intPtr(200)},
-		{ID: "e3", Method: "GET", URL: "https://api.example.com/b", Status: intPtr(200)},
+		{ID: "e1", Method: "GET", URL: "https://api.example.com/a?x=1", Status: new(200)},
+		{ID: "e2", Method: "GET", URL: "https://api.example.com/a?x=2", Status: new(200)},
+		{ID: "e3", Method: "GET", URL: "https://api.example.com/b", Status: new(200)},
 	}}
 	events := []session.ReplayEvent{
 		{Seq: 1, Result: "hit", EntryID: "e1", URL: "https://api.example.com/a?x=1", Method: "GET"},
@@ -84,38 +85,89 @@ func TestBuildCandidates_Ordering(t *testing.T) {
 	ev := &session.ReplayEvent{Seq: 2, Result: "miss", URL: "https://api.example.com/a?x=2", Method: "GET"}
 	cfg := &session.MatchConfig{}
 
-	matching, allPending := BuildCandidates(ev, events, cfg, src)
+	universe := BuildCandidates(ev, events, cfg, src)
+	if len(universe) != 3 {
+		t.Fatalf("universe = %d entries, want 3: %+v", len(universe), universe)
+	}
 
+	byID := map[string]Candidate{}
+	for _, c := range universe {
+		byID[c.EntryID] = c
+	}
 	// The incoming URL shares host+path with e1 and e2 (same /a), so both are
-	// matching; e3 (/b) is excluded. e1 was consumed by the seq-1 hit, e2 is
-	// pending and matches exactly (diff 0).
-	if len(matching) != 2 {
-		t.Fatalf("matching = %d, want 2: %+v", len(matching), matching)
+	// potential matches; e3 (/b) is not. e1 was consumed by the seq-1 hit, e2
+	// is pending and matches exactly (diff 0), e3 is pending on another path.
+	if c := byID["e1"]; c.Tag != "consumed" || !c.PotentialMatch {
+		t.Errorf("e1 = %+v, want consumed potential match", c)
 	}
-	if matching[0].Tag != "consumed" || matching[0].EntryID != "e1" {
-		t.Errorf("matching[0] = %+v, want consumed e1 first", matching[0])
+	if c := byID["e2"]; c.Tag != "pending" || !c.PotentialMatch || c.DiffCount != 0 {
+		t.Errorf("e2 = %+v, want pending potential match with diff 0", c)
 	}
-	if matching[1].Tag != "pending" || matching[1].EntryID != "e2" {
-		t.Errorf("matching[1] = %+v, want pending e2", matching[1])
+	if c := byID["e3"]; c.Tag != "pending" || c.PotentialMatch {
+		t.Errorf("e3 = %+v, want pending non-match", c)
 	}
+}
 
-	// allPending is strictly the unconsumed queue: every recorded entry that
-	// has not been served by an earlier hit. e1 was consumed by the seq-1 hit
-	// and must not reappear; e2 (same path, pending) and e3 (other path, never
-	// consumed) both remain.
-	if len(allPending) != 2 {
-		t.Fatalf("allPending = %+v, want the two unconsumed entries (e2, e3)", allPending)
+// TestSelectCandidates locks the view-filter contract: the matching view
+// (PotentialMatch=true) is ranked served -> consumed -> pending by diff count
+// ascending, the pending view (tag=pending) keeps the universe's queue order,
+// and no filter returns the whole universe.
+func TestSelectCandidates(t *testing.T) {
+	src := fakeSource{list: []*history.ListEntry{
+		{ID: "e1", Method: "GET", URL: "https://api.example.com/a?x=1", Status: new(200)},
+		{ID: "e2", Method: "GET", URL: "https://api.example.com/a?x=2", Status: new(200)},
+		{ID: "e3", Method: "GET", URL: "https://api.example.com/b", Status: new(200)},
+	}}
+	events := []session.ReplayEvent{
+		{Seq: 1, Result: "hit", EntryID: "e1", URL: "https://api.example.com/a?x=1", Method: "GET"},
 	}
-	gotPending := map[string]bool{}
-	for _, c := range allPending {
-		gotPending[c.EntryID] = true
-	}
-	if gotPending["e1"] {
-		t.Error("allPending must not include the consumed e1")
-	}
-	if !gotPending["e2"] || !gotPending["e3"] {
-		t.Errorf("allPending = %+v, want both e2 and e3", allPending)
-	}
+	ev := &session.ReplayEvent{Seq: 2, Result: "miss", URL: "https://api.example.com/a?x=2", Method: "GET"}
+	cfg := &session.MatchConfig{}
+	universe := BuildCandidates(ev, events, cfg, src)
+
+	t.Run("matching view ranks served, consumed then pending by diff", func(t *testing.T) {
+		got := SelectCandidates(universe, CandidateFilter{PotentialMatch: new(true)})
+		if len(got) != 2 {
+			t.Fatalf("matching = %d, want 2 (e1, e2): %+v", len(got), got)
+		}
+		if got[0].EntryID != "e1" || got[0].Tag != "consumed" {
+			t.Errorf("matching[0] = %+v, want consumed e1 first", got[0])
+		}
+		if got[1].EntryID != "e2" || got[1].Tag != "pending" {
+			t.Errorf("matching[1] = %+v, want pending e2", got[1])
+		}
+	})
+
+	t.Run("pending view keeps queue order over all pending entries", func(t *testing.T) {
+		got := SelectCandidates(universe, CandidateFilter{Tag: "pending"})
+		if len(got) != 2 {
+			t.Fatalf("pending = %d, want 2: %+v", len(got), got)
+		}
+		// The unconsumed entries remain in queue (ordinal) order; e1 was
+		// consumed by the seq-1 hit and never reappears.
+		if got[0].Entry >= got[1].Entry {
+			t.Errorf("pending = %+v, want queue order (Entry ascending)", got)
+		}
+		for _, c := range got {
+			if c.EntryID == "e1" {
+				t.Error("pending must not include the consumed e1")
+			}
+		}
+	})
+
+	t.Run("no filter returns the whole universe", func(t *testing.T) {
+		got := SelectCandidates(universe, CandidateFilter{})
+		if len(got) != 3 {
+			t.Fatalf("all = %d, want 3 entries", len(got))
+		}
+	})
+
+	t.Run("counts report matching and pending sizes", func(t *testing.T) {
+		got := Counts(universe)
+		if got["matching"] != 2 || got["pending"] != 2 {
+			t.Errorf("counts = %+v, want matching 2, pending 2", got)
+		}
+	})
 }
 
 // TestSelectCandidate_HitServed locks that a hit always selects the served
@@ -140,8 +192,6 @@ func TestSelectCandidate_Picking(t *testing.T) {
 		t.Errorf("miss with exact consumed key: want the consumed e2, got %+v", got)
 	}
 }
-
-func intPtr(v int) *int { return &v }
 
 // TestEventBySeq guards the event lookup helper.
 func TestEventBySeq(t *testing.T) {

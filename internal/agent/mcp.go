@@ -37,15 +37,15 @@ type ReplayAnalyzer interface {
 	ListReplayRuns() ([]session.RunSummary, error)
 	ReplayEvents(runID string) ([]session.ReplayEvent, error)
 	ReplayEventDetail(runID string, seq int) (*session.ReplayEvent, error)
-	ReplayCandidates(runID string, seq int, scope string) ([]replay.Candidate, map[string]int, error)
+	ReplayCandidates(runID string, seq int, filter replay.CandidateFilter) ([]replay.Candidate, map[string]int, error)
 	ReplayDiff(runID string, seq int, entryID string) (*ReplayDiffResult, error)
 }
 
 // ReplayCandidateResult is the MCP response for list_replay_candidates.
 type ReplayCandidateResult struct {
-	Scope   string             `json:"scope"`
-	Total   map[string]int     `json:"total"`
-	Entries []replay.Candidate `json:"entries"`
+	Filters replay.CandidateFilter `json:"filters"`
+	Total   map[string]int         `json:"total"`
+	Entries []replay.Candidate     `json:"entries"`
 }
 
 // ReplayDiffResult is the MCP response for replay_diff.
@@ -142,9 +142,10 @@ func NewServer(scope *Scope, hist *history.Store, fwd *Forwarder) *Server {
 	), s.handleGetReplayEvent)
 
 	ms.AddTool(mcp.NewTool("list_replay_candidates",
-		mcp.WithDescription("Returns candidate recorded entries for a replay event, identified by its event ID. If runId is omitted, uses the active run. Candidates are entries from the recorded session that could match the incoming request, tagged with their state (served = already matched by another event, consumed = used, pending = still available) and a per-parameter diff count. scope=matching shows entries sharing host+path ranked by diff count; scope=all shows the full unconsumed queue."),
+		mcp.WithDescription("Lists candidate recorded entries of a replay run for an event, selected by optional per-entry attribute filters. Each entry carries its tag (served = this HIT served it, consumed = served by an earlier event, pending = still available) and potentialMatch (true when it shares the event's host+path and is thus a viable comparison). Both filters combine with AND and may be combined; leaving both unset returns the full run universe. To reproduce the WebUI's views: matching sends potentialMatch=true (entries sharing host+path, ranked by diff count), pending sends tag=pending (the unconsumed queue). The response echoes the filters applied, per-view totals (matching/pending counts over the whole universe) and the selected entries."),
 		mcp.WithNumber("eventId", mcp.Required(), mcp.Description("Event ID of the replay event to find candidates for (from list_replay_events).")),
-		mcp.WithString("scope", mcp.Description("Matching scope: 'matching' (entries sharing host+path, default) or 'all' (the full unconsumed queue).")),
+		mcp.WithBoolean("potentialMatch", mcp.Description("Optional. true (matching view: entries sharing host+path, ranked) or false (everything else). Omit for either.")),
+		mcp.WithString("tag", mcp.Description("Optional. Entry state to keep: 'served', 'consumed' or 'pending'. Omit for all states.")),
 		mcp.WithString("runId", mcp.Description("Replay run ID (from list_replay_runs). Omitted: the active run.")),
 	), s.handleListReplayCandidates)
 
@@ -465,20 +466,26 @@ func (s *Server) handleListReplayCandidates(ctx context.Context, req mcp.CallToo
 	if seq <= 0 {
 		return mcp.NewToolResultError("eventId is required and must be > 0"), nil
 	}
-	scope := req.GetString("scope", "matching")
-	if scope != "all" {
-		scope = "matching"
+	var filter replay.CandidateFilter
+	if args := req.GetArguments(); args != nil {
+		if raw, ok := args["potentialMatch"]; ok {
+			b, _ := raw.(bool)
+			filter.PotentialMatch = &b
+		}
+	}
+	if tag := req.GetString("tag", ""); tag != "" {
+		filter.Tag = tag
 	}
 	runID, err := s.resolveRunID(req.GetString("runId", ""))
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	pool, total, err := s.replay.ReplayCandidates(runID, seq, scope)
+	pool, total, err := s.replay.ReplayCandidates(runID, seq, filter)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	return mcp.NewToolResultJSON(ReplayCandidateResult{
-		Scope:   scope,
+		Filters: filter,
 		Total:   total,
 		Entries: pool,
 	})

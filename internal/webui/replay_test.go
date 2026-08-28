@@ -1005,7 +1005,7 @@ func TestReplayBrowserHistory(t *testing.T) {
 		!strings.Contains(routesJS, "export function buildHash") {
 		t.Fatal("routes.js: must export parseRoute/buildHash for hash-based history")
 	}
-	for _, probe := range []string{"kind: 'entry'", "kind: 'replay'", "kind: 'replay-entry'", "'matching'", "'all'"} {
+	for _, probe := range []string{"kind: 'entry'", "kind: 'replay'", "kind: 'replay-entry'", "'matching'", "'pending'"} {
 		if !strings.Contains(routesJS, probe) {
 			t.Fatalf("routes.js: must model the %s view", probe)
 		}
@@ -1245,17 +1245,17 @@ func TestReplayMatchTab(t *testing.T) {
 	if !strings.Contains(renderJS, "renderReplayMatch") ||
 		!strings.Contains(renderJS, "match-candidate-row") ||
 		!strings.Contains(renderJS, "replay-candidate") ||
-		!strings.Contains(renderJS, "replay-scope") ||
+		!strings.Contains(renderJS, "replay-mode") ||
 		!strings.Contains(renderJS, "match-search") ||
-		!strings.Contains(renderJS, "match-scope-seg") ||
-		!strings.Contains(renderJS, "match-scope-btn") ||
+		!strings.Contains(renderJS, "match-mode-seg") ||
+		!strings.Contains(renderJS, "match-mode-btn") ||
 		!strings.Contains(renderJS, "match-candidate-url") ||
 		!strings.Contains(renderJS, "shortUrl") {
-		t.Fatal("render.js: the match tab needs the candidate list, the segmented scope control, the search input and the short-url helper")
+		t.Fatal("render.js: the match tab needs the candidate list, the segmented view control, the search input and the short-url helper")
 	}
 	if strings.Contains(renderJS, "match-chip") ||
-		strings.Contains(renderJS, "match-scope-chips") {
-		t.Fatal("render.js: the scope selector must be a segmented control, not standalone chips")
+		strings.Contains(renderJS, "match-mode-chips") {
+		t.Fatal("render.js: the view selector must be a segmented control, not standalone chips")
 	}
 	if !strings.Contains(renderJS, "replay-tag-served") ||
 		!strings.Contains(renderJS, "consumed by seq") {
@@ -1333,10 +1333,10 @@ func TestReplayMatchTab(t *testing.T) {
 		!strings.Contains(styleCSS, ".replay-badge-miss") {
 		t.Fatal("style.css: the match tab needs candidate rows, diff table, warn box, breadcrumb and badge styles")
 	}
-	if !strings.Contains(styleCSS, ".match-scope-seg") ||
-		!strings.Contains(styleCSS, ".match-scope-btn") ||
-		strings.Contains(styleCSS, ".match-scope-chips") {
-		t.Fatal("style.css: the scope selector must be a segmented control, not standalone chips")
+	if !strings.Contains(styleCSS, ".match-mode-seg") ||
+		!strings.Contains(styleCSS, ".match-mode-btn") ||
+		strings.Contains(styleCSS, ".match-mode-chips") {
+		t.Fatal("style.css: the view selector must be a segmented control, not standalone chips")
 	}
 	if !strings.Contains(styleCSS, ".match-candidate-row.served") ||
 		!strings.Contains(styleCSS, ".match-candidate-row.consumed") ||
@@ -1386,7 +1386,7 @@ func TestReplayMatchTab(t *testing.T) {
 	if !strings.Contains(appJS, "renderReplayMatch(resp, _matchEventCtx, true)") {
 		t.Fatal("app.js: selecting a candidate must re-render with keepScroll so the list does not jump to the top")
 	}
-	if !strings.Contains(renderJS, "function buildCandidateRows(entries, scope, selectedId)") ||
+	if !strings.Contains(renderJS, "function buildCandidateRows(entries, selectedId)") ||
 		!strings.Contains(renderJS, "function renderMatchCandidates(resp, ctx)") ||
 		!strings.Contains(renderJS, "match-candidate-top") {
 		t.Fatal("render.js: the match tab needs a rows-only candidate renderer (buildCandidateRows/renderMatchCandidates) so search does not rebuild the input and lose its text and focus")
@@ -1420,14 +1420,14 @@ func TestReplayMatchTab(t *testing.T) {
 		t.Fatal("app.js: the match search needs a always-visible clear button toggled by value and a clear action that reloads with an empty query and refocuses")
 	}
 	if !strings.Contains(appJS, "let _matchQueries = {}") ||
-		!strings.Contains(appJS, "_matchQueries[_matchState.scope] = e.target.value || ''") ||
-		!strings.Contains(appJS, "_matchQueries[_matchState.scope] = input.value") ||
-		!strings.Contains(appJS, "loadMatchTab(route.run, route.seq, route.scope, _matchQueries[route.scope] || '')") ||
+		!strings.Contains(appJS, "_matchQueries[_matchState.mode] = e.target.value || ''") ||
+		!strings.Contains(appJS, "_matchQueries[_matchState.mode] = input.value") ||
+		!strings.Contains(appJS, "loadMatchTab(route.run, route.seq, route.mode, _matchQueries[route.mode] || '')") ||
 		!strings.Contains(appJS, "_matchState.run !== run || _matchState.seq !== seq") ||
-		!strings.Contains(appJS, "_matchQueries[_matchState.scope] = ''") ||
+		!strings.Contains(appJS, "_matchQueries[_matchState.mode] = ''") ||
 		!strings.Contains(appJS, "q: currentMatchQuery()") ||
-		strings.Contains(appJS, "btn.dataset.scope, ''") {
-		t.Fatal("app.js: each match scope must keep its own search query (per-scope _matchQueries, reset on event change) and selecting a candidate must keep the live query")
+		strings.Contains(appJS, "btn.dataset.mode, ''") {
+		t.Fatal("app.js: each match view must keep its own search query (per-view _matchQueries, reset on event change) and selecting a candidate must keep the live query")
 	}
 
 	if strings.Contains(appJS, "resp.consumed") {
@@ -1460,7 +1460,7 @@ func TestReplayCandidatesEndpoint(t *testing.T) {
 	notify(session.ReplayEvent{Seq: 3, RunID: "run1", Method: "GET", URL: "https://x.com/a?id=2", Result: "hit", Status: 200, EntryID: "e2", Consumed: 2, Total: 2})
 
 	rec := httptest.NewRecorder()
-	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?scope=matching", nil), "run1", 2)
+	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?potentialMatch=true", nil), "run1", 2)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("candidates: expected 200, got %d", rec.Code)
 	}
@@ -1495,7 +1495,7 @@ func TestReplayCandidatesEndpoint(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?scope=all", nil), "run1", 2)
+	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?tag=pending", nil), "run1", 2)
 	resp = replayCandidatesResponse{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode all: %v", err)
@@ -1505,7 +1505,7 @@ func TestReplayCandidatesEndpoint(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/3/candidates?scope=matching", nil), "run1", 3)
+	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/3/candidates?potentialMatch=true", nil), "run1", 3)
 	resp = replayCandidatesResponse{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode hit matching: %v", err)
@@ -1521,7 +1521,7 @@ func TestReplayCandidatesEndpoint(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/3/candidates?scope=all", nil), "run1", 3)
+	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/3/candidates?tag=pending", nil), "run1", 3)
 	resp = replayCandidatesResponse{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode hit all: %v", err)
@@ -1539,7 +1539,7 @@ func TestReplayCandidatesEndpoint(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?scope=matching&q=id%3D2", nil), "run1", 2)
+	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?potentialMatch=true&q=id%3D2", nil), "run1", 2)
 	resp = replayCandidatesResponse{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode q: %v", err)
@@ -1552,7 +1552,7 @@ func TestReplayCandidatesEndpoint(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?scope=matching&q=consumed", nil), "run1", 2)
+	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?potentialMatch=true&q=consumed", nil), "run1", 2)
 	resp = replayCandidatesResponse{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode q=consumed: %v", err)
@@ -1562,7 +1562,7 @@ func TestReplayCandidatesEndpoint(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?scope=matching&q=entry%202", nil), "run1", 2)
+	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?potentialMatch=true&q=entry%202", nil), "run1", 2)
 	resp = replayCandidatesResponse{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode q=entry 2: %v", err)
@@ -1572,7 +1572,7 @@ func TestReplayCandidatesEndpoint(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?scope=matching&q=2", nil), "run1", 2)
+	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?potentialMatch=true&q=2", nil), "run1", 2)
 	resp = replayCandidatesResponse{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode q=2: %v", err)
@@ -1582,7 +1582,7 @@ func TestReplayCandidatesEndpoint(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?scope=matching&q=9", nil), "run1", 2)
+	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?potentialMatch=true&q=9", nil), "run1", 2)
 	resp = replayCandidatesResponse{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode q=9: %v", err)

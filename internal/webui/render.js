@@ -1379,7 +1379,7 @@ export function renderReplayMatch(resp, ctx, keepScroll) {
   let title = 'Select a candidate to compare';
   if (result === 'hit') title = `Matched · seq ${seq} · recorded`;
   else if (result === 'ignored') title = 'Host excluded — recorded traffic shown for reference';
-  else if (total.matching === 0 && resp.scope === 'all') title = 'No candidate shares this host+path — showing all pending';
+  else if (resp.filters && resp.filters.tag === 'pending' && total.matching === 0) title = 'No candidate shares this host+path — showing all pending';
 
   const matchConfig = (ctx && ctx.matchConfig) || [];
   const eventUrl = (ctx && ctx.url) || '';
@@ -1465,15 +1465,17 @@ export function renderReplayMatch(resp, ctx, keepScroll) {
     }
   }
 
+  const mode = resp.filters && resp.filters.tag === 'pending' ? 'pending' : 'matching';
+
   const segHtml = `
-    <div class="match-scope-head">
-        <div class="match-scope-seg">
-            <span class="match-scope-btn${resp.scope !== 'all' ? ' active' : ''}" data-action="replay-scope" data-scope="matching">Matching (${total.matching ?? 0})</span>
-            <span class="match-scope-btn${resp.scope === 'all' ? ' active' : ''}" data-action="replay-scope" data-scope="all">All pending (${total.pending ?? 0})</span>
+    <div class="match-mode-head">
+        <div class="match-mode-seg">
+            <span class="match-mode-btn${mode !== 'pending' ? ' active' : ''}" data-action="replay-mode" data-mode="matching">Matching (${total.matching ?? 0})</span>
+            <span class="match-mode-btn${mode === 'pending' ? ' active' : ''}" data-action="replay-mode" data-mode="pending">Pending (${total.pending ?? 0})</span>
         </div>
     </div>`;
 
-  const rowsHtml = buildCandidateRows(entries, resp.scope, resp.selectedEntryId);
+  const rowsHtml = buildCandidateRows(entries, resp.selectedEntryId);
 
   const listHtml = `
     <div class="match-list-col">
@@ -1522,12 +1524,12 @@ export function renderReplayMatch(resp, ctx, keepScroll) {
   }
 }
 
-function buildCandidateRows(entries, scope, selectedId) {
+function buildCandidateRows(entries, selectedId) {
   if (!entries || entries.length === 0) return '<div class="match-empty">No candidates.</div>';
   return entries.map(c => {
     const rowClass = c.entryId === selectedId ? ' selected' : '';
-    const stateClass = scope !== 'all' && c.tag ? ` ${c.tag}` : '';
-    const tagHtml = scope !== 'all' && c.tag ? replayCandidateTag(c) : '';
+    const stateClass = c.tag ? ` ${c.tag}` : '';
+    const tagHtml = c.tag ? replayCandidateTag(c) : '';
     return `<div class="match-candidate-row${rowClass}${stateClass}" data-action="replay-candidate" data-entry="${escapeHtml(c.entryId)}" title="${escapeHtml(c.url)}">
         <div class="match-candidate-top">
             <span class="match-candidate-name">entry ${c.entry}</span>
@@ -1548,7 +1550,7 @@ export function renderMatchCandidates(resp, ctx) {
     renderReplayMatch(resp, ctx);
     return;
   }
-  list.innerHTML = buildCandidateRows(resp.entries, resp.scope, resp.selectedEntryId);
+  list.innerHTML = buildCandidateRows(resp.entries, resp.selectedEntryId);
 }
 
 function replayCandidateTagText(c) {

@@ -348,10 +348,11 @@ export async function loadReplayEventDetail(runId, seq) {
   }
 }
 
-export async function loadReplayCandidates(runId, seq, scope, q) {
+export async function loadReplayCandidates(runId, seq, mode, q) {
   try {
     const params = new URLSearchParams();
-    params.set('scope', scope || 'matching');
+    if (mode === 'pending') params.set('tag', 'pending');
+    else params.set('potentialMatch', 'true');
     if (q) params.set('q', q);
     const resp = await fetch(`/api/replay/events/${encodeURIComponent(runId)}/${seq}/candidates?${params}`);
     return await resp.json();

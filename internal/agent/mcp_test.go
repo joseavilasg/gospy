@@ -826,7 +826,7 @@ func (m *mockReplayAnalyzer) ReplayEventDetail(runID string, seq int) (*session.
 	}
 	return nil, fmt.Errorf("event with seq %d not found in run %s", seq, runID)
 }
-func (m *mockReplayAnalyzer) ReplayCandidates(runID string, seq int, scope string) ([]replay.Candidate, map[string]int, error) {
+func (m *mockReplayAnalyzer) ReplayCandidates(runID string, seq int, filter replay.CandidateFilter) ([]replay.Candidate, map[string]int, error) {
 	return []replay.Candidate{}, map[string]int{}, nil
 }
 func (m *mockReplayAnalyzer) ReplayDiff(runID string, seq int, entryID string) (*ReplayDiffResult, error) {
@@ -961,10 +961,13 @@ func TestMCP_ListReplayCandidates(t *testing.T) {
 		{Seq: 1, Result: "miss", Method: "GET", URL: "http://example.com/a", Status: 0, Consumed: 1, Total: 1, Timestamp: now},
 	}
 	h := newTestReplayMCPServer(t, events, "run-42")
-	resp := callTool(t, h, "list_replay_candidates", map[string]any{"eventId": float64(1), "scope": "all"})
+	resp := callTool(t, h, "list_replay_candidates", map[string]any{"eventId": float64(1), "tag": "pending"})
 	text := resultText(t, resp)
-	if !strings.Contains(text, "\"scope\":\"all\"") {
-		t.Fatalf("expected scope all, got %s", text)
+	if !strings.Contains(text, "\"tag\":\"pending\"") {
+		t.Fatalf("expected the tag filter echoed, got %s", text)
+	}
+	if strings.Contains(text, "scope") {
+		t.Fatalf("the scope param is gone; expected no scope key in %s", text)
 	}
 }
 

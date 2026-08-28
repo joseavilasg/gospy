@@ -5,8 +5,6 @@ import (
 	"time"
 )
 
-func strPtr(s int) *int { return &s }
-
 func TestPageVisibleSet(t *testing.T) {
 	le := func(id, host string) *ListEntry {
 		return &ListEntry{ID: id, Host: host}
@@ -77,7 +75,7 @@ func testEntry() *ListEntry {
 		Method:              "GET",
 		URL:                 "https://api.example.com/v1/users",
 		Host:                "api.example.com",
-		Status:              strPtr(200),
+		Status:              new(200),
 		ClientDisplayName:   "chrome.exe",
 		ClientProcess:       "chrome.exe",
 		Referer:             "https://github.com/org/repo",
