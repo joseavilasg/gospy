@@ -27,16 +27,24 @@ type Server struct {
 	histVal atomic.Pointer[history.Store]
 	fwd     *Forwarder
 	mcp     *server.MCPServer
-	replay  ReplayAnalyzer // nil in record mode; set for replay
+	replay  ReplayData // nil in record mode; set for replay
 }
 
-// ReplayAnalyzer is implemented by the webui.Server and provides the MCP agent
-// with replay event analysis. Nil in record mode.
-type ReplayAnalyzer interface {
+// ReplayData is the data plane the MCP needs in replay mode. Implemented by
+// session.ReplayServer; the candidate/diff analysis lives in internal/replay
+// and is invoked directly from the handlers with history as EntrySource.
+type ReplayData interface {
 	ActiveRunID() string
 	ListReplayRuns() ([]session.RunSummary, error)
 	ReplayEvents(runID string) ([]session.ReplayEvent, error)
 	ReplayEventDetail(runID string, seq int) (*session.ReplayEvent, error)
+	MatchConfigFor(runID string) (*session.MatchConfig, error)
+}
+
+// ReplayAnalyzer is the legacy interface (webui.Server) kept for
+// compatibility with tests that still mock the full analyzer.
+type ReplayAnalyzer interface {
+	ReplayData
 	ReplayCandidates(runID string, seq int, filter replay.CandidateFilter) ([]replay.Candidate, map[string]int, error)
 	ReplayDiff(runID string, seq int, entryID string) (*ReplayDiffResult, error)
 }
@@ -60,8 +68,17 @@ type ReplayDiffResult struct {
 // tools (list_replay_events, get_replay_event, list_replay_candidates,
 // list_replay_filter_values, replay_diff) become available and send_request
 // is blocked.
-func (s *Server) SetReplayAnalyzer(a ReplayAnalyzer) {
+func (s *Server) SetReplayAnalyzer(a ReplayData) {
 	s.replay = a
+}
+
+// ListEntries supplies the recorded entries snapshot to the replay analysis.
+// Implements replay.EntrySource over the MCP's history store.
+func (s *Server) ListEntries() []*history.ListEntry {
+	if h := s.hist(); h != nil {
+		return h.ListSummary()
+	}
+	return nil
 }
 
 // requireGate returns an error if the agent gate is off. Every MCP tool
@@ -480,10 +497,21 @@ func (s *Server) handleListReplayCandidates(ctx context.Context, req mcp.CallToo
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	pool, total, err := s.replay.ReplayCandidates(runID, seq, filter)
+	events, err := s.replay.ReplayEvents(runID)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+	ev := replay.EventBySeq(events, seq)
+	if ev == nil {
+		return mcp.NewToolResultErrorf("event with seq %d not found in run %s", seq, runID), nil
+	}
+	cfg, err := s.replay.MatchConfigFor(ev.RunID)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	universe := replay.BuildCandidates(ev, events, cfg, s)
+	total := replay.Counts(universe)
+	pool := replay.SelectCandidates(universe, filter)
 	return mcp.NewToolResultJSON(ReplayCandidateResult{
 		Filters: filter,
 		Total:   total,
@@ -510,11 +538,33 @@ func (s *Server) handleReplayDiff(ctx context.Context, req mcp.CallToolRequest) 
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	diff, err := s.replay.ReplayDiff(runID, seq, entryID)
+	events, err := s.replay.ReplayEvents(runID)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	return mcp.NewToolResultJSON(diff)
+	ev := replay.EventBySeq(events, seq)
+	if ev == nil {
+		return mcp.NewToolResultErrorf("event with seq %d not found in run %s", seq, runID), nil
+	}
+	hist := s.hist()
+	if hist == nil {
+		return mcp.NewToolResultError("no history store available"), nil
+	}
+	entry, err := hist.Get(entryID)
+	if err != nil {
+		return mcp.NewToolResultErrorf("entry %s: %v", entryID, err), nil
+	}
+	cfg, err := s.replay.MatchConfigFor(ev.RunID)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	diff := session.DiffURL(ev.URL, entry.Request.URL, cfg)
+	return mcp.NewToolResultJSON(&ReplayDiffResult{
+		RunID:   runID,
+		Seq:     seq,
+		EntryID: entryID,
+		Diff:    *diff,
+	})
 }
 
 var replayFilterValueTypes = map[string]bool{"result": true, "host": true, "method": true}

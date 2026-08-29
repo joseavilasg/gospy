@@ -370,7 +370,7 @@ func runReplay(caCert *ca.CA, addr, sessionDir, matchConfig, uiAddr, dataDir str
 	mcpScope := agent.NewScope(hist, filterStore, ignoreStore, focusStore)
 	mcpScope.SetReplayMode(true)
 	mcpServer := agent.NewServer(mcpScope, hist, nil)
-	mcpServer.SetReplayAnalyzer(webSrv)
+	mcpServer.SetReplayAnalyzer(srv)
 	go func() {
 		mux := http.NewServeMux()
 		mux.Handle("/mcp", mcpServer.Handler())

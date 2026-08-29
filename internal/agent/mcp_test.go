@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"gospy/internal/history"
-	"gospy/internal/replay"
 	"gospy/internal/session"
 )
 
@@ -826,11 +825,8 @@ func (m *mockReplayAnalyzer) ReplayEventDetail(runID string, seq int) (*session.
 	}
 	return nil, fmt.Errorf("event with seq %d not found in run %s", seq, runID)
 }
-func (m *mockReplayAnalyzer) ReplayCandidates(runID string, seq int, filter replay.CandidateFilter) ([]replay.Candidate, map[string]int, error) {
-	return []replay.Candidate{}, map[string]int{}, nil
-}
-func (m *mockReplayAnalyzer) ReplayDiff(runID string, seq int, entryID string) (*ReplayDiffResult, error) {
-	return &ReplayDiffResult{RunID: runID, Seq: seq, EntryID: entryID}, nil
+func (m *mockReplayAnalyzer) MatchConfigFor(runID string) (*session.MatchConfig, error) {
+	return &session.MatchConfig{}, nil
 }
 
 func newTestReplayMCPServer(t *testing.T, events []session.ReplayEvent, runID string) http.Handler {
@@ -1049,5 +1045,55 @@ func TestMCP_SendRequestBlockedInReplay(t *testing.T) {
 	msg := isErrorText(t, resp)
 	if !strings.Contains(msg, "send_request is not available in replay mode") {
 		t.Fatalf("expected replay-mode block, got %q", msg)
+	}
+}
+
+func TestMCP_ListReplayCandidates_WithHistory(t *testing.T) {
+	now := time.Now()
+	events := []session.ReplayEvent{
+		{Seq: 1, Result: "miss", Method: "GET", URL: "http://example.com/a?x=1", Status: 404, Timestamp: now, RunID: "run-42"},
+	}
+	hist := newTestHistory(t)
+	// Recorded entry sharing host+path with the miss → potentialMatch.
+	saveTestEntryFull(t, hist, "GET", "example.com", "/a?x=1", 200)
+	saveTestEntryFull(t, hist, "GET", "example.com", "/b", 200)
+	fs := &mockFilterStore{gate: true}
+	srv := NewServer(NewScope(hist, fs, nil, nil), hist, nil)
+	srv.SetReplayAnalyzer(&mockReplayAnalyzer{events: events, runID: "run-42"})
+	h := srv.Handler()
+
+	resp := callTool(t, h, "list_replay_candidates", map[string]any{"eventId": float64(1), "potentialMatch": true})
+	text := resultText(t, resp)
+	if !strings.Contains(text, "\"potentialMatch\":true") {
+		t.Fatalf("expected potentialMatch filter echoed, got %s", text)
+	}
+	// The potentialMatch universe should contain /a but not /b.
+	if !strings.Contains(text, "/a") {
+		t.Fatalf("expected candidate /a in response, got %s", text)
+	}
+	if strings.Contains(text, "\"url\":\"http://example.com/b\"") {
+		t.Fatalf("potentialMatch=true must not include /b, got %s", text)
+	}
+}
+
+func TestMCP_ReplayDiff_WithHistory(t *testing.T) {
+	now := time.Now()
+	events := []session.ReplayEvent{
+		{Seq: 1, Result: "miss", Method: "GET", URL: "http://example.com/a?x=1&y=2", Status: 404, Timestamp: now, RunID: "run-42"},
+	}
+	hist := newTestHistory(t)
+	e := saveTestEntryFull(t, hist, "GET", "example.com", "/a?x=1&y=9", 200)
+	fs := &mockFilterStore{gate: true}
+	srv := NewServer(NewScope(hist, fs, nil, nil), hist, nil)
+	srv.SetReplayAnalyzer(&mockReplayAnalyzer{events: events, runID: "run-42"})
+	h := srv.Handler()
+
+	resp := callTool(t, h, "replay_diff", map[string]any{"eventId": float64(1), "entryId": e.ID})
+	text := resultText(t, resp)
+	if !strings.Contains(text, "\"entryId\":\""+e.ID+"\"") {
+		t.Fatalf("expected entryId echoed, got %s", text)
+	}
+	if !strings.Contains(text, "\"diff\"") {
+		t.Fatalf("expected diff in response, got %s", text)
 	}
 }

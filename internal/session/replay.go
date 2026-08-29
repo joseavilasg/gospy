@@ -186,6 +186,37 @@ func (rs *ReplayServer) Subscribe() (chan ReplayEvent, func()) {
 	}
 }
 
+// ReplayEvents is an alias for EventsFor to satisfy the replay data interface.
+func (rs *ReplayServer) ReplayEvents(runID string) ([]ReplayEvent, error) {
+	return rs.EventsFor(runID)
+}
+
+// ReplayEventDetail returns a single event by sequence number from a run.
+func (rs *ReplayServer) ReplayEventDetail(runID string, seq int) (*ReplayEvent, error) {
+	events, err := rs.EventsFor(runID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range events {
+		if events[i].Seq == seq {
+			return &events[i], nil
+		}
+	}
+	return nil, fmt.Errorf("event with seq %d not found in run %s", seq, runID)
+}
+
+// MatchConfigFor returns the match config a run was served under.
+func (rs *ReplayServer) MatchConfigFor(runID string) (*MatchConfig, error) {
+	if rs.logRoot == "" {
+		return &MatchConfig{}, nil
+	}
+	dir, err := ReplayRunDir(rs.logRoot, runID)
+	if err != nil {
+		return nil, err
+	}
+	return ReadMatchConfig(dir)
+}
+
 // Close finalizes the active run log.
 func (rs *ReplayServer) Close() error {
 	rs.logMu.Lock()
