@@ -872,3 +872,76 @@ func TestReplayRepeatOnMiss_CacheClearedOnNewRun(t *testing.T) {
 		t.Fatalf("expected hit after new run, got status=%d replay=%s", resp2.StatusCode, resp2.Header.Get("X-Gospy-Replay"))
 	}
 }
+
+func TestReplayServer_ActiveMirror(t *testing.T) {
+	rs, h, _ := newLoggingReplayServer(t)
+	for _, e := range []*history.Entry{
+		{ID: "a1", Timestamp: time.Now(), Request: history.RequestRecord{Method: "GET", URL: "https://live.example.com/a", Host: "live.example.com"}, Response: &history.ResponseRecord{Status: 200}},
+		{ID: "a2", Timestamp: time.Now().Add(time.Second), Request: history.RequestRecord{Method: "GET", URL: "https://live.example.com/b", Host: "live.example.com"}, Response: &history.ResponseRecord{Status: 200}},
+	} {
+		if err := h.Save(e); err != nil {
+			t.Fatalf("Save: %v", err)
+		}
+	}
+	if got := rs.ActiveRunID(); got != "" {
+		t.Fatalf("expected empty ActiveRunID before first request, got %q", got)
+	}
+	if got := rs.ActiveEvents(); len(got) != 0 {
+		t.Fatalf("expected 0 active events before first request, got %d", len(got))
+	}
+	callHandleRequest(t, rs, "GET", "https://live.example.com/a")
+	if got := rs.ActiveRunID(); got == "" {
+		t.Fatal("expected ActiveRunID set after first request")
+	}
+	evs := rs.ActiveEvents()
+	if len(evs) != 1 || evs[0].Result != "hit" || evs[0].EntryID != "a1" {
+		t.Fatalf("unexpected active events after hit: %+v", evs)
+	}
+	callHandleRequest(t, rs, "GET", "https://example.com/miss")
+	evs = rs.ActiveEvents()
+	if len(evs) != 2 || evs[1].Result != "miss" {
+		t.Fatalf("expected 2 active events after miss: %+v", evs)
+	}
+	// EventsFor on the active run returns the mirror copy.
+	activeID := rs.ActiveRunID()
+	got, err := rs.EventsFor(activeID)
+	if err != nil {
+		t.Fatalf("EventsFor active: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 events from EventsFor, got %d", len(got))
+	}
+	// StartNewRun clears the active mirror.
+	rs.StartNewRun(nil)
+	if got := rs.ActiveRunID(); got != "" {
+		t.Fatalf("expected empty ActiveRunID after StartNewRun, got %q", got)
+	}
+	if got := rs.ActiveEvents(); len(got) != 0 {
+		t.Fatalf("expected 0 active events after StartNewRun, got %d", len(got))
+	}
+}
+
+func TestReplayServer_Subscribe(t *testing.T) {
+	rs, h := newReplayServer(t)
+	if err := h.Save(&history.Entry{ID: "s1", Timestamp: time.Now(), Request: history.RequestRecord{Method: "GET", URL: "https://live.example.com/a", Host: "live.example.com"}, Response: &history.ResponseRecord{Status: 200}}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	ch, cancel := rs.Subscribe()
+	defer cancel()
+	callHandleRequest(t, rs, "GET", "https://live.example.com/a")
+	select {
+	case ev := <-ch:
+		if ev.Result != "hit" || ev.EntryID != "s1" {
+			t.Fatalf("unexpected subscribed event: %+v", ev)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for subscribed event")
+	}
+	cancel()
+	callHandleRequest(t, rs, "GET", "https://example.com/miss2")
+	select {
+	case ev := <-ch:
+		t.Fatalf("expected no event after cancel, got %+v", ev)
+	case <-time.After(100 * time.Millisecond):
+	}
+}

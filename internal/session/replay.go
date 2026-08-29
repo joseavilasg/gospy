@@ -30,6 +30,11 @@ type ReplayServer struct {
 	originResolver OriginResolver
 	rulesEngine    *rules.Engine
 	repeatCache    map[int]string // rule index → last matched entry ID
+
+	activeMu      sync.Mutex
+	activeRunID   string
+	activeEvents  []ReplayEvent
+	activeClients map[chan ReplayEvent]struct{}
 }
 
 func NewReplayServer(addr string, caCert *ca.CA, session *ReplayStore, cfg *MatchConfig) *ReplayServer {
@@ -79,6 +84,10 @@ func (rs *ReplayServer) StartNewRun(cfg *MatchConfig) {
 		rs.log = nil
 	}
 	rs.logMu.Unlock()
+	rs.activeMu.Lock()
+	rs.activeRunID = ""
+	rs.activeEvents = nil
+	rs.activeMu.Unlock()
 }
 
 // SetOriginResolver registers a callback that resolves the client process of
@@ -123,6 +132,58 @@ func (rs *ReplayServer) ListReplayRuns() ([]RunSummary, error) {
 		runs[i].Active = runs[i].RunID == active
 	}
 	return runs, nil
+}
+
+// ActiveRunID returns the run id of the currently active replay run, or "".
+func (rs *ReplayServer) ActiveRunID() string {
+	rs.activeMu.Lock()
+	defer rs.activeMu.Unlock()
+	return rs.activeRunID
+}
+
+// ActiveEvents returns a copy of the events of the currently active run.
+func (rs *ReplayServer) ActiveEvents() []ReplayEvent {
+	rs.activeMu.Lock()
+	defer rs.activeMu.Unlock()
+	return append([]ReplayEvent(nil), rs.activeEvents...)
+}
+
+// EventsFor returns the events of a run. When runID equals the active run,
+// the in-memory mirror is returned; otherwise the run is loaded from disk.
+func (rs *ReplayServer) EventsFor(runID string) ([]ReplayEvent, error) {
+	rs.activeMu.Lock()
+	if runID == rs.activeRunID {
+		events := append([]ReplayEvent(nil), rs.activeEvents...)
+		rs.activeMu.Unlock()
+		return events, nil
+	}
+	rs.activeMu.Unlock()
+	if rs.logRoot == "" {
+		return nil, fmt.Errorf("no replay log root configured")
+	}
+	dir, err := ReplayRunDir(rs.logRoot, runID)
+	if err != nil {
+		return nil, err
+	}
+	return LoadReplayRun(dir)
+}
+
+// Subscribe registers a channel to receive every replay event as it is emitted.
+// The returned cancel func unregisters the channel. The channel is buffered
+// (64) so a slow consumer does not block the proxy.
+func (rs *ReplayServer) Subscribe() (chan ReplayEvent, func()) {
+	ch := make(chan ReplayEvent, 64)
+	rs.activeMu.Lock()
+	if rs.activeClients == nil {
+		rs.activeClients = make(map[chan ReplayEvent]struct{})
+	}
+	rs.activeClients[ch] = struct{}{}
+	rs.activeMu.Unlock()
+	return ch, func() {
+		rs.activeMu.Lock()
+		delete(rs.activeClients, ch)
+		rs.activeMu.Unlock()
+	}
 }
 
 // Close finalizes the active run log.
@@ -353,6 +414,25 @@ func (rs *ReplayServer) emit(ev *ReplayEvent, rawBody []byte, srvRaw []byte) {
 			if err := log.Append(ev, rawBody, srvRaw); err != nil {
 				fmt.Printf("[REPLAY] warn: write run log: %v\n", err)
 			}
+		}
+	}
+	rs.activeMu.Lock()
+	if ev.RunID != "" && ev.RunID != rs.activeRunID {
+		rs.activeRunID = ev.RunID
+		rs.activeEvents = nil
+	}
+	if ev.RunID != "" {
+		rs.activeEvents = append(rs.activeEvents, *ev)
+	}
+	clients := make([]chan ReplayEvent, 0, len(rs.activeClients))
+	for ch := range rs.activeClients {
+		clients = append(clients, ch)
+	}
+	rs.activeMu.Unlock()
+	for _, ch := range clients {
+		select {
+		case ch <- *ev:
+		default:
 		}
 	}
 	if rs.notifier != nil {
