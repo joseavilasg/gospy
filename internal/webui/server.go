@@ -409,6 +409,28 @@ func (s *Server) replayInfo() *replayList {
 	if !s.replayMode {
 		return nil
 	}
+	// Prefer the backend mirror when wired.
+	if src, ok := s.runLister.(interface {
+		ActiveRunID() string
+		ActiveEvents() []session.ReplayEvent
+	}); ok {
+		if id := src.ActiveRunID(); id != "" {
+			evs := src.ActiveEvents()
+			info := &replayList{Active: true, RunID: id, Served: []string{}}
+			for _, ev := range evs {
+				if ev.Result == "hit" && ev.EntryID != "" {
+					info.Served = append(info.Served, ev.EntryID)
+				}
+			}
+			if n := len(evs); n > 0 {
+				last := evs[n-1]
+				info.Consumed = last.Consumed
+				info.Total = last.Total
+				info.Exhausted = last.Exhausted
+			}
+			return info
+		}
+	}
 	s.replayMu.Lock()
 	defer s.replayMu.Unlock()
 	if s.replayRunID == "" {
@@ -442,8 +464,17 @@ func (s *Server) replayReadOnly(next http.HandlerFunc) http.HandlerFunc {
 }
 
 // replayEventsFor returns the events of a run. The active run is served from
-// the in-memory mirror; past runs are loaded from disk.
+// the in-memory mirror; past runs are loaded from disk. When a session
+// ReplayServer is wired as runLister, the active run is served from its
+// mirror so the backend owns the data.
 func (s *Server) replayEventsFor(runID string) ([]session.ReplayEvent, error) {
+	if src, ok := s.runLister.(interface {
+		EventsFor(string) ([]session.ReplayEvent, error)
+	}); ok {
+		if events, err := src.EventsFor(runID); err == nil {
+			return events, nil
+		}
+	}
 	s.replayMu.Lock()
 	if runID == s.replayRunID {
 		events := append([]session.ReplayEvent(nil), s.replayEvents...)
@@ -471,7 +502,16 @@ func (s *Server) ReplayEvents(runID string) ([]session.ReplayEvent, error) {
 }
 
 // ActiveRunID returns the active replay run ID. Implements agent.ReplayAnalyzer.
+// Delegates to the session backend when wired, falling back to the local
+// mirror for tests without a backend.
 func (s *Server) ActiveRunID() string {
+	if src, ok := s.runLister.(interface{ ActiveRunID() string }); ok {
+		if id := src.ActiveRunID(); id != "" {
+			return id
+		}
+		// Fall through to local mirror when backend has no active run yet;
+		// the in-memory mirror may still hold the run during the transition.
+	}
 	s.replayMu.Lock()
 	defer s.replayMu.Unlock()
 	return s.replayRunID
