@@ -1521,6 +1521,8 @@ export function renderReplayMatch(resp, ctx, keepScroll) {
   if (scrollPos > 0) {
     const newList = container.querySelector('.match-candidate-list');
     if (newList) newList.scrollTop = scrollPos;
+  } else if (!keepScroll) {
+    centerSelectedCandidate(container.querySelector('.match-candidate-list'));
   }
 }
 
@@ -1540,6 +1542,18 @@ function buildCandidateRows(entries, selectedId) {
   }).join('');
 }
 
+// centerSelectedCandidate scrolls only the candidate list container so the
+// selected row is centered in it; unlike scrollIntoView it never touches any
+// ancestor scrollport (detail panel, page), which would move the whole view.
+function centerSelectedCandidate(listEl) {
+  const row = listEl.querySelector('.match-candidate-row.selected');
+  if (!row) return;
+  const listRect = listEl.getBoundingClientRect();
+  const rowRect = row.getBoundingClientRect();
+  const target = listEl.scrollTop + (rowRect.top - listRect.top) - (listRect.height - rowRect.height) / 2;
+  listEl.scrollTop = Math.max(0, Math.min(target, listEl.scrollHeight - listEl.clientHeight));
+}
+
 // renderMatchCandidates re-renders only the candidate rows, leaving the search
 // input and scope control untouched - the search path must not rebuild static
 // chrome or the input would lose its text and focus. Falls back to the full
@@ -1551,6 +1565,7 @@ export function renderMatchCandidates(resp, ctx) {
     return;
   }
   list.innerHTML = buildCandidateRows(resp.entries, resp.selectedEntryId);
+  centerSelectedCandidate(list);
 }
 
 function replayCandidateTagText(c) {

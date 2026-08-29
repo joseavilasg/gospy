@@ -1383,6 +1383,12 @@ func TestReplayMatchTab(t *testing.T) {
 		!strings.Contains(renderJS, "newList.scrollTop = scrollPos") {
 		t.Fatal("render.js: renderReplayMatch must preserve the candidate list scroll across selection re-renders (keepScroll)")
 	}
+	if !strings.Contains(renderJS, "function centerSelectedCandidate(listEl)") ||
+		!strings.Contains(renderJS, "else if (!keepScroll)") ||
+		!strings.Contains(renderJS, "centerSelectedCandidate(container.querySelector('.match-candidate-list'))") ||
+		!strings.Contains(renderJS, "listEl.scrollTop = Math.max(0, Math.min(target, listEl.scrollHeight - listEl.clientHeight))") {
+		t.Fatal("render.js: auto-renders (initial load, scope switch) and search must center the selected candidate in the list container only, without scrolling any ancestor")
+	}
 	if !strings.Contains(appJS, "renderReplayMatch(resp, _matchEventCtx, true)") {
 		t.Fatal("app.js: selecting a candidate must re-render with keepScroll so the list does not jump to the top")
 	}
