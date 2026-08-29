@@ -41,12 +41,14 @@ func NewReplayServer(addr string, caCert *ca.CA, session *ReplayStore, cfg *Matc
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.Verbose = false
 
-	caTLSCert := caCert.TLSCert()
-	goproxy.MitmConnect = &goproxy.ConnectAction{
-		Action:    goproxy.ConnectMitm,
-		TLSConfig: goproxy.TLSConfigFromCA(&caTLSCert),
+	if caCert != nil {
+		caTLSCert := caCert.TLSCert()
+		goproxy.MitmConnect = &goproxy.ConnectAction{
+			Action:    goproxy.ConnectMitm,
+			TLSConfig: goproxy.TLSConfigFromCA(&caTLSCert),
+		}
+		proxy.CertStore = ca.NewCertStorage(caCert)
 	}
-	proxy.CertStore = ca.NewCertStorage(caCert)
 
 	rs := &ReplayServer{
 		addr:    addr,
@@ -189,6 +191,33 @@ func (rs *ReplayServer) Subscribe() (chan ReplayEvent, func()) {
 // ReplayEvents is an alias for EventsFor to satisfy the replay data interface.
 func (rs *ReplayServer) ReplayEvents(runID string) ([]ReplayEvent, error) {
 	return rs.EventsFor(runID)
+}
+
+// InjectEvent adds an event to the active mirror. Test helper; not used in
+// production where events flow through emit.
+func (rs *ReplayServer) InjectEvent(ev ReplayEvent) {
+	rs.activeMu.Lock()
+	if ev.RunID != "" && ev.RunID != rs.activeRunID {
+		rs.activeRunID = ev.RunID
+		rs.activeEvents = nil
+	}
+	if ev.RunID != "" {
+		rs.activeEvents = append(rs.activeEvents, ev)
+	}
+	clients := make([]chan ReplayEvent, 0, len(rs.activeClients))
+	for ch := range rs.activeClients {
+		clients = append(clients, ch)
+	}
+	rs.activeMu.Unlock()
+	for _, ch := range clients {
+		select {
+		case ch <- ev:
+		default:
+		}
+	}
+	if rs.notifier != nil {
+		rs.notifier(ev)
+	}
 }
 
 // ReplayEventDetail returns a single event by sequence number from a run.

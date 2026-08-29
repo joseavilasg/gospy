@@ -125,11 +125,6 @@ type Server struct {
 	replayClientsMu sync.Mutex
 	replayClients   map[chan session.ReplayEvent]struct{}
 
-	// fallback mirror used when no session backend is wired (tests).
-	fallbackMu     sync.Mutex
-	fallbackRunID  string
-	fallbackEvents []session.ReplayEvent
-
 	runLister     session.RunLister // backend that knows the active run
 	replayStarter ReplayStarter     // backend that accepts replay start (replay only)
 }
@@ -371,19 +366,9 @@ func (s *Server) ListReplayRuns() ([]session.RunSummary, error) {
 
 // ReplayNotifier returns the callback to wire into the replay server. It fans
 // every event out to connected stream clients; the event data itself lives in
-// the session backend (Stage 1 mirror). When no backend is wired (tests) it
-// keeps a fallback mirror so the endpoints still serve the notified events.
+// the session backend.
 func (s *Server) ReplayNotifier() func(ev session.ReplayEvent) {
 	return func(ev session.ReplayEvent) {
-		if s.runLister == nil {
-			s.fallbackMu.Lock()
-			if ev.RunID != s.fallbackRunID {
-				s.fallbackRunID = ev.RunID
-				s.fallbackEvents = nil
-			}
-			s.fallbackEvents = append(s.fallbackEvents, ev)
-			s.fallbackMu.Unlock()
-		}
 		s.replayClientsMu.Lock()
 		clients := make([]chan session.ReplayEvent, 0, len(s.replayClients))
 		for ch := range s.replayClients {
@@ -439,26 +424,6 @@ func (s *Server) replayInfo() *replayList {
 			return info
 		}
 	}
-	s.fallbackMu.Lock()
-	if s.fallbackRunID != "" {
-		evs := append([]session.ReplayEvent(nil), s.fallbackEvents...)
-		runID := s.fallbackRunID
-		s.fallbackMu.Unlock()
-		info := &replayList{Active: true, RunID: runID, Served: []string{}}
-		for _, ev := range evs {
-			if ev.Result == "hit" && ev.EntryID != "" {
-				info.Served = append(info.Served, ev.EntryID)
-			}
-		}
-		if n := len(evs); n > 0 {
-			last := evs[n-1]
-			info.Consumed = last.Consumed
-			info.Total = last.Total
-			info.Exhausted = last.Exhausted
-		}
-		return info
-	}
-	s.fallbackMu.Unlock()
 	return &replayList{}
 }
 
@@ -475,8 +440,7 @@ func (s *Server) replayReadOnly(next http.HandlerFunc) http.HandlerFunc {
 }
 
 // replayEventsFor returns the events of a run. The active run is served from
-// the session backend; past runs are loaded from disk. When no backend is
-// wired (tests) it serves from the fallback mirror populated by ReplayNotifier.
+// the session backend; past runs are loaded from disk.
 func (s *Server) replayEventsFor(runID string) ([]session.ReplayEvent, error) {
 	if src, ok := s.runLister.(interface {
 		EventsFor(string) ([]session.ReplayEvent, error)
@@ -485,13 +449,6 @@ func (s *Server) replayEventsFor(runID string) ([]session.ReplayEvent, error) {
 			return events, nil
 		}
 	}
-	s.fallbackMu.Lock()
-	if runID == s.fallbackRunID {
-		events := append([]session.ReplayEvent(nil), s.fallbackEvents...)
-		s.fallbackMu.Unlock()
-		return events, nil
-	}
-	s.fallbackMu.Unlock()
 	dir, err := session.ReplayRunDir(s.replayLogDir, runID)
 	if err != nil {
 		return nil, err
@@ -514,13 +471,9 @@ func (s *Server) ReplayEvents(runID string) ([]session.ReplayEvent, error) {
 // ActiveRunID returns the active replay run ID. Implements agent.ReplayAnalyzer.
 func (s *Server) ActiveRunID() string {
 	if src, ok := s.runLister.(interface{ ActiveRunID() string }); ok {
-		if id := src.ActiveRunID(); id != "" {
-			return id
-		}
+		return src.ActiveRunID()
 	}
-	s.fallbackMu.Lock()
-	defer s.fallbackMu.Unlock()
-	return s.fallbackRunID
+	return ""
 }
 
 // ReplayEventDetail returns a single event by sequence number from a run.

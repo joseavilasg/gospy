@@ -25,7 +25,19 @@ func newReplayServer(t *testing.T) (*Server, *history.Store, string) {
 	logRoot := t.TempDir()
 	s.SetReplayMode(true)
 	s.SetReplayLogDir(logRoot)
+	rs := session.NewReplayServer("", nil, session.NewReplayStore(hist), nil)
+	rs.SetReplayLogRoot(logRoot)
+	s.SetRunLister(rs)
+	rs.SetReplayNotifier(s.ReplayNotifier())
 	return s, hist, logRoot
+}
+
+func injectEvent(s *Server, ev session.ReplayEvent) {
+	if rs, ok := s.runLister.(*session.ReplayServer); ok {
+		rs.InjectEvent(ev)
+	} else {
+		s.ReplayNotifier()(ev)
+	}
 }
 
 func saveEntry(t *testing.T, h *history.Store, id, method, url string) {
@@ -493,9 +505,8 @@ func TestReplayListAndDetail(t *testing.T) {
 	s, hist, _ := newReplayServer(t)
 	saveEntry(t, hist, "e1", "GET", "https://live.example.com/a")
 
-	notify := s.ReplayNotifier()
-	notify(session.ReplayEvent{Seq: 1, RunID: "run1", Method: "GET", URL: "https://live.example.com/a", Result: "hit", Status: 200, EntryID: "e1", Consumed: 1, Total: 2})
-	notify(session.ReplayEvent{Seq: 2, RunID: "run1", Method: "GET", URL: "https://example.com/miss", Result: "miss", Status: 404, Unconsumed: []session.UnconsumedEntry{{ID: "e1"}}, TotalPending: 1, Consumed: 1, Total: 2})
+	injectEvent(s, session.ReplayEvent{Seq: 1, RunID: "run1", Method: "GET", URL: "https://live.example.com/a", Result: "hit", Status: 200, EntryID: "e1", Consumed: 1, Total: 2})
+	injectEvent(s, session.ReplayEvent{Seq: 2, RunID: "run1", Method: "GET", URL: "https://example.com/miss", Result: "miss", Status: 404, Unconsumed: []session.UnconsumedEntry{{ID: "e1"}}, TotalPending: 1, Consumed: 1, Total: 2})
 
 	full := s.fullList(0, 10)
 	if full.Replay == nil || !full.Replay.Active || full.Replay.RunID != "run1" {
@@ -1064,8 +1075,7 @@ func TestReplayStreamSnapshotAndLive(t *testing.T) {
 	s, hist, _ := newReplayServer(t)
 	saveEntry(t, hist, "e1", "GET", "https://live.example.com/a")
 
-	notify := s.ReplayNotifier()
-	notify(session.ReplayEvent{Seq: 1, RunID: "run1", Method: "GET", URL: "https://live.example.com/a", Result: "hit", Status: 200, EntryID: "e1", Consumed: 1, Total: 1, Exhausted: true})
+	injectEvent(s, session.ReplayEvent{Seq: 1, RunID: "run1", Method: "GET", URL: "https://live.example.com/a", Result: "hit", Status: 200, EntryID: "e1", Consumed: 1, Total: 1, Exhausted: true})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	req := httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/stream", nil).WithContext(ctx)
@@ -1077,7 +1087,7 @@ func TestReplayStreamSnapshotAndLive(t *testing.T) {
 		s.handleReplayStream(rec, req, "run1")
 	}()
 
-	notify(session.ReplayEvent{Seq: 2, RunID: "run1", Method: "GET", URL: "https://example.com/x", Result: "exhausted", Status: 410, Consumed: 1, Total: 1, Exhausted: true})
+	injectEvent(s, session.ReplayEvent{Seq: 2, RunID: "run1", Method: "GET", URL: "https://example.com/x", Result: "exhausted", Status: 410, Consumed: 1, Total: 1, Exhausted: true})
 
 	time.Sleep(50 * time.Millisecond)
 	cancel()
@@ -1115,10 +1125,9 @@ func TestReplayActiveStream(t *testing.T) {
 		s.handleReplayStream(rec, req, "")
 	}()
 
-	notify := s.ReplayNotifier()
-	notify(session.ReplayEvent{Seq: 1, RunID: "runA", Method: "GET", URL: "https://a.example.com/x", Result: "hit", Status: 200, Consumed: 1, Total: 2})
+	injectEvent(s, session.ReplayEvent{Seq: 1, RunID: "runA", Method: "GET", URL: "https://a.example.com/x", Result: "hit", Status: 200, Consumed: 1, Total: 2})
 	time.Sleep(20 * time.Millisecond)
-	notify(session.ReplayEvent{Seq: 2, RunID: "runB", Method: "GET", URL: "https://b.example.com/y", Result: "miss", Status: 404, Consumed: 1, Total: 1, Exhausted: true})
+	injectEvent(s, session.ReplayEvent{Seq: 2, RunID: "runB", Method: "GET", URL: "https://b.example.com/y", Result: "miss", Status: 404, Consumed: 1, Total: 1, Exhausted: true})
 	time.Sleep(50 * time.Millisecond)
 	cancel()
 	<-done
@@ -1140,8 +1149,7 @@ func TestReplayActiveStream(t *testing.T) {
 // its buffered events.
 func TestReplayActiveStreamSnapshot(t *testing.T) {
 	s, _, _ := newReplayServer(t)
-	notify := s.ReplayNotifier()
-	notify(session.ReplayEvent{Seq: 1, RunID: "runX", Method: "GET", URL: "https://x.example.com/", Result: "hit", Status: 200, Consumed: 1, Total: 1, Exhausted: true})
+	injectEvent(s, session.ReplayEvent{Seq: 1, RunID: "runX", Method: "GET", URL: "https://x.example.com/", Result: "hit", Status: 200, Consumed: 1, Total: 1, Exhausted: true})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1171,8 +1179,7 @@ func TestReplayActiveStreamSnapshot(t *testing.T) {
 // a <runID>/stream connection must terminate when the run switches.
 func TestReplayPerRunStreamClosesOnSwitch(t *testing.T) {
 	s, _, _ := newReplayServer(t)
-	notify := s.ReplayNotifier()
-	notify(session.ReplayEvent{Seq: 1, RunID: "run1", Method: "GET", URL: "https://a.example.com/", Result: "hit", Status: 200})
+	injectEvent(s, session.ReplayEvent{Seq: 1, RunID: "run1", Method: "GET", URL: "https://a.example.com/", Result: "hit", Status: 200})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1185,7 +1192,7 @@ func TestReplayPerRunStreamClosesOnSwitch(t *testing.T) {
 		s.handleReplayStream(rec, req, "run1")
 	}()
 
-	notify(session.ReplayEvent{Seq: 2, RunID: "run2", Method: "GET", URL: "https://b.example.com/", Result: "miss", Status: 404})
+	injectEvent(s, session.ReplayEvent{Seq: 2, RunID: "run2", Method: "GET", URL: "https://b.example.com/", Result: "miss", Status: 404})
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
@@ -1464,10 +1471,9 @@ func TestReplayCandidatesEndpoint(t *testing.T) {
 	saveEntry(t, hist, "e1", "GET", "https://x.com/a?id=1")
 	saveEntry(t, hist, "e2", "GET", "https://x.com/a?id=2")
 
-	notify := s.ReplayNotifier()
-	notify(session.ReplayEvent{Seq: 1, RunID: "run1", Method: "GET", URL: "https://x.com/a?id=1", Result: "hit", Status: 200, EntryID: "e1", Consumed: 1, Total: 2})
-	notify(session.ReplayEvent{Seq: 2, RunID: "run1", Method: "GET", URL: "https://x.com/a?id=1", Result: "miss", Status: 404, Unconsumed: []session.UnconsumedEntry{{ID: "e2"}}, TotalPending: 1, Consumed: 1, Total: 2})
-	notify(session.ReplayEvent{Seq: 3, RunID: "run1", Method: "GET", URL: "https://x.com/a?id=2", Result: "hit", Status: 200, EntryID: "e2", Consumed: 2, Total: 2})
+	injectEvent(s, session.ReplayEvent{Seq: 1, RunID: "run1", Method: "GET", URL: "https://x.com/a?id=1", Result: "hit", Status: 200, EntryID: "e1", Consumed: 1, Total: 2})
+	injectEvent(s, session.ReplayEvent{Seq: 2, RunID: "run1", Method: "GET", URL: "https://x.com/a?id=1", Result: "miss", Status: 404, Unconsumed: []session.UnconsumedEntry{{ID: "e2"}}, TotalPending: 1, Consumed: 1, Total: 2})
+	injectEvent(s, session.ReplayEvent{Seq: 3, RunID: "run1", Method: "GET", URL: "https://x.com/a?id=2", Result: "hit", Status: 200, EntryID: "e2", Consumed: 2, Total: 2})
 
 	rec := httptest.NewRecorder()
 	s.handleReplayCandidates(rec, httptest.NewRequest(http.MethodGet, "/api/replay/events/run1/2/candidates?potentialMatch=true", nil), "run1", 2)
