@@ -1,7 +1,10 @@
 package bodyview
 
 import (
+	"bytes"
+	"compress/gzip"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -371,5 +374,71 @@ func TestReadBodyPreview(t *testing.T) {
 	}
 	if _, ok := ReadBodyPreview(dir+"/missing", 10); ok {
 		t.Error("missing file should return false")
+	}
+}
+
+func TestReadRawPreview(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "raw.bin")
+	content := "0123456789ABCDEF"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if got, ok := ReadRawPreview(path, 10); !ok || got != "0123456789" {
+		t.Errorf("ReadRawPreview = %q, want 0123456789", got)
+	}
+	if got, ok := ReadRawPreview(path, 100); !ok || got != content {
+		t.Errorf("ReadRawPreview full = %q, want %q", got, content)
+	}
+}
+
+func TestReadBodyFile(t *testing.T) {
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	content := "file body content"
+	if err := os.WriteFile(filepath.Join(binDir, "a.bin"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if got := ReadBodyFile(dir, "a.bin", 100); got != content {
+		t.Errorf("ReadBodyFile = %q, want %q", got, content)
+	}
+	if got := ReadBodyFile(dir, "a.bin", 5); got != "file \n... [truncated - body too large]" {
+		t.Errorf("ReadBodyFile truncated = %q", got)
+	}
+	if got := ReadBodyFile(dir, "missing.bin", 100); got != "" {
+		t.Errorf("missing file should return empty, got %q", got)
+	}
+}
+
+func TestDecodeBodyGzip(t *testing.T) {
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
+	if _, err := w.Write([]byte("gzip decoded")); err != nil {
+		t.Fatalf("gzip write: %v", err)
+	}
+	w.Close()
+	raw := buf.String()
+	got := DecodeBody(raw, map[string][]string{"Content-Encoding": {"gzip"}})
+	if got != "gzip decoded" {
+		t.Errorf("DecodeBody gzip = %q, want gzip decoded", got)
+	}
+}
+
+func TestResponseBodyForSearchGzip(t *testing.T) {
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
+	if _, err := w.Write([]byte("search me gzip")); err != nil {
+		t.Fatalf("gzip write: %v", err)
+	}
+	w.Close()
+	resp := &history.ResponseRecord{
+		RawBody: buf.String(),
+		Headers: map[string][]string{"Content-Encoding": {"gzip"}},
+	}
+	if got := ResponseBodyForSearch(resp); got != "search me gzip" {
+		t.Errorf("ResponseBodyForSearch gzip = %q, want search me gzip", got)
 	}
 }

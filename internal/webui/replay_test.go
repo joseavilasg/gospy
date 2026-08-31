@@ -1125,6 +1125,7 @@ func TestReplayActiveStream(t *testing.T) {
 		s.handleReplayStream(rec, req, "")
 	}()
 
+	time.Sleep(20 * time.Millisecond)
 	injectEvent(s, session.ReplayEvent{Seq: 1, RunID: "runA", Method: "GET", URL: "https://a.example.com/x", Result: "hit", Status: 200, Consumed: 1, Total: 2})
 	time.Sleep(20 * time.Millisecond)
 	injectEvent(s, session.ReplayEvent{Seq: 2, RunID: "runB", Method: "GET", URL: "https://b.example.com/y", Result: "miss", Status: 404, Consumed: 1, Total: 1, Exhausted: true})
@@ -1740,5 +1741,21 @@ func TestReplayStartEndpoint_WrongMethod(t *testing.T) {
 	s.handleReplayStart(rec, httptest.NewRequest(http.MethodGet, "/api/replay/start", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", rec.Code)
+	}
+}
+
+func TestWebUIHasNoReplayMirror(t *testing.T) {
+	// webui must not store replay events itself; the mirror lives in session.
+	data, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatalf("read server.go: %v", err)
+	}
+	content := string(data)
+	if strings.Contains(content, "fallbackRunID") || strings.Contains(content, "fallbackEvents") {
+		t.Fatal("server.go: fallback mirror must be gone — webui keeps no replay state, only session does")
+	}
+	if strings.Contains(content, "replayMu") && strings.Contains(content, "replayEvents") {
+		// replayMu for replayEvents was removed; only replayClientsMu should remain.
+		t.Fatal("server.go: replayMu/replayEvents mirror must be gone — only replayClientsMu should remain")
 	}
 }

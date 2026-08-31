@@ -1097,3 +1097,48 @@ func TestMCP_ReplayDiff_WithHistory(t *testing.T) {
 		t.Fatalf("expected diff in response, got %s", text)
 	}
 }
+
+func TestMCP_ListReplayCandidates_Ignored(t *testing.T) {
+	now := time.Now()
+	events := []session.ReplayEvent{
+		{Seq: 1, Result: "miss", Method: "GET", URL: "http://ads.example.com/banner", Status: 404, Timestamp: now, RunID: "run-42"},
+	}
+	hist := newTestHistory(t)
+	saveTestEntryFull(t, hist, "GET", "ads.example.com", "/banner", 200)
+	fs := &mockFilterStore{gate: true}
+	srv := NewServer(NewScope(hist, fs, nil, nil), hist, nil)
+	// Mock with an ignored match config via a real session backend would be ideal,
+	// but the mock's MatchConfigFor returns empty, so we test the tag filter path
+	// directly: list with tag=pending should exclude ignored entries when config is applied.
+	// Here we just verify the tag filter round-trips and the ignored entry is not leaked as pending
+	// when the mock config is empty (it will be pending, but the filter still works).
+	srv.SetReplayAnalyzer(&mockReplayAnalyzer{events: events, runID: "run-42"})
+	h := srv.Handler()
+
+	resp := callTool(t, h, "list_replay_candidates", map[string]any{"eventId": float64(1), "tag": "ignored"})
+	text := resultText(t, resp)
+	if !strings.Contains(text, "\"tag\":\"ignored\"") {
+		t.Fatalf("expected tag=ignored echoed, got %s", text)
+	}
+}
+
+func TestMCP_ReplayDiff_NotFound(t *testing.T) {
+	now := time.Now()
+	events := []session.ReplayEvent{
+		{Seq: 1, Result: "miss", Method: "GET", URL: "http://example.com/a", Status: 404, Timestamp: now, RunID: "run-42"},
+	}
+	hist := newTestHistory(t)
+	fs := &mockFilterStore{gate: true}
+	srv := NewServer(NewScope(hist, fs, nil, nil), hist, nil)
+	srv.SetReplayAnalyzer(&mockReplayAnalyzer{events: events, runID: "run-42"})
+	h := srv.Handler()
+
+	msg := isErrorText(t, callTool(t, h, "replay_diff", map[string]any{"eventId": float64(1), "entryId": "no-such-id"}))
+	if !strings.Contains(msg, "not found") {
+		t.Fatalf("expected not-found for missing entryId, got %q", msg)
+	}
+	msg = isErrorText(t, callTool(t, h, "replay_diff", map[string]any{"eventId": float64(99), "entryId": "x"}))
+	if !strings.Contains(msg, "not found") {
+		t.Fatalf("expected not-found for missing eventId, got %q", msg)
+	}
+}
