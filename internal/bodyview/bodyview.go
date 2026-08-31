@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"os"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
@@ -279,4 +281,81 @@ func ContainsNullBytes(data []byte) bool {
 		}
 	}
 	return false
+}
+
+// DecodeBody decodes a raw body string according to its Content-Encoding header.
+func DecodeBody(raw string, headers map[string][]string) string {
+	enc := ""
+	if ce := headers["Content-Encoding"]; len(ce) > 0 {
+		enc = ce[0]
+	}
+	return history.DecompressBody([]byte(raw), enc).Decoded
+}
+
+// ResponseBodyForSearch returns the searchable body of a response record: the
+// decoded Body when present, otherwise a best-effort decode of RawBody. Empty
+// when the response is binary or has no body.
+func ResponseBodyForSearch(resp *history.ResponseRecord) string {
+	if resp == nil {
+		return ""
+	}
+	if resp.Body != "" {
+		return resp.Body
+	}
+	if resp.RawBody == "" {
+		return ""
+	}
+	ces := resp.Headers["Content-Encoding"]
+	enc := ""
+	if len(ces) > 0 {
+		enc = ces[0]
+	}
+	result := history.DecompressBody([]byte(resp.RawBody), enc)
+	if len(strings.TrimSpace(result.Decoded)) > 0 {
+		return result.Decoded
+	}
+	if result.Compression != "" {
+		return ""
+	}
+	return resp.RawBody
+}
+
+// ReadBodyPreview reads up to limit bytes of a body file at path and appends
+// the truncation marker when the file is larger.
+func ReadBodyPreview(path string, limit int) (string, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, int64(limit)+1))
+	if err != nil {
+		return "", false
+	}
+	if len(data) > limit {
+		return string(data[:limit]) + "\n... [truncated - body too large]", true
+	}
+	return string(data), true
+}
+
+// ReadRawPreview reads up to limit bytes of a body file at path without a
+// truncation marker. Used by the stream hub where truncation is signaled
+// separately via a boolean and size.
+func ReadRawPreview(path string, limit int) (string, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, int64(limit)))
+	if err != nil {
+		return "", false
+	}
+	return string(data), true
+}
+
+// ReadBodyFile reads up to limit bytes of a body file stored under dir/bin/bodyFile.
+func ReadBodyFile(dir, bodyFile string, limit int) string {
+	preview, _ := ReadBodyPreview(filepath.Join(dir, "bin", bodyFile), limit)
+	return preview
 }

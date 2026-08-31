@@ -1,6 +1,7 @@
 package bodyview
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -329,5 +330,46 @@ func TestParseMultipartBody(t *testing.T) {
 	}
 	if ParseMultipartBody([]byte(body), "") != nil {
 		t.Error("empty boundary should return nil")
+	}
+}
+
+func TestDecodeBody(t *testing.T) {
+	if got := DecodeBody("hello", map[string][]string{"Content-Encoding": {"gzip"}}); got == "" {
+		t.Error("DecodeBody should handle plain text")
+	}
+	if got := DecodeBody("plain", nil); got != "plain" {
+		t.Errorf("DecodeBody plain = %q, want plain", got)
+	}
+}
+
+func TestResponseBodyForSearch(t *testing.T) {
+	if got := ResponseBodyForSearch(nil); got != "" {
+		t.Errorf("nil response = %q, want empty", got)
+	}
+	resp := &history.ResponseRecord{Body: "decoded", RawBody: "raw"}
+	if got := ResponseBodyForSearch(resp); got != "decoded" {
+		t.Errorf("Body precedence = %q, want decoded", got)
+	}
+	resp2 := &history.ResponseRecord{RawBody: "raw"}
+	if got := ResponseBodyForSearch(resp2); got != "raw" {
+		t.Errorf("RawBody fallback = %q, want raw", got)
+	}
+}
+
+func TestReadBodyPreview(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/body.bin"
+	content := "hello world"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if got, ok := ReadBodyPreview(path, 100); !ok || got != content {
+		t.Errorf("ReadBodyPreview = %q, %v, want %q", got, ok, content)
+	}
+	if got, ok := ReadBodyPreview(path, 5); !ok || got != "hello\n... [truncated - body too large]" {
+		t.Errorf("truncated preview = %q", got)
+	}
+	if _, ok := ReadBodyPreview(dir+"/missing", 10); ok {
+		t.Error("missing file should return false")
 	}
 }

@@ -996,29 +996,6 @@ func (s *Server) handleClearBodyFilter(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func searchResponseBody(resp *history.ResponseRecord) string {
-	if resp == nil {
-		return ""
-	}
-	if resp.Body != "" {
-		return resp.Body
-	}
-	if resp.RawBody == "" {
-		return ""
-	}
-	ces := resp.Headers["Content-Encoding"]
-	if len(ces) > 0 {
-		result := history.DecompressBody([]byte(resp.RawBody), ces[0])
-		if len(strings.TrimSpace(result.Decoded)) > 0 {
-			return result.Decoded
-		}
-		if result.Compression != "" {
-			return ""
-		}
-	}
-	return resp.RawBody
-}
-
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1088,7 +1065,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if !matched && entry.Response != nil && !entry.Response.IsBinaryBody {
-			body := searchResponseBody(entry.Response)
+			body := bodyview.ResponseBodyForSearch(entry.Response)
 			if body != "" && strings.Contains(strings.ToLower(body), q) {
 				matched = true
 			}
@@ -1266,7 +1243,7 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if !entry.Response.IsBinaryBody && entry.Response.Body == "" {
-			if preview, ok := readBodyPreview(filepath.Join(binDir, entry.Response.BodyFile), maxBodyLen); ok {
+			if preview, ok := bodyview.ReadBodyPreview(filepath.Join(binDir, entry.Response.BodyFile), maxBodyLen); ok {
 				entry.Response.Body = preview
 			}
 		}
@@ -1318,25 +1295,6 @@ func (s *Server) handleGetBodyBin(w http.ResponseWriter, r *http.Request, id str
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-%s.bin"`, id, target))
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	io.Copy(w, f)
-}
-
-// readBodyPreview reads up to limit bytes of a body file and appends the
-// truncation marker when the file is larger. Used for text bodies that live
-// only as files (streaming captures), so huge files stay cheap to serve.
-func readBodyPreview(path string, limit int) (string, bool) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", false
-	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, int64(limit)+1))
-	if err != nil {
-		return "", false
-	}
-	if len(data) > limit {
-		return string(data[:limit]) + "\n... [truncated - body too large]", true
-	}
-	return string(data), true
 }
 
 func (s *Server) handleSaveMultipart(w http.ResponseWriter, r *http.Request, id string) {
@@ -2142,23 +2100,14 @@ func (h *streamHub) notify(op streamOp) {
 }
 
 func (h *streamHub) previewFile(bodyFile string) (size int64, truncated bool, preview string) {
-	f, err := os.Open(filepath.Join(h.history.Dir(), "bin", bodyFile))
-	if err != nil {
-		return 0, false, ""
-	}
-	defer f.Close()
-	fi, err := f.Stat()
+	path := filepath.Join(h.history.Dir(), "bin", bodyFile)
+	fi, err := os.Stat(path)
 	if err != nil {
 		return 0, false, ""
 	}
 	size = fi.Size()
-	// Read only up to the preview cap: the full capture can grow far beyond
-	// the view limit and must never be loaded into memory whole.
-	data, err := io.ReadAll(io.LimitReader(f, h.maxPreview))
-	if err != nil {
-		return 0, false, ""
-	}
-	return size, size > h.maxPreview, string(data)
+	preview, _ = bodyview.ReadRawPreview(path, int(h.maxPreview))
+	return size, size > h.maxPreview, preview
 }
 
 func (h *streamHub) readRange(bodyFile string, start, end int64) string {
@@ -2597,7 +2546,7 @@ func (s *Server) handleReplayEventDetail(w http.ResponseWriter, r *http.Request,
 	}
 	if ev.ServedResponse != nil && ev.ServedResponse.BodyFile != "" && !ev.ServedResponse.IsBinaryBody && ev.ServedResponse.Body == "" {
 		if dir, err := session.ReplayRunDir(s.replayLogDir, runID); err == nil {
-			if preview, ok := readBodyPreview(filepath.Join(dir, "bin", ev.ServedResponse.BodyFile), maxBodyLen); ok {
+			if preview, ok := bodyview.ReadBodyPreview(filepath.Join(dir, "bin", ev.ServedResponse.BodyFile), maxBodyLen); ok {
 				ev.ServedResponse.Body = preview
 			}
 		}

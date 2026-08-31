@@ -48,12 +48,12 @@ func sanitizeRequestRecord(dir string, rec history.RequestRecord, sanitize bool)
 		}
 	}
 	if rec.RawBody != "" && rec.Body == "" {
-		rec.Body = decodeBody(rec.RawBody, rec.Headers)
+		rec.Body = bodyview.DecodeBody(rec.RawBody, rec.Headers)
 	}
 	if rec.BodyFile != "" && rec.IsBinaryBody {
 		rec.BodyHex = readHexDump(dir, rec.BodyFile)
 	} else if rec.BodyFile != "" && rec.Body == "" {
-		rec.Body = readBodyFile(dir, rec.BodyFile)
+		rec.Body = bodyview.ReadBodyFile(dir, rec.BodyFile, maxBodyPreview)
 	}
 	return rec
 }
@@ -63,22 +63,14 @@ func sanitizeResponseRecord(dir string, rec history.ResponseRecord, sanitize boo
 		rec.Headers = SanitizeHeaders(rec.Headers)
 	}
 	if rec.RawBody != "" && rec.Body == "" {
-		rec.Body = decodeBody(rec.RawBody, rec.Headers)
+		rec.Body = bodyview.DecodeBody(rec.RawBody, rec.Headers)
 	}
 	if rec.BodyFile != "" && rec.IsBinaryBody {
 		rec.BodyHex = readHexDump(dir, rec.BodyFile)
 	} else if rec.BodyFile != "" && rec.Body == "" {
-		rec.Body = readBodyFile(dir, rec.BodyFile)
+		rec.Body = bodyview.ReadBodyFile(dir, rec.BodyFile, maxBodyPreview)
 	}
 	return rec
-}
-
-func decodeBody(raw string, headers map[string][]string) string {
-	enc := ""
-	if ce := headers["Content-Encoding"]; len(ce) > 0 {
-		enc = ce[0]
-	}
-	return history.DecompressBody([]byte(raw), enc).Decoded
 }
 
 func readHexDump(dir, bodyFile string) string {
@@ -87,18 +79,4 @@ func readHexDump(dir, bodyFile string) string {
 		return ""
 	}
 	return bodyview.GenerateHexDump(data, hexDumpMaxLines)
-}
-
-// readBodyFile reads up to maxBodyPreview bytes from a body file stored in
-// the bin/ directory. Returns a truncated string with a marker when the file
-// exceeds the limit.
-func readBodyFile(dir, bodyFile string) string {
-	data, err := os.ReadFile(filepath.Join(dir, "bin", bodyFile))
-	if err != nil {
-		return ""
-	}
-	if len(data) > maxBodyPreview {
-		return string(data[:maxBodyPreview]) + "\n... [truncated - body too large]"
-	}
-	return string(data)
 }
