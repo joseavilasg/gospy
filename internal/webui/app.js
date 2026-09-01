@@ -1,6 +1,7 @@
 import { setFilterText, setFocusEnabled, setAgentPreview, setAgentEnabled, setAgentExposed, agentExposed, applyFullList, setLastTimestamp, selectedId, setSelectedId, requests, rules, setRules, setSignatureCache, visibleCount, getReplayMode, setReplayMode, setReplayServed, setReplayComplete, markReplayServed } from './state.js';
 import { loadRequests, loadIgnored, loadFocused, confirmIgnoreHost, confirmUnignoreHost, confirmFocusHost, confirmUnfocusHost, loadRules, createRule, updateRule, deleteRule, toggleRule, checkMatch, setOnSelectedUpdated, loadMore, setOnReplayUpdate, setOnRecordingStoppedUpdate, loadReplayRuns, loadReplayFeed, loadReplayFeedOlder, loadReplayEventDetail, loadReplayCandidates, loadReplayCandidateDiff, setFeedResultFilter, setFeedHostFilter, loadReplayFilterValues } from './api.js';
 import { renderList, selectRequest, showTab, toggleIgnoredPanel, toggleFocusedPanel, toggleRulesPanel, toggleReplayPanel, renderRulesList, onListScroll, invalidateFilterCache, escapeHtml, SVG_EDIT, SVG_REVERT, SVG_MAXIMIZE, SVG_MINIMIZE, openRuleModal, closeRuleModal, openRuleModalFromRequest, openRuleModalFromReplayEvent, buildResponseTab, ITEM_HEIGHT, appendReplayFeedEvent, onReplayFeedScroll, setOnReplayFeedLoadOlder, renderReplayEventDetail, renderReplayMatch, renderMatchCandidates, selectReplayFeedEvent, setReplayEntryView, renderUrlViewInner, loadSignatureInfo, renderMatchConfigSidebar, setMatchConfigView, highlightMatchConfigRule, getPanelState } from './render.js';
+import { isModeDisabled, getFallbackMode } from './match.js';
 import { parseRoute, buildHash } from './routes.js';
 import { makeResizable } from './resize.js';
 import { initHeader, setHeaderMode } from './header.js';
@@ -485,23 +486,15 @@ function loadMatchTab(run, seq, mode, q, rowsOnly) {
     matchConfig: (_lastReplayDetail && _lastReplayDetail.matchConfig) || null,
   };
   return loadReplayCandidates(run, seq, mode, q || '').then(resp => {
-    if (mode === 'matching' && resp?.total?.matching === 0 && resp?.total?.pending > 0 && !resp?.entries?.length) {
-      _matchState.mode = 'pending';
-      _matchQueries['pending'] = q || '';
+    const fallback = getFallbackMode(resp?.total, mode, !resp?.entries?.length);
+    if (fallback) {
+      _matchState.mode = fallback;
+      _matchQueries[fallback] = q || '';
       if (_currentView?.kind === 'replay' && _currentView?.run === run && _currentView?.seq === seq) {
-        _currentView = { ..._currentView, mode: 'pending' };
+        _currentView = { ..._currentView, mode: fallback };
         history.replaceState(null, '', buildHash(_currentView));
       }
-      return loadMatchTab(run, seq, 'pending', q || '');
-    }
-    if (mode === 'pending' && resp?.total?.pending === 0 && resp?.total?.matching > 0 && !resp?.entries?.length) {
-      _matchState.mode = 'matching';
-      _matchQueries['matching'] = q || '';
-      if (_currentView?.kind === 'replay' && _currentView?.run === run && _currentView?.seq === seq) {
-        _currentView = { ..._currentView, mode: 'matching' };
-        history.replaceState(null, '', buildHash(_currentView));
-      }
-      return loadMatchTab(run, seq, 'matching', q || '');
+      return loadMatchTab(run, seq, fallback, q || '');
     }
     _matchResp = { ...resp, q: q || '' };
     if (rowsOnly) {
@@ -942,7 +935,11 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
       }
       break;
     case 'replay-mode': {
+      e.preventDefault();
+      e.stopPropagation();
+      if (btn.classList.contains('disabled')) break;
       if (!_matchState) break;
+      if (isModeDisabled(_matchResp?.total, btn.dataset.mode)) break;
       clearTimeout(_matchSearchTimer);
       const input = document.querySelector('.match-search');
       if (input) _matchQueries[_matchState.mode] = input.value;

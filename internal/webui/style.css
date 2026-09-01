@@ -3312,6 +3312,12 @@ body.resizing-h {
   color: var(--text-primary);
 }
 
+.match-mode-btn.disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
+}
+
 .match-search {
   background: var(--bg-input);
   border: none;

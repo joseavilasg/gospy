@@ -1443,9 +1443,11 @@ func TestReplayMatchTab(t *testing.T) {
 		strings.Contains(appJS, "btn.dataset.mode, ''") {
 		t.Fatal("app.js: each match view must keep its own search query (per-view _matchQueries, reset on event change) and selecting a candidate must keep the live query")
 	}
-	if !strings.Contains(appJS, "resp?.total?.matching === 0 && resp?.total?.pending > 0") ||
-		!strings.Contains(appJS, "resp?.total?.pending === 0 && resp?.total?.matching > 0") {
-		t.Fatal("app.js: an empty match view must fall back to the other one (matching→pending, pending→matching) only when it has data, so both-empty keeps the tab clickable")
+	if !strings.Contains(matchJS, "function getFallbackMode") || !strings.Contains(matchJS, "total.matching === 0 && total.pending > 0") {
+		t.Fatal("match.js: getFallbackMode must be the single source for empty-view fallback")
+	}
+	if !strings.Contains(appJS, "getFallbackMode") {
+		t.Fatal("app.js: an empty match view must delegate fallback to getFallbackMode so both-empty keeps the tab clickable")
 	}
 
 	if strings.Contains(appJS, "resp.consumed") {
@@ -1459,6 +1461,21 @@ func TestReplayMatchTab(t *testing.T) {
 	}
 	if !strings.Contains(styleCSS, ".replay-warn-link") {
 		t.Fatal("style.css: the .replay-warn-link rule must style the banner's View that entry link")
+	}
+	if !strings.Contains(renderJS, "match-mode-btn") || !strings.Contains(renderJS, "disabled") || !strings.Contains(renderJS, "isModeDisabled") {
+		t.Fatal("render.js: match mode buttons must use isModeDisabled for disabled state (0/0 keeps both enabled)")
+	}
+	if !strings.Contains(matchJS, "function isModeDisabled") || !strings.Contains(matchJS, "total.matching === 0 && total.pending > 0") {
+		t.Fatal("match.js: isModeDisabled must be the single source for empty-view blocking")
+	}
+	if !strings.Contains(appJS, "case 'replay-mode'") || !strings.Contains(appJS, "e.preventDefault()") || !strings.Contains(appJS, "e.stopPropagation()") || !strings.Contains(appJS, "classList.contains('disabled')") || !strings.Contains(appJS, "isModeDisabled") {
+		t.Fatal("app.js: replay-mode must pause the click event before verification and delegate blocking to isModeDisabled")
+	}
+	if !strings.Contains(renderJS, "from './match.js'") || !strings.Contains(appJS, "from './match.js'") {
+		t.Fatal("render.js and app.js must import isModeDisabled from match.js")
+	}
+	if !strings.Contains(styleCSS, ".match-mode-btn.disabled") {
+		t.Fatal("style.css: .match-mode-btn.disabled must style the disabled mode button")
 	}
 }
 

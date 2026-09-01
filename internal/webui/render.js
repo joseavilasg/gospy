@@ -1,6 +1,7 @@
 import { requests, selectedId, filterText, ignoredHosts, focusedHosts, focusEnabled, setSelectedId, rules, totalRequests, visibleCount, isReplayServed, isReplayComplete, getReplayMode } from './state.js';
 import { isAnyFilterActive } from './filters.js';
 import { detectBodyType, getKebabItems, renderContent, isEditable, getEntryData } from './body-types.js';
+import { isModeDisabled } from './match.js';
 
 export const ITEM_HEIGHT = 35;
 const BUFFER = 5;
@@ -1470,8 +1471,8 @@ export function renderReplayMatch(resp, ctx, keepScroll) {
   const segHtml = `
     <div class="match-mode-head">
         <div class="match-mode-seg">
-            <span class="match-mode-btn${mode !== 'pending' ? ' active' : ''}" data-action="replay-mode" data-mode="matching">Matching (${total.matching ?? 0})</span>
-            <span class="match-mode-btn${mode === 'pending' ? ' active' : ''}" data-action="replay-mode" data-mode="pending">Pending (${total.pending ?? 0})</span>
+            <span class="match-mode-btn${mode !== 'pending' ? ' active' : ''}${isModeDisabled(total, 'matching') ? ' disabled' : ''}" data-action="replay-mode" data-mode="matching">Matching (${total.matching ?? 0})</span>
+            <span class="match-mode-btn${mode === 'pending' ? ' active' : ''}${isModeDisabled(total, 'pending') ? ' disabled' : ''}" data-action="replay-mode" data-mode="pending">Pending (${total.pending ?? 0})</span>
         </div>
     </div>`;
 
