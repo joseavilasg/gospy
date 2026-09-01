@@ -930,6 +930,12 @@ header .stats {
   min-width: 900px;
 }
 
+#tab-match[style*="display:none"],
+.tab-content[style*="display:none"],
+.tab-content[style*="display: none"] {
+  min-width: 0 !important;
+}
+
 .section-panel {
   position: relative;
 }

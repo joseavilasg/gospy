@@ -544,7 +544,20 @@ function sameIdentity(a, b) {
   return false;
 }
 
+function resetDetailScroll() {
+  const panel = document.getElementById('detailPanel');
+  const content = document.querySelector('.detail-panel-content');
+  if (panel) { panel.scrollLeft = 0; panel.scrollTop = 0; }
+  if (content) {
+    content.scrollLeft = 0;
+    content.style.removeProperty('min-width');
+  }
+  const tabMatch = document.getElementById('tab-match');
+  if (tabMatch) tabMatch.scrollLeft = 0;
+}
+
 function switchTabInPlace(tab) {
+  resetDetailScroll();
   const btn = document.querySelector(`#detailPanel .tab[data-tab="${tab}"]`);
   if (!btn) return;
   showTab(btn, tab);
@@ -573,6 +586,7 @@ function ensureReplayFeedView(run) {
 }
 
 function applyRouteFull(route) {
+  resetDetailScroll();
   switch (route.kind) {
     case 'entry':
       selectRequest(route.id, route.tab);
