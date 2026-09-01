@@ -182,7 +182,7 @@ type SessionStarter func(name string) (sessionDir, sessionName string, err error
 
 // maxBodyLen caps the body the detail endpoint serves in a single response.
 // Streaming captures store the full body in the body file; the UI preview
-// stops here and the body-bin endpoint serves the complete file.
+// stops here and the body endpoint serves the complete file.
 const maxBodyLen = 64 * 1024
 
 type ProcessResolver interface {
@@ -1120,8 +1120,8 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 		sub := parts[1]
 		if s.replayMode {
 			switch {
-			case sub == "body-bin" && r.Method == http.MethodGet:
-				s.handleGetBodyBin(w, r, id)
+			case sub == "body" && r.Method == http.MethodGet:
+				s.handleGetBody(w, r, id)
 				return
 			case sub == "curl" && r.Method == http.MethodGet:
 				s.handleCopyCurl(w, r, id)
@@ -1142,8 +1142,8 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 			s.handleRevertHeaders(w, r, id)
 		case sub == "replay" && r.Method == http.MethodPost:
 			s.handleReplay(w, r, id)
-		case sub == "body-bin" && r.Method == http.MethodGet:
-			s.handleGetBodyBin(w, r, id)
+		case sub == "body" && r.Method == http.MethodGet:
+			s.handleGetBody(w, r, id)
 		case sub == "curl" && r.Method == http.MethodGet:
 			s.handleCopyCurl(w, r, id)
 		case sub == "body-multipart" && r.Method == http.MethodPut:
@@ -1263,7 +1263,7 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(entryDetailResponse{Entry: entry, ClientSignature: s.resolveClientSignature(entry.ClientPath)})
 }
 
-func (s *Server) handleGetBodyBin(w http.ResponseWriter, r *http.Request, id string) {
+func (s *Server) handleGetBody(w http.ResponseWriter, r *http.Request, id string) {
 	target := r.URL.Query().Get("target")
 	if target != "request" && target != "response" {
 		http.Error(w, "invalid target", http.StatusBadRequest)
@@ -1276,29 +1276,65 @@ func (s *Server) handleGetBodyBin(w http.ResponseWriter, r *http.Request, id str
 	}
 
 	var bodyFile string
+	var headers map[string][]string
+	var inlineBody string
 	if target == "request" {
 		bodyFile = entry.Request.BodyFile
+		headers = entry.Request.Headers
+		inlineBody = entry.Request.Body
+		if inlineBody == "" {
+			inlineBody = entry.Request.RawBody
+		}
 	} else if entry.Response != nil {
 		bodyFile = entry.Response.BodyFile
+		headers = entry.Response.Headers
+		inlineBody = entry.Response.Body
+		if inlineBody == "" {
+			inlineBody = entry.Response.RawBody
+		}
 	}
 
-	if bodyFile == "" {
-		http.NotFound(w, r)
+	ct := ""
+	if vals, ok := headers["Content-Type"]; ok && len(vals) > 0 {
+		ct = vals[0]
+	} else if vals, ok := headers["content-type"]; ok && len(vals) > 0 {
+		ct = vals[0]
+	}
+	ext := bodyview.ExtFromContentType(ct)
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+
+	if bodyFile != "" {
+		binPath := filepath.Join(s.hist().Dir(), "bin", bodyFile)
+		f, err := os.Open(binPath)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		defer f.Close()
+		w.Header().Set("Content-Type", ct)
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-%s%s"`, id, target, ext))
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		io.Copy(w, f)
 		return
 	}
 
-	binPath := filepath.Join(s.hist().Dir(), "bin", bodyFile)
-	f, err := os.Open(binPath)
-	if err != nil {
+	if inlineBody == "" {
 		http.NotFound(w, r)
 		return
 	}
-	defer f.Close()
-
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-%s.bin"`, id, target))
+	// Inline body - may be compressed, decode for download.
+	if encVals, ok := headers["Content-Encoding"]; ok && len(encVals) > 0 && inlineBody != "" {
+		decoded := history.DecompressBody([]byte(inlineBody), encVals[0]).Decoded
+		if decoded != "" {
+			inlineBody = decoded
+		}
+	}
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-%s%s"`, id, target, ext))
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	io.Copy(w, f)
+	io.WriteString(w, inlineBody)
 }
 
 func (s *Server) handleSaveMultipart(w http.ResponseWriter, r *http.Request, id string) {
@@ -1477,9 +1513,9 @@ func (s *Server) handleCopyCurl(w http.ResponseWriter, r *http.Request, id strin
 		}
 	}
 
-	// Wrap with pipe line for binary bodies
+	// Wrap with pipe line for bodies stored as files
 	if req.BodyFile != "" && proxyHost != "" {
-		pipeURL := fmt.Sprintf("%s/api/requests/%s/body-bin?target=request", proxyHost, id)
+		pipeURL := fmt.Sprintf("%s/api/requests/%s/body?target=request", proxyHost, id)
 		pipeLine := fmt.Sprintf("curl -s '%s' | \\", pipeURL)
 		lines = append([]string{pipeLine}, lines...)
 	}

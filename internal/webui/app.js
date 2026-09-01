@@ -873,8 +873,8 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
     case 'copy-hex':
       copyBody(btn.dataset.target);
       break;
-    case 'download-bin':
-      downloadBin(btn.dataset.target, btn.dataset.entryId);
+    case 'download-body':
+      downloadBody(btn.dataset.target, btn.dataset.entryId);
       break;
     case 'copy-curl':
       copyCurl();
@@ -918,7 +918,7 @@ document.getElementById('detailPanel').addEventListener('click', (e) => {
       break;
     }
     case 'replay-entry-body':
-      downloadBin(btn.dataset.target || 'response', btn.dataset.id);
+      downloadBody(btn.dataset.target || 'response', btn.dataset.id);
       break;
     case 'replay-full-entry': {
       const c = _matchResp && _matchResp.selectedEntryId
@@ -1309,10 +1309,10 @@ function renderCurrentContent(target) {
   }
 }
 
-function downloadBin(target, entryId) {
+function downloadBody(target, entryId) {
   if (!entryId || !target) return;
   const a = document.createElement('a');
-  a.href = `/api/requests/${entryId}/body-bin?target=${target}`;
+  a.href = `/api/requests/${entryId}/body?target=${target}`;
   a.download = '';
   document.body.appendChild(a);
   a.click();

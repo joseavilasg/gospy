@@ -242,7 +242,7 @@ func TestDetail_Preview_TruncationMarker(t *testing.T) {
 	}
 }
 
-// TestBodyBin_StreamsLargeBody verifies body-bin serves the full capture (even
+// TestBodyBin_StreamsLargeBody verifies body serves the full capture (even
 // far beyond the view limit) without truncation.
 func TestBodyBin_StreamsLargeBody(t *testing.T) {
 	s, _, hist := newTestServer(t)
@@ -251,7 +251,7 @@ func TestBodyBin_StreamsLargeBody(t *testing.T) {
 	huge := strings.Repeat("0123456789abcdef", maxBodyLen/16+16)
 	newStreamEntry(t, hist, id, huge)
 
-	req := httptest.NewRequest("GET", "/api/requests/"+id+"/body-bin?target=response", nil)
+	req := httptest.NewRequest("GET", "/api/requests/"+id+"/body?target=response", nil)
 	w := httptest.NewRecorder()
 	s.handleGetRequest(w, req)
 

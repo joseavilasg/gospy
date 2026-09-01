@@ -138,6 +138,7 @@ registerBodyType({
     items.push({ action: 'copy-body', label: '⧉ Copy', target });
     if (canEdit) items.push({ action: 'edit-body', label: '✎ Edit', target });
     if (hasEdited) items.push({ action: 'revert-body', label: '↩ Revert', target });
+    items.push({ action: 'download-body', label: '⬇ Download body', target, entryId });
     return items;
   },
 
@@ -324,7 +325,7 @@ registerBodyType({
   getKebabItems(target, canEdit, hasEdited, entryId) {
     return [
       { action: 'copy-hex', label: '⧉ Copy hex', target },
-      { action: 'download-bin', label: '⬇ Download .bin', target, entryId },
+      { action: 'download-body', label: '⬇ Download body', target, entryId },
     ];
   },
 
@@ -372,7 +373,7 @@ registerBodyType({
     items.push({ action: 'copy-body', label: '⧉ Copy', target });
     if (canEdit) items.push({ action: 'edit-body', label: '✎ Edit', target });
     if (hasEdited) items.push({ action: 'revert-body', label: '↩ Revert', target });
-    items.push({ action: 'download-bin', label: '⬇ Download .bin', target, entryId });
+    items.push({ action: 'download-body', label: '⬇ Download body', target, entryId });
     return items;
   },
 
@@ -631,7 +632,7 @@ registerBodyType({
   getKebabItems(target, canEdit, hasEdited, entryId) {
     return [
       { action: 'copy-hex', label: '⧉ Copy hex', target },
-      { action: 'download-bin', label: '⬇ Download .bin', target, entryId },
+      { action: 'download-body', label: '⬇ Download body', target, entryId },
     ];
   },
 

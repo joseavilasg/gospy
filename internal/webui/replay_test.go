@@ -120,8 +120,8 @@ func TestReplayModeReadOnlyGuards(t *testing.T) {
 	assertStatus(t, "detail GET in replay", rec, http.StatusOK)
 
 	rec = httptest.NewRecorder()
-	s.handleGetRequest(rec, httptest.NewRequest(http.MethodGet, "/api/requests/e1/body-bin", nil))
-	assertStatus(t, "body-bin GET in replay (no body -> 400, guard must not 404)", rec, http.StatusBadRequest)
+	s.handleGetRequest(rec, httptest.NewRequest(http.MethodGet, "/api/requests/e1/body", nil))
+	assertStatus(t, "body GET in replay (no body -> 400, guard must not 404)", rec, http.StatusBadRequest)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
