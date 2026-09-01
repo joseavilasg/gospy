@@ -183,7 +183,7 @@ type SessionStarter func(name string) (sessionDir, sessionName string, err error
 // maxBodyLen caps the body the detail endpoint serves in a single response.
 // Streaming captures store the full body in the body file; the UI preview
 // stops here and the body-bin endpoint serves the complete file.
-const maxBodyLen = 2 * 1024 * 1024
+const maxBodyLen = 64 * 1024
 
 type ProcessResolver interface {
 	Resolve(remoteAddr string) *proxy.ProcessInfo
