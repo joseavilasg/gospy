@@ -1611,6 +1611,21 @@ pre.body-content {
   gap: var(--sp-4);
 }
 
+.image-preview {
+  padding: var(--sp-14);
+  text-align: center;
+  background: var(--bg-input);
+  border-radius: var(--radius-md);
+}
+
+.image-preview img {
+  max-width: 100%;
+  height: auto;
+  max-height: 60vh;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+}
+
 /* Binary placeholder icon - Lucide binary (lucide.dev/icons/binary) */
 .binary-icon {
   width: 16px;

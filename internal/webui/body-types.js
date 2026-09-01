@@ -315,6 +315,11 @@ registerBodyType({
   name: 'binary',
   isEditable: false,
 
+  getEntryData(entry) {
+    // Provide entryId for the image preview src.
+    return { entryId: entry?.id || entry?.ID || '' };
+  },
+
   detectFromDOM(panel) {
     const pre = panel.querySelector('pre[data-binary]');
     if (!pre) return false;
@@ -330,7 +335,14 @@ registerBodyType({
   },
 
   renderContent(target, data) {
-    const { bodyHex, contentType, bodySize, bodyTarget } = data;
+    const { bodyHex, contentType, bodySize, bodyTarget, entryId } = data;
+    const ct = (contentType || '').toLowerCase();
+    const isImage = ct.startsWith('image/');
+    const id = entryId || selectedId;
+    if (isImage && id) {
+      const src = `/api/requests/${id}/body?target=${encodeURIComponent(target)}`;
+      return `<div class="image-preview" data-body-target="${target}" data-view-mode="pretty"><img src="${src}" alt="${escapeHtml(contentType)}" loading="lazy" style="max-width:100%;height:auto;max-height:60vh;object-fit:contain" /></div><pre class="body-content" data-body-target="${target}" data-binary="true" data-view-mode="raw" style="display:none">${escapeHtml(bodyHex)}</pre>`;
+    }
     return `<div class="binary-placeholder" data-body-target="${target}">${BINARY_ICON_SVG} Binary ${escapeHtml(bodyTarget)} body — ${escapeHtml(contentType || 'unknown')} (${formatBytes(bodySize)})</div><pre class="body-content" data-body-target="${target}" data-binary="true" data-view-mode="raw" style="display:none">${escapeHtml(bodyHex)}</pre>`;
   },
 
@@ -338,8 +350,11 @@ registerBodyType({
     const sectionPanel = document.querySelector(`.section-panel[data-body-target="${target}"]`);
     if (!sectionPanel) return;
     const placeholder = sectionPanel.querySelector('.binary-placeholder');
+    const imagePreview = sectionPanel.querySelector('.image-preview');
     const pre = sectionPanel.querySelector('pre[data-body-target]');
-    if (placeholder) placeholder.style.display = view === 'pretty' ? '' : 'none';
+    const isImage = (sectionPanel.dataset.contentType || '').toLowerCase().startsWith('image/');
+    if (imagePreview) imagePreview.style.display = view === 'pretty' && isImage ? '' : 'none';
+    if (placeholder) placeholder.style.display = view === 'pretty' && !isImage ? '' : 'none';
     if (pre) pre.style.display = view === 'raw' ? '' : 'none';
   },
 
