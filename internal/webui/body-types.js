@@ -127,6 +127,56 @@ export function copyBody(target) {
   if (config?.copy) config.copy(target);
 }
 
+// ── HTML body type ──────────────────────────────────────────────
+
+registerBodyType({
+  name: 'html',
+  isEditable: false,
+
+  detect(ct) {
+    const c = ct.toLowerCase();
+    return c.includes('text/html') || c.includes('application/xhtml+xml');
+  },
+
+  detectFromDOM(panel) {
+    return !!panel.querySelector('.html-preview[data-body-target]');
+  },
+
+  getEntryData(entry) {
+    return { entryId: entry?.id || entry?.ID || '' };
+  },
+
+  getKebabItems(target, _canEdit, _hasEdited, entryId) {
+    return [
+      { action: 'copy-body', label: '⧉ Copy', target },
+      { action: 'download-body', label: '⬇ Download body', target, entryId },
+    ];
+  },
+
+  renderContent(target, data) {
+    const { body, entryId } = data;
+    const id = entryId || selectedId;
+    const src = id ? `/api/requests/${id}/body?target=${encodeURIComponent(target)}&preview=1` : '';
+    const preview = src ? `<div class="html-preview" data-body-target="${target}" data-view-mode="pretty"><iframe sandbox="" src="${src}" style="width:100%;height:60vh;border:1px solid var(--border);border-radius:var(--radius-md)"></iframe></div>` : `<div class="html-preview" data-body-target="${target}" data-view-mode="pretty"><div class="binary-placeholder">HTML preview unavailable</div></div>`;
+    return `${preview}<pre class="body-content" data-body-target="${target}" data-view-mode="raw" style="display:none">${escapeHtml(body || '')}</pre>`;
+  },
+
+  setView(target, view) {
+    const sectionPanel = document.querySelector(`.section-panel[data-body-target="${target}"]`);
+    if (!sectionPanel) return;
+    const preview = sectionPanel.querySelector('.html-preview[data-body-target]');
+    const pre = sectionPanel.querySelector('pre[data-body-target]');
+    if (preview) preview.style.display = view === 'pretty' ? '' : 'none';
+    if (pre) pre.style.display = view === 'raw' ? '' : 'none';
+  },
+
+  copy(target) {
+    const pre = document.querySelector(`pre[data-body-target="${target}"]`);
+    if (!pre) return;
+    navigator.clipboard.writeText(pre.textContent || '');
+  },
+});
+
 // ── Text body type ──────────────────────────────────────────────
 
 registerBodyType({
@@ -134,12 +184,12 @@ registerBodyType({
   isEditable: true,
 
   getKebabItems(target, canEdit, hasEdited, entryId) {
-    const items = [];
-    items.push({ action: 'copy-body', label: '⧉ Copy', target });
-    if (canEdit) items.push({ action: 'edit-body', label: '✎ Edit', target });
-    if (hasEdited) items.push({ action: 'revert-body', label: '↩ Revert', target });
-    items.push({ action: 'download-body', label: '⬇ Download body', target, entryId });
-    return items;
+    return [
+      { action: 'copy-body', label: '⧉ Copy', target },
+      ...(canEdit ? [{ action: 'edit-body', label: '✎ Edit', target }] : []),
+      ...(hasEdited ? [{ action: 'revert-body', label: '↩ Revert', target }] : []),
+      { action: 'download-body', label: '⬇ Download body', target, entryId },
+    ];
   },
 
   renderContent(target, data) {
@@ -384,12 +434,12 @@ registerBodyType({
   },
 
   getKebabItems(target, canEdit, hasEdited, entryId) {
-    const items = [];
-    items.push({ action: 'copy-body', label: '⧉ Copy', target });
-    if (canEdit) items.push({ action: 'edit-body', label: '✎ Edit', target });
-    if (hasEdited) items.push({ action: 'revert-body', label: '↩ Revert', target });
-    items.push({ action: 'download-body', label: '⬇ Download body', target, entryId });
-    return items;
+    return [
+      { action: 'copy-body', label: '⧉ Copy', target },
+      ...(canEdit ? [{ action: 'edit-body', label: '✎ Edit', target }] : []),
+      ...(hasEdited ? [{ action: 'revert-body', label: '↩ Revert', target }] : []),
+      { action: 'download-body', label: '⬇ Download body', target, entryId },
+    ];
   },
 
   renderContent(target, data) {

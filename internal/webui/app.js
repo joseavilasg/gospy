@@ -1271,6 +1271,7 @@ function renderCurrentContent(target) {
   if (!pre || pre.dataset.binary || pre.dataset.multipart) return;
   const sectionPanel = pre.closest('.section-panel');
   if (!sectionPanel) return;
+  if (sectionPanel.querySelector('.html-preview')) return;
 
   const contentMode = pre.dataset.contentMode || 'original';
   const viewMode = pre.dataset.viewMode || 'raw';

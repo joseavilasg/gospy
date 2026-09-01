@@ -1269,6 +1269,7 @@ func (s *Server) handleGetBody(w http.ResponseWriter, r *http.Request, id string
 		http.Error(w, "invalid target", http.StatusBadRequest)
 		return
 	}
+	preview := r.URL.Query().Get("preview") == "1"
 
 	entry, ok := s.getEntry(w, r, id)
 	if !ok {
@@ -1314,7 +1315,11 @@ func (s *Server) handleGetBody(w http.ResponseWriter, r *http.Request, id string
 		}
 		defer f.Close()
 		w.Header().Set("Content-Type", ct)
-		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-%s%s"`, id, target, ext))
+		if preview {
+			w.Header().Set("Content-Disposition", "inline")
+		} else {
+			w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-%s%s"`, id, target, ext))
+		}
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		io.Copy(w, f)
 		return
@@ -1332,7 +1337,11 @@ func (s *Server) handleGetBody(w http.ResponseWriter, r *http.Request, id string
 		}
 	}
 	w.Header().Set("Content-Type", ct)
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-%s%s"`, id, target, ext))
+	if preview {
+		w.Header().Set("Content-Disposition", "inline")
+	} else {
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-%s%s"`, id, target, ext))
+	}
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	io.WriteString(w, inlineBody)
 }

@@ -1626,6 +1626,20 @@ pre.body-content {
   border-radius: var(--radius-sm);
 }
 
+.html-preview {
+  padding: var(--sp-14);
+  background: var(--bg-input);
+  border-radius: var(--radius-md);
+}
+
+.html-preview iframe {
+  width: 100%;
+  height: 60vh;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: white;
+}
+
 /* Binary placeholder icon - Lucide binary (lucide.dev/icons/binary) */
 .binary-icon {
   width: 16px;
