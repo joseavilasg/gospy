@@ -15,6 +15,29 @@ function formatBytes(bytes) {
 
 const BINARY_ICON_SVG = '<svg class="binary-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="14" y="14" width="4" height="6" rx="2"/><rect x="6" y="4" width="4" height="6" rx="2"/><path d="M6 20h4"/><path d="M14 10h4"/><path d="M6 14h2v6"/><path d="M14 4h2v6"/></svg>';
 
+// ── Shared helpers ──────────────────────────────────────────────
+
+function defaultSetView(target, view, prettySelector) {
+  const sectionPanel = document.querySelector(`.section-panel[data-body-target="${target}"]`);
+  if (!sectionPanel) return;
+  const pretty = sectionPanel.querySelector(prettySelector);
+  const pre = sectionPanel.querySelector('pre[data-body-target]');
+  if (pretty) pretty.style.display = view === 'pretty' ? '' : 'none';
+  if (pre) pre.style.display = view === 'raw' ? '' : 'none';
+}
+
+function defaultCopy(target, preSelector) {
+  const pre = document.querySelector(preSelector || `pre[data-body-target="${target}"]`);
+  if (!pre) return;
+  navigator.clipboard.writeText(pre.textContent || '');
+}
+
+function getEntryIdData(entry) {
+  return { entryId: entry?.id || entry?.ID || '' };
+}
+
+// ── Body type registry ─────────────────────────────────────────
+
 const bodyTypes = [];
 
 let _refreshDetail = null;
@@ -74,6 +97,12 @@ export function getKebabItems(bodyType, target, canEdit, hasEdited, entryId) {
 export function renderContent(bodyType, target, data) {
   const config = getTypeConfig(bodyType);
   return config ? config.renderContent(target, data) : '';
+}
+
+export function renderCurrentContentForType(target) {
+  const type = detectBodyTypeFromDOM(target);
+  const config = getTypeConfig(type);
+  if (config?.renderCurrentContent) config.renderCurrentContent(target);
 }
 
 export function postRenderBody(target) {
@@ -142,9 +171,7 @@ registerBodyType({
     return !!panel.querySelector('.html-preview[data-body-target]');
   },
 
-  getEntryData(entry) {
-    return { entryId: entry?.id || entry?.ID || '' };
-  },
+  getEntryData: getEntryIdData,
 
   getKebabItems(target, _canEdit, _hasEdited, entryId) {
     return [
@@ -157,23 +184,18 @@ registerBodyType({
     const { body, entryId } = data;
     const id = entryId || selectedId;
     const src = id ? `/api/requests/${id}/body?target=${encodeURIComponent(target)}&preview=1` : '';
-    const preview = src ? `<div class="html-preview" data-body-target="${target}" data-view-mode="pretty"><iframe sandbox="" src="${src}" style="width:100%;height:60vh;border:1px solid var(--border);border-radius:var(--radius-md)"></iframe></div>` : `<div class="html-preview" data-body-target="${target}" data-view-mode="pretty"><div class="binary-placeholder">HTML preview unavailable</div></div>`;
+    const preview = src
+      ? `<div class="html-preview" data-body-target="${target}" data-view-mode="pretty"><iframe sandbox="" src="${src}" style="width:100%;height:60vh;border:1px solid var(--border);border-radius:var(--radius-md)"></iframe></div>`
+      : `<div class="html-preview" data-body-target="${target}" data-view-mode="pretty"><div class="binary-placeholder">HTML preview unavailable</div></div>`;
     return `${preview}<pre class="body-content" data-body-target="${target}" data-view-mode="raw" style="display:none">${escapeHtml(body || '')}</pre>`;
   },
 
   setView(target, view) {
-    const sectionPanel = document.querySelector(`.section-panel[data-body-target="${target}"]`);
-    if (!sectionPanel) return;
-    const preview = sectionPanel.querySelector('.html-preview[data-body-target]');
-    const pre = sectionPanel.querySelector('pre[data-body-target]');
-    if (preview) preview.style.display = view === 'pretty' ? '' : 'none';
-    if (pre) pre.style.display = view === 'raw' ? '' : 'none';
+    defaultSetView(target, view, '.html-preview[data-body-target]');
   },
 
   copy(target) {
-    const pre = document.querySelector(`pre[data-body-target="${target}"]`);
-    if (!pre) return;
-    navigator.clipboard.writeText(pre.textContent || '');
+    defaultCopy(target);
   },
 });
 
@@ -196,6 +218,49 @@ registerBodyType({
     const { body, rawBody, compression, isModified, modifiedBody, isMocked, mockedBody, hasEdited, editedBody, defaultContent } = data;
     const displayBody = body;
     return `<pre class="body-content" data-body-target="${target}" data-decoded="${escapeHtml((isMocked && mockedBody) ? mockedBody : body)}" data-raw="${escapeHtml(rawBody)}" data-edited="${escapeHtml(hasEdited ? editedBody : '')}" data-modified="${escapeHtml(isModified ? modifiedBody : '')}" data-mocked="${escapeHtml(isMocked ? body : '')}" data-compression="${compression}" data-view-mode="pretty" data-content-mode="${defaultContent}">${escapeHtml(displayBody)}</pre>`;
+  },
+
+  renderCurrentContent(target) {
+    const pre = document.querySelector(`pre[data-body-target="${target}"]`);
+    if (!pre) return;
+    const sectionPanel = pre.closest('.section-panel');
+    if (!sectionPanel) return;
+
+    const contentMode = pre.dataset.contentMode || 'original';
+    const viewMode = pre.dataset.viewMode || 'raw';
+
+    let content;
+    switch (contentMode) {
+      case 'edited': content = pre.dataset.edited || ''; break;
+      case 'modified': content = pre.dataset.modified || ''; break;
+      case 'mocked': content = pre.dataset.mocked || ''; break;
+      default: content = pre.dataset.decoded || pre.dataset.raw || ''; break;
+    }
+
+    const contentBlock = sectionPanel.querySelector('.content-block');
+    const bodyScroll = sectionPanel.querySelector('.body-scroll');
+    const parentEl = bodyScroll || contentBlock;
+    const existingTree = parentEl?.querySelector('.json-viewer-container');
+    if (existingTree) existingTree.remove();
+
+    if (viewMode === 'pretty') {
+      try {
+        const obj = JSON.parse(content);
+        const container = document.createElement('div');
+        container.className = 'json-viewer-container';
+        if (parentEl) parentEl.appendChild(container);
+        const jsonViewer = new JSONViewer();
+        container.appendChild(jsonViewer.getContainer());
+        jsonViewer.showJSON(obj, -1, 1);
+        pre.style.display = 'none';
+      } catch (e) {
+        pre.textContent = content || '[not valid JSON]';
+        pre.style.display = '';
+      }
+    } else {
+      pre.textContent = content || '[no data]';
+      pre.style.display = '';
+    }
   },
 
   setView(target, view) {
@@ -365,16 +430,11 @@ registerBodyType({
   name: 'binary',
   isEditable: false,
 
-  getEntryData(entry) {
-    // Provide entryId for the image preview src.
-    return { entryId: entry?.id || entry?.ID || '' };
-  },
+  getEntryData: getEntryIdData,
 
   detectFromDOM(panel) {
-    const pre = panel.querySelector('pre[data-binary]');
-    if (!pre) return false;
-    return !panel.querySelector('.proto-tree[data-body-target]')
-      && !panel.querySelector('.multipart-parts[data-body-target]');
+    return !!panel.querySelector('.binary-placeholder[data-body-target]')
+      || !!panel.querySelector('.image-preview[data-body-target]');
   },
 
   getKebabItems(target, canEdit, hasEdited, entryId) {
@@ -409,9 +469,7 @@ registerBodyType({
   },
 
   copy(target) {
-    const pre = document.querySelector(`pre[data-body-target="${target}"][data-binary]`);
-    if (!pre) return;
-    navigator.clipboard.writeText(pre.textContent || '');
+    defaultCopy(target, `pre[data-body-target="${target}"][data-binary]`);
   },
 });
 
@@ -477,12 +535,7 @@ registerBodyType({
   },
 
   setView(target, view) {
-    const sectionPanel = document.querySelector(`.section-panel[data-body-target="${target}"]`);
-    if (!sectionPanel) return;
-    const multipartParts = sectionPanel.querySelector('.multipart-parts[data-body-target]');
-    const pre = sectionPanel.querySelector('pre[data-body-target]');
-    if (multipartParts) multipartParts.style.display = view === 'pretty' ? '' : 'none';
-    if (pre) pre.style.display = view === 'raw' ? '' : 'none';
+    defaultSetView(target, view, '.multipart-parts[data-body-target]');
   },
 
   postRender(target) {
@@ -711,17 +764,10 @@ registerBodyType({
   },
 
   setView(target, view) {
-    const sectionPanel = document.querySelector(`.section-panel[data-body-target="${target}"]`);
-    if (!sectionPanel) return;
-    const tree = sectionPanel.querySelector('.proto-tree[data-body-target]');
-    const pre = sectionPanel.querySelector('pre[data-body-target]');
-    if (tree) tree.style.display = view === 'pretty' ? '' : 'none';
-    if (pre) pre.style.display = view === 'raw' ? '' : 'none';
+    defaultSetView(target, view, '.proto-tree[data-body-target]');
   },
 
   copy(target) {
-    const pre = document.querySelector(`pre[data-body-target="${target}"][data-binary]`);
-    if (!pre) return;
-    navigator.clipboard.writeText(pre.textContent || '');
+    defaultCopy(target, `pre[data-body-target="${target}"][data-binary]`);
   },
 });

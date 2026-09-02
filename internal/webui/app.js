@@ -6,7 +6,7 @@ import { parseRoute, buildHash } from './routes.js';
 import { makeResizable } from './resize.js';
 import { initHeader, setHeaderMode } from './header.js';
 import { isBodySearching, cancelBodySearch, invalidateCriteriaSave, syncCriteriaFromServer, restoreBodyFilter, setOnFilterChange, setOnListRefresh, initFilterPopover, openFilterPopover, closeFilterPopover, closeChip, openChip, getFilterChipsData, getMatchMode, setMatchMode, queueCriteriaSave } from './filters.js';
-import { initBodyTypes, editBody, saveBody, cancelBody, setBodyView, copyBody, getActiveEditor, postRenderBody } from './body-types.js';
+import { initBodyTypes, editBody, saveBody, cancelBody, setBodyView, copyBody, getActiveEditor, postRenderBody, renderCurrentContentForType } from './body-types.js';
 
 let _pendingFullscreenTarget = null;
 let _savedScrollTop = 0;
@@ -520,7 +520,7 @@ function showReplayDetail(detail, activeTab) {
   _lastReplayDetail = detail;
   _lastDetailEntry = null;
   renderReplayEventDetail(detail, activeTab);
-  renderCurrentContent('response');
+  renderCurrentContentForType('response');
   if (_matchConfigOpen) renderMatchConfigSidebarFromDetail();
 }
 
@@ -1075,7 +1075,7 @@ function updateResponseInPlace(entry) {
   }
   const wasFullscreen = !!document.querySelector('.section-panel.fullscreen-mode[data-body-target="response"]');
   tab.innerHTML = buildResponseTab(entry);
-  renderCurrentContent('response');
+  renderCurrentContentForType('response');
   postRenderBody('response');
   if (wasFullscreen) {
     const panel = tab.querySelector('.section-panel[data-body-target="response"]');
@@ -1086,8 +1086,8 @@ function updateResponseInPlace(entry) {
 
 document.getElementById('detailPanel').addEventListener('detail-rendered', (e) => {
   _lastDetailEntry = e.detail?.entry || _lastDetailEntry;
-  renderCurrentContent('request');
-  renderCurrentContent('response');
+  renderCurrentContentForType('request');
+  renderCurrentContentForType('response');
   postRenderBody('request');
   postRenderBody('response');
   syncStreamView(e.detail?.activeTab || 'request');
@@ -1176,7 +1176,7 @@ function applyStreamBody() {
   // the view toggle, the kebab menus and the live badge keep their state
   // across deltas and the DOM work stays O(1) per event.
   if (pre.dataset.viewMode === 'pretty') {
-    renderCurrentContent('response');
+    renderCurrentContentForType('response');
     return;
   }
 
@@ -1207,7 +1207,7 @@ function setContent(target, content) {
       b.classList.toggle('active', b.dataset.content === content);
     });
   }
-  renderCurrentContent(target);
+  renderCurrentContentForType(target);
 }
 
 function toggleFullscreenBody(target, btn) {
@@ -1264,50 +1264,6 @@ function onFullscreenEsc(e) {
   if (!panel) return;
   const btn = panel.querySelector('[data-action="toggle-fullscreen-body"]');
   if (btn) exitFullscreenBody(panel, btn);
-}
-
-function renderCurrentContent(target) {
-  const pre = document.querySelector(`pre[data-body-target="${target}"]`);
-  if (!pre || pre.dataset.binary || pre.dataset.multipart) return;
-  const sectionPanel = pre.closest('.section-panel');
-  if (!sectionPanel) return;
-  if (sectionPanel.querySelector('.html-preview')) return;
-
-  const contentMode = pre.dataset.contentMode || 'original';
-  const viewMode = pre.dataset.viewMode || 'raw';
-
-  let content;
-  switch (contentMode) {
-    case 'edited': content = pre.dataset.edited || ''; break;
-    case 'modified': content = pre.dataset.modified || ''; break;
-    case 'mocked': content = pre.dataset.mocked || ''; break;
-    default: content = pre.dataset.decoded || pre.dataset.raw || ''; break;
-  }
-
-  const contentBlock = sectionPanel.querySelector('.content-block');
-  const bodyScroll = sectionPanel.querySelector('.body-scroll');
-  const parentEl = bodyScroll || contentBlock;
-  const existingTree = parentEl?.querySelector('.json-viewer-container');
-  if (existingTree) existingTree.remove();
-
-  if (viewMode === 'pretty') {
-    try {
-      const obj = JSON.parse(content);
-      const container = document.createElement('div');
-      container.className = 'json-viewer-container';
-      if (parentEl) parentEl.appendChild(container);
-      const jsonViewer = new JSONViewer();
-      container.appendChild(jsonViewer.getContainer());
-      jsonViewer.showJSON(obj, -1, 1);
-      pre.style.display = 'none';
-    } catch (e) {
-      pre.textContent = content || '[not valid JSON]';
-      pre.style.display = '';
-    }
-  } else {
-    pre.textContent = content || '[no data]';
-    pre.style.display = '';
-  }
 }
 
 function downloadBody(target, entryId) {
@@ -1890,7 +1846,7 @@ setOnSelectedUpdated((id) => {
     .then(entry => updateResponseInPlace(entry))
     .catch(e => console.error('Failed to refresh response detail:', e));
 });
-initBodyTypes({ refreshDetail, createMonacoEditor, mapContentType, renderCurrentContent });
+initBodyTypes({ refreshDetail, createMonacoEditor, mapContentType, renderCurrentContent: renderCurrentContentForType });
 
 function renderFilterChips() {
   const chips = getFilterChipsData();
