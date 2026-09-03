@@ -294,6 +294,7 @@ func TestListRequests_DiffUpsert(t *testing.T) {
 	since := e1.Timestamp.Format(time.RFC3339Nano)
 
 	// A new entry arrives after the full load → the next diff returns it as upsert.
+	time.Sleep(time.Millisecond)
 	e2 := saveTestEntry(t, s, "other.com", "POST")
 	diff := getListResponse(t, s, "/api/requests?since="+since+"&version="+strconv.Itoa(baseVersion))
 	if len(diff.Upserts) != 1 || diff.Upserts[0].ID != e2.ID {

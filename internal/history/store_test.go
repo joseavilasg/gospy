@@ -1,6 +1,8 @@
 package history
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -115,6 +117,8 @@ func TestStore_Persistence(t *testing.T) {
 	if err := store1.Save(entry); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
+
+	store1.Stop()
 
 	store2, err := New(dir)
 	if err != nil {
@@ -901,6 +905,7 @@ func TestStore_AppliedActionPersistence(t *testing.T) {
 	}
 
 	// Verify persistence across re-open
+	store.Stop()
 	store2, err := New(dir)
 	if err != nil {
 		t.Fatalf("New() for re-open error = %v", err)
@@ -1016,6 +1021,7 @@ func TestStore_LoadNormalizesInterruptedStreams(t *testing.T) {
 
 	// Re-open on the same dir (simulates a process restart after a kill): the
 	// interrupted stream must normalize to Stream=false yet keep its data.
+	store.Stop()
 	reopened, err := New(dir)
 	if err != nil {
 		t.Fatalf("re-open error = %v", err)
@@ -1044,6 +1050,7 @@ func TestStore_LoadNormalizesInterruptedStreams(t *testing.T) {
 	}
 
 	// The normalization must be persisted: a second restart stays normalized.
+	reopened.Stop()
 	reopened2, err := New(dir)
 	if err != nil {
 		t.Fatalf("second re-open error = %v", err)
@@ -1054,5 +1061,93 @@ func TestStore_LoadNormalizesInterruptedStreams(t *testing.T) {
 	}
 	if got2.Response.Stream {
 		t.Error("Response.Stream true after second restart")
+	}
+}
+
+func TestStore_DebouncedPersist(t *testing.T) {
+	dir := t.TempDir()
+	store, err := New(dir)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	entry := &Entry{
+		Request: RequestRecord{Method: "GET", URL: "http://example.com/a", Host: "example.com"},
+	}
+	if err := store.Save(entry); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	// buildIndex() wrote a stale index on New() - after Save, the on-disk
+	// index must still be stale (debounce hasn't fired yet).
+	data, _ := os.ReadFile(store.indexPath())
+	var staleIndex []struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(data, &staleIndex)
+	for _, le := range staleIndex {
+		if le.ID == entry.ID {
+			t.Fatal("new entry found in on-disk index before Flush - want debounced persist")
+		}
+	}
+
+	// Flush writes the current in-memory index to disk.
+	if err := store.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	data, _ = os.ReadFile(store.indexPath())
+	var freshIndex []struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(data, &freshIndex)
+	found := false
+	for _, le := range freshIndex {
+		if le.ID == entry.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("entry not found in index after Flush")
+	}
+
+	store.Stop()
+
+	// Re-open should see the entry
+	store2, err := New(dir)
+	if err != nil {
+		t.Fatalf("re-open error = %v", err)
+	}
+	defer store2.Stop()
+
+	entries := store2.ListSummary()
+	if len(entries) != 1 {
+		t.Errorf("ListSummary() after re-open = %d, want 1", len(entries))
+	}
+}
+
+func TestStore_CompactJSON(t *testing.T) {
+	dir := t.TempDir()
+	store, err := New(dir)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	entry := &Entry{
+		Request: RequestRecord{Method: "GET", URL: "http://example.com/a", Host: "example.com"},
+	}
+	if err := store.Save(entry); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	store.Stop()
+
+	data, err := os.ReadFile(filepath.Join(dir, entry.ID+".json"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	// Compact JSON has no leading whitespace on keys
+	if bytes.HasPrefix(data, []byte("  ")) {
+		t.Error("entry JSON is indented - want compact format")
 	}
 }

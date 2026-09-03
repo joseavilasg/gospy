@@ -75,6 +75,7 @@ func TestReloadFromDisk(t *testing.T) {
 	base := time.Now()
 	saveTestEntry(t, h, "test-1", "GET", "https://example.com/api/v1/data", 200, base)
 
+	h.Stop()
 	h2, err := history.New(h.Dir())
 	if err != nil {
 		t.Fatalf("reload history: %v", err)

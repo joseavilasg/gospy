@@ -194,6 +194,7 @@ func main() {
 	}
 
 	var mcpServer *agent.Server
+	var currentStore *history.Store
 	if autoSession {
 		sessionMgr := session.NewManager(filepath.Join(*dataDir, "sessions"))
 		webSrv.SetSessionStarter(func(name string) (string, string, error) {
@@ -201,6 +202,10 @@ func main() {
 			if err != nil {
 				return "", "", err
 			}
+			if currentStore != nil {
+				currentStore.Stop()
+			}
+			currentStore = store
 			srv.SetHistoryStore(store)
 			webSrv.SetHistoryStore(store)
 			if mcpServer != nil {
@@ -284,6 +289,11 @@ func main() {
 		<-sigCh
 		fmt.Println()
 		proxy.LogInfo("Shutting down...")
+		if currentStore != nil {
+			currentStore.Stop()
+		} else if hist != nil {
+			hist.Stop()
+		}
 		cleanup()
 		os.Exit(0)
 	}()

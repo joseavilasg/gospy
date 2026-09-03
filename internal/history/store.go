@@ -96,6 +96,16 @@ type Store struct {
 	pending  []*Entry
 	onSave   []func(entry *Entry)
 	onUpdate []func(entry *Entry)
+
+	// Debounced index persistence. The index is an in-memory cache of
+	// ListEntry metadata used by the WebUI for fast listing. Individual
+	// entry JSON files are the durable source of truth — the index can
+	// be rebuilt from them via buildIndex(). dirty marks that the
+	// in-memory index has diverged from disk and needs persisting.
+	// The background goroutine persists every 500ms when dirty.
+	dirty   bool
+	stopCh  chan struct{}
+	stopped bool
 }
 
 func (s *Store) Dir() string { return s.dir }
@@ -139,11 +149,14 @@ func New(dir string) (*Store, error) {
 		dir:     dir,
 		index:   make([]*ListEntry, 0),
 		pending: make([]*Entry, 0),
+		stopCh:  make(chan struct{}),
 	}
 
 	if err := s.loadIndex(); err != nil {
 		return nil, err
 	}
+
+	go s.flushLoop()
 
 	return s, nil
 }
@@ -197,7 +210,7 @@ func (s *Store) normalizeInterruptedStreams() error {
 		changed = true
 		if entry, err := s.Get(le.ID); err == nil && entry.Response != nil && entry.Response.Stream {
 			entry.Response.Stream = false
-			data, err := json.MarshalIndent(entry, "", "  ")
+			data, err := json.Marshal(entry)
 			if err != nil {
 				continue
 			}
@@ -346,6 +359,52 @@ func (s *Store) parseEntryFile(path string) *ListEntry {
 	return le
 }
 
+// flushLoop persists the index periodically when dirty. It runs until Stop()
+// is called. The 500ms interval batches rapid Save/Update calls into a single
+// disk write, avoiding the O(N) index persist on every HTTP transaction.
+func (s *Store) flushLoop() {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			_ = s.Flush()
+		case <-s.stopCh:
+			return
+		}
+	}
+}
+
+// Flush persists the in-memory index to disk if there are pending changes.
+// It is safe to call from tests for deterministic behavior, and from Stop()
+// for graceful shutdown.
+func (s *Store) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.dirty {
+		return nil
+	}
+	err := s.persistIndex()
+	s.dirty = false
+	return err
+}
+
+// Stop halts the background flush goroutine and performs a final flush to
+// ensure the index is durable before the process exits.
+func (s *Store) Stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return
+	}
+	s.stopped = true
+	close(s.stopCh)
+	if s.dirty {
+		_ = s.persistIndex()
+		s.dirty = false
+	}
+}
+
 func (s *Store) persistIndex() error {
 	data, err := json.Marshal(s.index)
 	if err != nil {
@@ -367,7 +426,7 @@ func (s *Store) Save(entry *Entry) error {
 		entry.Timestamp = time.Now()
 	}
 
-	data, err := json.MarshalIndent(entry, "", "  ")
+	data, err := json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("marshal entry: %w", err)
 	}
@@ -414,14 +473,14 @@ func (s *Store) Save(entry *Entry) error {
 	sort.Slice(s.index, func(i, j int) bool {
 		return s.index[i].Timestamp.After(s.index[j].Timestamp)
 	})
-	err = s.persistIndex()
+	s.dirty = true
 	s.mu.Unlock()
 
 	for _, fn := range s.onSave {
 		fn(entry)
 	}
 
-	return err
+	return nil
 }
 
 func (s *Store) List() []*Entry {
@@ -497,7 +556,7 @@ func (s *Store) GetByAgentCallID(callID string) (*ListEntry, error) {
 }
 
 func (s *Store) Update(entry *Entry) error {
-	data, err := json.MarshalIndent(entry, "", "  ")
+	data, err := json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("marshal entry: %w", err)
 	}
@@ -516,25 +575,38 @@ func (s *Store) Update(entry *Entry) error {
 	}
 	for _, le := range s.index {
 		if le.ID == entry.ID {
+			changed := false
 			if entry.Response != nil {
-				le.Status = &entry.Response.Status
-				le.Stream = entry.Response.Stream
+				if le.Status == nil || *le.Status != entry.Response.Status {
+					le.Status = &entry.Response.Status
+					changed = true
+				}
+				if le.Stream != entry.Response.Stream {
+					le.Stream = entry.Response.Stream
+					changed = true
+				}
 				if cts, ok := entry.Response.Headers["Content-Type"]; ok && len(cts) > 0 {
-					le.ResponseContentType = parseMediaType(cts[0])
+					ct := parseMediaType(cts[0])
+					if le.ResponseContentType != ct {
+						le.ResponseContentType = ct
+						changed = true
+					}
 				}
 			}
 			le.UpdatedAt = time.Now()
+			if changed {
+				s.dirty = true
+			}
 			break
 		}
 	}
-	err = s.persistIndex()
 	s.mu.Unlock()
 
 	for _, fn := range s.onUpdate {
 		fn(entry)
 	}
 
-	return err
+	return nil
 }
 
 func (s *Store) SaveEditedBody(id, target, body string) error {
