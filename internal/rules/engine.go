@@ -18,6 +18,9 @@ func NewEngine() *Engine {
 }
 
 func (e *Engine) Load(rules []*Rule) {
+	for _, r := range rules {
+		compileRule(r)
+	}
 	e.mu.Lock()
 	e.rules = rules
 	e.mu.Unlock()
@@ -47,8 +50,7 @@ func (e *Engine) matchesRule(rule *Rule, method, host, url string, headers map[s
 	}
 
 	if rule.Match.URLPattern != "" {
-		matched, err := regexp.MatchString(rule.Match.URLPattern, url)
-		if err != nil || !matched {
+		if rule.compiledURL == nil || !rule.compiledURL.MatchString(url) {
 			return false
 		}
 	}
@@ -70,6 +72,7 @@ func (e *Engine) matchesRule(rule *Rule, method, host, url string, headers map[s
 }
 
 func (e *Engine) AddRule(rule *Rule) {
+	compileRule(rule)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.rules = append(e.rules, rule)
@@ -108,4 +111,10 @@ func (e *Engine) FindMatchingRules(method, host, urlPattern string, excludeID st
 		}
 	}
 	return matches
+}
+
+func compileRule(r *Rule) {
+	if r.Match.URLPattern != "" {
+		r.compiledURL = regexp.MustCompile(r.Match.URLPattern)
+	}
 }

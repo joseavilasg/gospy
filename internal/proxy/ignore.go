@@ -11,13 +11,14 @@ import (
 )
 
 type IgnoreStore struct {
-	path  string
-	mu    sync.Mutex
-	hosts []string
+	path     string
+	mu       sync.RWMutex
+	hosts    []string
+	compiled map[string]*regexp.Regexp
 }
 
 func NewIgnoreStore(path string) *IgnoreStore {
-	return &IgnoreStore{path: path}
+	return &IgnoreStore{path: path, compiled: make(map[string]*regexp.Regexp)}
 }
 
 func (s *IgnoreStore) Load() error {
@@ -39,6 +40,7 @@ func (s *IgnoreStore) Load() error {
 	}
 
 	s.hosts = hosts
+	s.rebuildCompiled()
 	return nil
 }
 
@@ -70,6 +72,9 @@ func (s *IgnoreStore) Add(host string) error {
 
 	s.hosts = append(s.hosts, host)
 	sort.Strings(s.hosts)
+	if strings.Contains(host, "*") {
+		s.compiled[host] = s.compilePattern(host)
+	}
 	s.mu.Unlock()
 	defer s.mu.Lock()
 
@@ -83,6 +88,7 @@ func (s *IgnoreStore) Remove(host string) error {
 	for i, h := range s.hosts {
 		if h == host {
 			s.hosts = append(s.hosts[:i], s.hosts[i+1:]...)
+			delete(s.compiled, host)
 			break
 		}
 	}
@@ -91,8 +97,8 @@ func (s *IgnoreStore) Remove(host string) error {
 }
 
 func (s *IgnoreStore) IsIgnored(host string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	for _, h := range s.hosts {
 		if h == host {
@@ -103,8 +109,8 @@ func (s *IgnoreStore) IsIgnored(host string) bool {
 }
 
 func (s *IgnoreStore) Matches(host string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	if len(s.hosts) == 0 {
 		return false
@@ -113,10 +119,8 @@ func (s *IgnoreStore) Matches(host string) bool {
 		if pattern == host {
 			return true
 		}
-		if strings.Contains(pattern, "*") {
-			regex := regexp.QuoteMeta(pattern)
-			regex = strings.ReplaceAll(regex, "\\*", ".*")
-			if matched, _ := regexp.MatchString("^"+regex+"$", host); matched {
+		if re, ok := s.compiled[pattern]; ok {
+			if re.MatchString(host) {
 				return true
 			}
 		}
@@ -125,12 +129,27 @@ func (s *IgnoreStore) Matches(host string) bool {
 }
 
 func (s *IgnoreStore) List() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	result := make([]string, len(s.hosts))
 	copy(result, s.hosts)
 	return result
+}
+
+func (s *IgnoreStore) compilePattern(pattern string) *regexp.Regexp {
+	regex := regexp.QuoteMeta(pattern)
+	regex = strings.ReplaceAll(regex, "\\*", ".*")
+	return regexp.MustCompile("^" + regex + "$")
+}
+
+func (s *IgnoreStore) rebuildCompiled() {
+	s.compiled = make(map[string]*regexp.Regexp, len(s.hosts))
+	for _, h := range s.hosts {
+		if strings.Contains(h, "*") {
+			s.compiled[h] = s.compilePattern(h)
+		}
+	}
 }
 
 func (s *IgnoreStore) saveLocked() error {

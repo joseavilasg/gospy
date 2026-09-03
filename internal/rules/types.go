@@ -1,6 +1,9 @@
 package rules
 
-import "time"
+import (
+	"regexp"
+	"time"
+)
 
 type Action string
 
@@ -41,4 +44,5 @@ type Rule struct {
 	ModifiedReq *ModifiedRequest `json:"modified_request,omitempty"`
 	Enabled     bool             `json:"enabled"`
 	CreatedAt   time.Time        `json:"created_at"`
+	compiledURL *regexp.Regexp
 }
