@@ -146,37 +146,14 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 		agentCallID = v
 	}
 
-	body := ""
-	rawBody := ""
-	compression := ""
-	bodyFile := ""
-	var bodySize int64
 	var entryID string
-	var isBinary bool
+	var sb *streamingBody
 	if req.Body != nil {
-		var buf bytes.Buffer
-		if _, err := io.Copy(&buf, req.Body); err == nil {
-			data := buf.Bytes()
-			ce := req.Header.Get("Content-Encoding")
-			ct := req.Header.Get("Content-Type")
-			if len(data) > 0 {
-				entryID = uuid.New().String()
-				if ic.hist() != nil {
-					if filename, err := ic.hist().SaveBinaryBody(entryID, "req", data); err == nil {
-						bodyFile = filename
-						bodySize = int64(len(data))
-					}
-				}
-				isBinary = history.IsBinaryBody(data, ce, ct)
-				if !isBinary {
-					result := history.DecompressBody(data, ce)
-					body = result.Decoded
-					rawBody = result.Raw
-					compression = result.Compression
-				}
-			}
-		}
-		req.Body = io.NopCloser(&buf)
+		entryID = uuid.New().String()
+		ct := req.Header.Get("Content-Type")
+		ce := req.Header.Get("Content-Encoding")
+		sb = newStreamingBody(ic, entryID, "req", req.Body, ct, ce)
+		req.Body = sb
 	}
 
 	url := req.URL.Scheme + "://" + req.Host + req.URL.Path
@@ -185,16 +162,10 @@ func (ic *Interceptor) HandleRequest(req *http.Request, ctx *goproxy.ProxyCtx) (
 	}
 
 	originalRequest := history.RequestRecord{
-		Method:       req.Method,
-		URL:          url,
-		Host:         req.Host,
-		Headers:      req.Header.Clone(),
-		Body:         body,
-		RawBody:      rawBody,
-		Compression:  compression,
-		BodyFile:     bodyFile,
-		BodySize:     bodySize,
-		IsBinaryBody: isBinary,
+		Method:  req.Method,
+		URL:     url,
+		Host:    req.Host,
+		Headers: req.Header.Clone(),
 	}
 
 	var clientProcess, clientDisplayName, clientPath string
@@ -405,15 +376,6 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 		return resp
 	}
 
-	var bodyData []byte
-	if resp.Body != nil {
-		var buf bytes.Buffer
-		if _, err := io.Copy(&buf, resp.Body); err == nil {
-			bodyData = buf.Bytes()
-		}
-		resp.Body = io.NopCloser(&buf)
-	}
-
 	if ud, ok := ctx.UserData.(*requestUserData); ok {
 		entry, err := ic.hist().Get(ud.entryID)
 		if err == nil {
@@ -421,17 +383,21 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 				Status:  resp.StatusCode,
 				Headers: resp.Header,
 			}
-			if len(bodyData) > 0 {
-				ce := resp.Header.Get("Content-Encoding")
-				ct := resp.Header.Get("Content-Type")
-				if filename, err := ic.hist().SaveBinaryBody(entry.ID, "sresp", bodyData); err == nil {
-					sresp.BodyFile = filename
-					sresp.BodySize = int64(len(bodyData))
-				}
-				if !history.IsBinaryBody(bodyData, ce, ct) {
-					sresp.RawBody = string(bodyData)
-				} else {
-					sresp.IsBinaryBody = true
+			if resp.Body != nil {
+				bodyData, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if len(bodyData) > 0 {
+					ce := resp.Header.Get("Content-Encoding")
+					ct := resp.Header.Get("Content-Type")
+					if filename, saveErr := ic.hist().SaveBinaryBody(entry.ID, "sresp", bodyData); saveErr == nil {
+						sresp.BodyFile = filename
+						sresp.BodySize = int64(len(bodyData))
+					}
+					if !history.IsBinaryBody(bodyData, ce, ct) {
+						sresp.RawBody = string(bodyData)
+					} else {
+						sresp.IsBinaryBody = true
+					}
 				}
 			}
 			entry.ServerResponse = sresp
@@ -450,26 +416,18 @@ func (ic *Interceptor) HandleResponse(resp *http.Response, ctx *goproxy.ProxyCtx
 	if ud, ok := ctx.UserData.(*entryUserData); ok {
 		entry, err := ic.hist().Get(ud.entryID)
 		if err == nil {
-			respRec := &history.ResponseRecord{
+			entry.Response = &history.ResponseRecord{
 				Status:  resp.StatusCode,
 				Headers: resp.Header,
 			}
-			if len(bodyData) > 0 {
-				ce := resp.Header.Get("Content-Encoding")
-				ct := resp.Header.Get("Content-Type")
-				if filename, err := ic.hist().SaveBinaryBody(entry.ID, "resp", bodyData); err == nil {
-					respRec.BodyFile = filename
-					respRec.BodySize = int64(len(bodyData))
-				}
-				if !history.IsBinaryBody(bodyData, ce, ct) {
-					respRec.RawBody = string(bodyData)
-				} else {
-					respRec.IsBinaryBody = true
-				}
-			}
-			entry.Response = respRec
 			_ = ic.hist().Update(entry)
 			LogResponse(entry.ID, ctx.Req.Method, reqURL, resp.StatusCode, resp.Header.Get("Content-Type"))
+
+			if resp.Body != nil {
+				ce := resp.Header.Get("Content-Encoding")
+				ct := resp.Header.Get("Content-Type")
+				resp.Body = newStreamingBody(ic, entry.ID, "resp", resp.Body, ct, ce)
+			}
 		}
 		return resp
 	}
@@ -745,4 +703,105 @@ func ReadBodyString(body io.Reader) string {
 		return ""
 	}
 	return buf.String()
+}
+
+// streamingBody wraps an io.ReadCloser to capture body bytes to an in-memory
+// buffer while the consumer (goproxy) reads them. On Close, the captured data
+// is written to a binary file and the entry is updated with body metadata.
+// This avoids the full-body buffer-then-forward delay of the old approach.
+type streamingBody struct {
+	r               io.ReadCloser
+	ic              *Interceptor
+	entryID         string
+	contentType     string
+	contentEncoding string
+	phase           string // "req" or "resp"
+
+	mu     sync.Mutex
+	buf    bytes.Buffer
+	closed bool
+}
+
+func newStreamingBody(ic *Interceptor, entryID, phase string, body io.ReadCloser, contentType, contentEncoding string) *streamingBody {
+	return &streamingBody{
+		r:               body,
+		ic:              ic,
+		entryID:         entryID,
+		contentType:     contentType,
+		contentEncoding: contentEncoding,
+		phase:           phase,
+	}
+}
+
+func (sb *streamingBody) Read(p []byte) (int, error) {
+	n, err := sb.r.Read(p)
+	if n > 0 {
+		sb.mu.Lock()
+		sb.buf.Write(p[:n])
+		sb.mu.Unlock()
+	}
+	return n, err
+}
+
+func (sb *streamingBody) Close() error {
+	sb.mu.Lock()
+	if sb.closed {
+		sb.mu.Unlock()
+		return sb.r.Close()
+	}
+	sb.closed = true
+	data := make([]byte, sb.buf.Len())
+	copy(data, sb.buf.Bytes())
+	sb.mu.Unlock()
+
+	if err := sb.r.Close(); err != nil {
+		return err
+	}
+
+	if len(data) == 0 || sb.entryID == "" {
+		return nil
+	}
+
+	entry, err := sb.ic.hist().Get(sb.entryID)
+	if err != nil {
+		return nil
+	}
+
+	var bodyFile string
+	var bodySize int64
+	if filename, saveErr := sb.ic.hist().SaveBinaryBody(sb.entryID, sb.phase, data); saveErr == nil {
+		bodyFile = filename
+		bodySize = int64(len(data))
+	}
+
+	isBinary := history.IsBinaryBody(data, sb.contentEncoding, sb.contentType)
+	var body, rawBody, compression string
+	if !isBinary {
+		result := history.DecompressBody(data, sb.contentEncoding)
+		body = result.Decoded
+		rawBody = result.Raw
+		compression = result.Compression
+	}
+
+	switch sb.phase {
+	case "req":
+		entry.Request.BodyFile = bodyFile
+		entry.Request.BodySize = bodySize
+		entry.Request.IsBinaryBody = isBinary
+		entry.Request.Body = body
+		entry.Request.RawBody = rawBody
+		entry.Request.Compression = compression
+	case "resp":
+		if entry.Response != nil {
+			entry.Response.BodyFile = bodyFile
+			entry.Response.BodySize = bodySize
+			entry.Response.IsBinaryBody = isBinary
+			entry.Response.Body = body
+			entry.Response.RawBody = rawBody
+			entry.Response.Compression = compression
+		}
+	}
+
+	_ = sb.ic.hist().Update(entry)
+	return nil
 }

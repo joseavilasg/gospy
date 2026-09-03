@@ -905,3 +905,266 @@ func TestInterceptor_HandleConnectWithSession(t *testing.T) {
 		t.Error("ctx.Resp should be nil when a session is active")
 	}
 }
+
+func TestStreamingBody_ReadsThroughAndCaptures(t *testing.T) {
+	ic, store := newTestInterceptor(t, nil)
+	req := newRequest("POST", "http://example.com/api")
+	req.Header.Set("Content-Type", "application/json")
+	ctx := newProxyCtx(req)
+
+	const payload = `{"key":"value"}`
+	req.Body = io.NopCloser(strings.NewReader(payload))
+
+	_, resp := ic.HandleRequest(req, ctx)
+	if resp != nil {
+		t.Fatal("HandleRequest should pass through")
+	}
+
+	ud := ctx.UserData.(*entryUserData)
+	entry, err := store.Get(ud.entryID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if entry.Request.BodyFile != "" {
+		t.Errorf("BodyFile should be empty before Close, got %q", entry.Request.BodyFile)
+	}
+
+	saved, err := store.Get(ud.entryID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if saved.Request.Body != "" {
+		t.Errorf("Body should be empty before Close, got %q", saved.Request.Body)
+	}
+}
+
+func TestStreamingBody_CloseFinalizesEntry(t *testing.T) {
+	ic, store := newTestInterceptor(t, nil)
+	req := newRequest("POST", "http://example.com/api")
+	req.Header.Set("Content-Type", "application/json")
+	ctx := newProxyCtx(req)
+
+	const payload = `{"hello":"world"}`
+	req.Body = io.NopCloser(strings.NewReader(payload))
+
+	_, resp := ic.HandleRequest(req, ctx)
+	if resp != nil {
+		t.Fatal("HandleRequest should pass through")
+	}
+
+	ud := ctx.UserData.(*entryUserData)
+
+	// Simulate goproxy reading the request body (sends to upstream).
+	_, _ = io.ReadAll(req.Body)
+
+	sb := req.Body.(*streamingBody)
+	_ = sb.Close()
+
+	entry, err := store.Get(ud.entryID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if entry.Request.BodyFile == "" {
+		t.Error("BodyFile should be set after Close")
+	}
+	if entry.Request.BodySize != int64(len(payload)) {
+		t.Errorf("BodySize = %d, want %d", entry.Request.BodySize, len(payload))
+	}
+	if entry.Request.Body != payload {
+		t.Errorf("Body = %q, want %q", entry.Request.Body, payload)
+	}
+
+	data, err := os.ReadFile(filepath.Join(store.Dir(), "bin", entry.Request.BodyFile))
+	if err != nil {
+		t.Fatalf("read body file: %v", err)
+	}
+	if string(data) != payload {
+		t.Errorf("body file = %q, want %q", data, payload)
+	}
+}
+
+func TestStreamingBody_EmptyBodyNoop(t *testing.T) {
+	ic, store := newTestInterceptor(t, nil)
+	req := newRequest("POST", "http://example.com/api")
+	ctx := newProxyCtx(req)
+
+	req.Body = io.NopCloser(strings.NewReader(""))
+
+	_, resp := ic.HandleRequest(req, ctx)
+	if resp != nil {
+		t.Fatal("HandleRequest should pass through")
+	}
+
+	sb := req.Body.(*streamingBody)
+	_ = sb.Close()
+
+	ud := ctx.UserData.(*entryUserData)
+	entry, err := store.Get(ud.entryID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if entry.Request.BodyFile != "" {
+		t.Errorf("BodyFile should be empty for empty body, got %q", entry.Request.BodyFile)
+	}
+}
+
+func TestStreamingBody_CloseIdempotent(t *testing.T) {
+	ic, store := newTestInterceptor(t, nil)
+	req := newRequest("POST", "http://example.com/api")
+	req.Header.Set("Content-Type", "text/plain")
+	ctx := newProxyCtx(req)
+
+	const payload = "test data"
+	req.Body = io.NopCloser(strings.NewReader(payload))
+
+	_, _ = ic.HandleRequest(req, ctx)
+
+	// Simulate goproxy reading the request body.
+	_, _ = io.ReadAll(req.Body)
+
+	sb := req.Body.(*streamingBody)
+
+	if err := sb.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+	if err := sb.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+
+	ud := ctx.UserData.(*entryUserData)
+	entry, err := store.Get(ud.entryID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if entry.Request.Body != payload {
+		t.Errorf("Body = %q, want %q", entry.Request.Body, payload)
+	}
+}
+
+func TestInterceptor_ResponseMockBodyCaptured(t *testing.T) {
+	ic, store := newTestInterceptor(t, []*rules.Rule{
+		{
+			ID:      "1",
+			Name:    "resp-mock",
+			Match:   rules.MatchRule{Method: "GET", Host: "api.example.com"},
+			Action:  rules.ActionResponseMock,
+			Enabled: true,
+			MockResp: &rules.MockResponse{
+				Status: 503,
+				Body:   `{"error":"unavailable"}`,
+			},
+		},
+	})
+	req := newRequest("GET", "http://api.example.com/status")
+	ctx := newProxyCtx(req)
+
+	_, _ = ic.HandleRequest(req, ctx)
+
+	const realBody = `{"status":"ok"}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, realBody)
+	}))
+	defer srv.Close()
+
+	upstream, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("upstream: %v", err)
+	}
+	defer upstream.Body.Close()
+
+	out := ic.HandleResponse(upstream, ctx)
+	if out == nil || out.Body == nil {
+		t.Fatal("nil response returned")
+	}
+	body, err := io.ReadAll(out.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	_ = out.Body.Close()
+
+	if string(body) != `{"error":"unavailable"}` {
+		t.Errorf("body = %q, want mock body", string(body))
+	}
+
+	ud := ctx.UserData.(*requestUserData)
+	entry, err := store.Get(ud.entryID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if entry.ServerResponse == nil {
+		t.Fatal("ServerResponse should be set")
+	}
+	if entry.ServerResponse.Status != http.StatusOK {
+		t.Errorf("ServerResponse.Status = %d, want 200", entry.ServerResponse.Status)
+	}
+	if entry.ServerResponse.BodyFile == "" {
+		t.Error("ServerResponse.BodyFile should be set")
+	}
+	if entry.Response == nil || entry.Response.Status != 503 {
+		t.Errorf("Response.Status = %v, want 503", entry.Response)
+	}
+}
+
+func TestInterceptor_NormalResponseUsesStreamingBody(t *testing.T) {
+	ic, store := newTestInterceptor(t, nil)
+	req := newRequest("GET", "http://example.com/data")
+	ctx := newProxyCtx(req)
+
+	_, _ = ic.HandleRequest(req, ctx)
+
+	const payload = "hello from upstream"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, payload)
+	}))
+	defer srv.Close()
+
+	upstream, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("upstream: %v", err)
+	}
+	defer upstream.Body.Close()
+
+	out := ic.HandleResponse(upstream, ctx)
+	if out == nil || out.Body == nil {
+		t.Fatal("nil response returned")
+	}
+
+	if _, ok := out.Body.(*streamingBody); !ok {
+		t.Error("response body should be *streamingBody")
+	}
+
+	body, err := io.ReadAll(out.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	_ = out.Body.Close()
+
+	if string(body) != payload {
+		t.Errorf("body = %q, want %q", string(body), payload)
+	}
+
+	ud := ctx.UserData.(*entryUserData)
+	entry, err := store.Get(ud.entryID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if entry.Response == nil {
+		t.Fatal("Response should be set")
+	}
+	if entry.Response.Status != http.StatusOK {
+		t.Errorf("Response.Status = %d, want 200", entry.Response.Status)
+	}
+	if entry.Response.BodyFile == "" {
+		t.Error("Response.BodyFile should be set after Close")
+	}
+	if entry.Response.BodySize != int64(len(payload)) {
+		t.Errorf("Response.BodySize = %d, want %d", entry.Response.BodySize, len(payload))
+	}
+	if entry.Response.Body != payload {
+		t.Errorf("Response.Body = %q, want %q", entry.Response.Body, payload)
+	}
+}
