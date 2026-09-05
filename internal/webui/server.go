@@ -1097,8 +1097,6 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 }
 
-const hexDumpMaxLines = 20
-
 // entryDetailResponse pairs an entry with its resolved client signature (when
 // already known) so the UI can render the origin verdict without an extra fetch.
 type entryDetailResponse struct {
@@ -1159,104 +1157,8 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if entry.Request.RawBody != "" && entry.Request.Body == "" {
-		ce := entry.Request.Headers["Content-Encoding"]
-		enc := ""
-		if len(ce) > 0 {
-			enc = ce[0]
-		}
-		entry.Request.Body = history.DecompressBody([]byte(entry.Request.RawBody), enc).Decoded
-	}
-	if entry.Response != nil && entry.Response.RawBody != "" && entry.Response.Body == "" {
-		ce := entry.Response.Headers["Content-Encoding"]
-		enc := ""
-		if len(ce) > 0 {
-			enc = ce[0]
-		}
-		entry.Response.Body = history.DecompressBody([]byte(entry.Response.RawBody), enc).Decoded
-	}
-	if entry.ServerResponse != nil && entry.ServerResponse.RawBody != "" && entry.ServerResponse.Body == "" {
-		ce := entry.ServerResponse.Headers["Content-Encoding"]
-		enc := ""
-		if len(ce) > 0 {
-			enc = ce[0]
-		}
-		entry.ServerResponse.Body = history.DecompressBody([]byte(entry.ServerResponse.RawBody), enc).Decoded
-	}
-
-	if len(entry.Request.Body) > maxBodyLen {
-		entry.Request.Body = entry.Request.Body[:maxBodyLen] + "\n... [truncated - body too large]"
-	}
-	if entry.Response != nil && len(entry.Response.Body) > maxBodyLen {
-		entry.Response.Body = entry.Response.Body[:maxBodyLen] + "\n... [truncated - body too large]"
-	}
-	if entry.ServerResponse != nil && len(entry.ServerResponse.Body) > maxBodyLen {
-		entry.ServerResponse.Body = entry.ServerResponse.Body[:maxBodyLen] + "\n... [truncated - body too large]"
-	}
-
 	binDir := filepath.Join(s.hist().Dir(), "bin")
-
-	if entry.Request.BodyFile != "" {
-		var reqCT string
-		if cts, ok := entry.Request.Headers["Content-Type"]; ok && len(cts) > 0 {
-			reqCT = cts[0]
-		}
-		if strings.Contains(strings.ToLower(reqCT), "multipart/form-data") {
-			if boundary := bodyview.ExtractBoundary(reqCT); boundary != "" {
-				if data, err := os.ReadFile(filepath.Join(binDir, entry.Request.BodyFile)); err == nil {
-					entry.Request.ParsedMultipart = bodyview.ParseMultipartBody(data, boundary)
-				}
-			}
-		}
-		if bodyview.IsProtobufContentType(reqCT) {
-			if data, err := os.ReadFile(filepath.Join(binDir, entry.Request.BodyFile)); err == nil {
-				entry.Request.ParsedProtobuf = bodyview.ParseProtobufWire(data)
-			}
-		}
-	}
-
-	if entry.Request.BodyFile != "" {
-		needHex := entry.Request.IsBinaryBody
-		if !needHex {
-			for _, p := range entry.Request.ParsedMultipart {
-				if p.IsBinary {
-					needHex = true
-					break
-				}
-			}
-		}
-		if needHex {
-			if data, err := os.ReadFile(filepath.Join(binDir, entry.Request.BodyFile)); err == nil {
-				entry.Request.BodyHex = bodyview.GenerateHexDump(data, hexDumpMaxLines)
-			}
-		}
-	}
-	if entry.Response != nil && entry.Response.BodyFile != "" {
-		var respCT string
-		if cts, ok := entry.Response.Headers["Content-Type"]; ok && len(cts) > 0 {
-			respCT = cts[0]
-		}
-		if bodyview.IsProtobufContentType(respCT) {
-			if data, err := os.ReadFile(filepath.Join(binDir, entry.Response.BodyFile)); err == nil {
-				entry.Response.ParsedProtobuf = bodyview.ParseProtobufWire(data)
-			}
-		}
-		if entry.Response.IsBinaryBody {
-			if data, err := os.ReadFile(filepath.Join(binDir, entry.Response.BodyFile)); err == nil {
-				entry.Response.BodyHex = bodyview.GenerateHexDump(data, hexDumpMaxLines)
-			}
-		}
-		if !entry.Response.IsBinaryBody && entry.Response.Body == "" {
-			if preview, ok := bodyview.ReadBodyPreview(filepath.Join(binDir, entry.Response.BodyFile), maxBodyLen); ok {
-				entry.Response.Body = preview
-			}
-		}
-	}
-	if entry.ServerResponse != nil && entry.ServerResponse.BodyFile != "" && entry.ServerResponse.IsBinaryBody {
-		if data, err := os.ReadFile(filepath.Join(binDir, entry.ServerResponse.BodyFile)); err == nil {
-			entry.ServerResponse.BodyHex = bodyview.GenerateHexDump(data, hexDumpMaxLines)
-		}
-	}
+	bodyview.PopulateEntry(entry, binDir, maxBodyLen)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")

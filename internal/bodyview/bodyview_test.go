@@ -442,3 +442,256 @@ func TestResponseBodyForSearchGzip(t *testing.T) {
 		t.Errorf("ResponseBodyForSearch gzip = %q, want search me gzip", got)
 	}
 }
+
+func TestPopulateEntry_Decompress(t *testing.T) {
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
+	w.Write([]byte("gzipped request"))
+	w.Close()
+
+	entry := &history.Entry{
+		Request: history.RequestRecord{
+			RawBody: buf.String(),
+			Headers: map[string][]string{"Content-Encoding": {"gzip"}},
+		},
+	}
+	PopulateEntry(entry, t.TempDir(), 64*1024)
+	if entry.Request.Body != "gzipped request" {
+		t.Errorf("request body = %q, want gzipped request", entry.Request.Body)
+	}
+
+	var rbuf bytes.Buffer
+	rw := gzip.NewWriter(&rbuf)
+	rw.Write([]byte("gzipped response"))
+	rw.Close()
+	entry2 := &history.Entry{
+		Request: history.RequestRecord{},
+		Response: &history.ResponseRecord{
+			RawBody: rbuf.String(),
+			Headers: map[string][]string{"Content-Encoding": {"gzip"}},
+		},
+	}
+	PopulateEntry(entry2, t.TempDir(), 64*1024)
+	if entry2.Response.Body != "gzipped response" {
+		t.Errorf("response body = %q, want gzipped response", entry2.Response.Body)
+	}
+
+	entry3 := &history.Entry{
+		Request: history.RequestRecord{},
+		ServerResponse: &history.ResponseRecord{
+			RawBody: "plain server",
+		},
+	}
+	PopulateEntry(entry3, t.TempDir(), 64*1024)
+	if entry3.ServerResponse.Body != "plain server" {
+		t.Errorf("server response body = %q, want plain server", entry3.ServerResponse.Body)
+	}
+}
+
+func TestPopulateEntry_Truncation(t *testing.T) {
+	long := strings.Repeat("x", 1000)
+	entry := &history.Entry{
+		Request:        history.RequestRecord{Body: long},
+		Response:       &history.ResponseRecord{Body: long},
+		ServerResponse: &history.ResponseRecord{Body: long},
+	}
+	PopulateEntry(entry, t.TempDir(), 100)
+
+	marker := "\n... [truncated - body too large]"
+	if len(entry.Request.Body) != 100+len(marker) {
+		t.Errorf("request body len = %d, want %d", len(entry.Request.Body), 100+len(marker))
+	}
+	if entry.Request.Body[100:] != marker {
+		t.Errorf("request truncation marker = %q", entry.Request.Body[100:])
+	}
+	if len(entry.Response.Body) != 100+len(marker) {
+		t.Errorf("response body len = %d, want %d", len(entry.Response.Body), 100+len(marker))
+	}
+	if len(entry.ServerResponse.Body) != 100+len(marker) {
+		t.Errorf("server response body len = %d, want %d", len(entry.ServerResponse.Body), 100+len(marker))
+	}
+}
+
+func TestPopulateEntry_Multipart(t *testing.T) {
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	os.MkdirAll(binDir, 0o755)
+
+	body := "--BOUND\r\n" +
+		"Content-Disposition: form-data; name=\"text\"\r\n\r\n" +
+		"hello\r\n" +
+		"--BOUND--\r\n"
+	os.WriteFile(filepath.Join(binDir, "req.bin"), []byte(body), 0o644)
+
+	entry := &history.Entry{
+		Request: history.RequestRecord{
+			BodyFile: "req.bin",
+			Headers:  map[string][]string{"Content-Type": {"multipart/form-data; boundary=BOUND"}},
+		},
+	}
+	PopulateEntry(entry, binDir, 64*1024)
+
+	if len(entry.Request.ParsedMultipart) != 1 {
+		t.Fatalf("parsed multipart = %d parts, want 1", len(entry.Request.ParsedMultipart))
+	}
+	if entry.Request.ParsedMultipart[0].Name != "text" {
+		t.Errorf("part name = %q, want text", entry.Request.ParsedMultipart[0].Name)
+	}
+	if entry.Request.ParsedMultipart[0].Value != "hello" {
+		t.Errorf("part value = %q, want hello", entry.Request.ParsedMultipart[0].Value)
+	}
+}
+
+func TestPopulateEntry_Protobuf(t *testing.T) {
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	os.MkdirAll(binDir, 0o755)
+
+	var pbuf []byte
+	pbuf = protowire.AppendTag(pbuf, 1, protowire.VarintType)
+	pbuf = protowire.AppendVarint(pbuf, 42)
+	os.WriteFile(filepath.Join(binDir, "req.pb"), pbuf, 0o644)
+	os.WriteFile(filepath.Join(binDir, "resp.pb"), pbuf, 0o644)
+
+	entry := &history.Entry{
+		Request: history.RequestRecord{
+			BodyFile: "req.pb",
+			Headers:  map[string][]string{"Content-Type": {"application/x-protobuf"}},
+		},
+		Response: &history.ResponseRecord{
+			BodyFile: "resp.pb",
+			Headers:  map[string][]string{"Content-Type": {"application/x-protobuf"}},
+		},
+	}
+	PopulateEntry(entry, binDir, 64*1024)
+
+	if len(entry.Request.ParsedProtobuf) != 1 {
+		t.Fatalf("request protobuf fields = %d, want 1", len(entry.Request.ParsedProtobuf))
+	}
+	if entry.Request.ParsedProtobuf[0].Value.(uint32) != 42 {
+		t.Errorf("request protobuf value = %v, want 42", entry.Request.ParsedProtobuf[0].Value)
+	}
+	if len(entry.Response.ParsedProtobuf) != 1 {
+		t.Fatalf("response protobuf fields = %d, want 1", len(entry.Response.ParsedProtobuf))
+	}
+}
+
+func TestPopulateEntry_BinaryHex(t *testing.T) {
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	os.MkdirAll(binDir, 0o755)
+
+	binData := []byte{0xde, 0xad, 0xbe, 0xef}
+	os.WriteFile(filepath.Join(binDir, "bin.req"), binData, 0o644)
+	os.WriteFile(filepath.Join(binDir, "bin.resp"), binData, 0o644)
+	os.WriteFile(filepath.Join(binDir, "bin.srv"), binData, 0o644)
+
+	entry := &history.Entry{
+		Request: history.RequestRecord{
+			BodyFile:     "bin.req",
+			IsBinaryBody: true,
+		},
+		Response: &history.ResponseRecord{
+			BodyFile:     "bin.resp",
+			IsBinaryBody: true,
+		},
+		ServerResponse: &history.ResponseRecord{
+			BodyFile:     "bin.srv",
+			IsBinaryBody: true,
+		},
+	}
+	PopulateEntry(entry, binDir, 64*1024)
+
+	if entry.Request.BodyHex == "" {
+		t.Error("request BodyHex should not be empty")
+	}
+	if entry.Response.BodyHex == "" {
+		t.Error("response BodyHex should not be empty")
+	}
+	if entry.ServerResponse.BodyHex == "" {
+		t.Error("server response BodyHex should not be empty")
+	}
+	if !strings.Contains(entry.Request.BodyHex, "de ad be ef") {
+		t.Errorf("request hex should contain 'de ad be ef', got %q", entry.Request.BodyHex)
+	}
+}
+
+func TestPopulateEntry_ServerResponseBinary(t *testing.T) {
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	os.MkdirAll(binDir, 0o755)
+
+	os.WriteFile(filepath.Join(binDir, "srv.bin"), []byte{0xca, 0xfe}, 0o644)
+
+	entry := &history.Entry{
+		Request: history.RequestRecord{},
+		ServerResponse: &history.ResponseRecord{
+			BodyFile:     "srv.bin",
+			IsBinaryBody: true,
+		},
+	}
+	PopulateEntry(entry, binDir, 64*1024)
+
+	if entry.ServerResponse.BodyHex == "" {
+		t.Error("server response BodyHex should not be empty for binary body")
+	}
+}
+
+func TestPopulateEntry_ResponsePreview(t *testing.T) {
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	os.MkdirAll(binDir, 0o755)
+
+	os.WriteFile(filepath.Join(binDir, "resp.txt"), []byte("file content here"), 0o644)
+
+	entry := &history.Entry{
+		Request: history.RequestRecord{},
+		Response: &history.ResponseRecord{
+			BodyFile:     "resp.txt",
+			IsBinaryBody: false,
+		},
+	}
+	PopulateEntry(entry, binDir, 64*1024)
+
+	if entry.Response.Body != "file content here" {
+		t.Errorf("response body from file = %q, want file content here", entry.Response.Body)
+	}
+	if entry.Response.BodyHex != "" {
+		t.Error("non-binary response should not have BodyHex")
+	}
+}
+
+func TestPopulateEntry_EmptyBodyFile(t *testing.T) {
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	os.MkdirAll(binDir, 0o755)
+
+	entry := &history.Entry{
+		Request: history.RequestRecord{
+			BodyFile: "nonexistent.bin",
+			Headers:  map[string][]string{"Content-Type": {"application/json"}},
+		},
+	}
+	PopulateEntry(entry, binDir, 64*1024)
+
+	if entry.Request.BodyHex != "" {
+		t.Error("missing file should not produce hex")
+	}
+	if entry.Request.ParsedMultipart != nil {
+		t.Error("missing file should not produce multipart")
+	}
+}
+
+func TestPopulateEntry_NoBodyFile(t *testing.T) {
+	entry := &history.Entry{
+		Request: history.RequestRecord{Body: "inline"},
+	}
+	PopulateEntry(entry, t.TempDir(), 64*1024)
+
+	if entry.Request.Body != "inline" {
+		t.Errorf("request body = %q, want inline", entry.Request.Body)
+	}
+	if entry.Request.BodyHex != "" {
+		t.Error("no BodyFile should produce no hex")
+	}
+}

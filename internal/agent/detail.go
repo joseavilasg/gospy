@@ -9,7 +9,6 @@ import (
 )
 
 const (
-	hexDumpMaxLines = 20
 	// maxBodyPreview caps the body text loaded from a file for the agent MCP.
 	// 64 KB keeps context usage reasonable while covering most JSON/HTML
 	// responses; larger bodies get a truncation marker.
@@ -78,5 +77,5 @@ func readHexDump(dir, bodyFile string) string {
 	if err != nil {
 		return ""
 	}
-	return bodyview.GenerateHexDump(data, hexDumpMaxLines)
+	return bodyview.GenerateHexDump(data, bodyview.HexDumpMaxLines)
 }

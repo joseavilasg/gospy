@@ -1,10 +1,12 @@
 // Package bodyview analyzes raw HTTP request/response bodies for display:
-// type detection, structured parsing of protobuf and multipart payloads, and
-// hex dump rendering.
+// type detection, structured parsing of protobuf and multipart payloads, hex
+// dump rendering, and entry-level hydration (decompression, truncation,
+// structured parsing of file-backed bodies).
 //
-// The functions are pure (they operate on []byte/string inputs, with no
-// filesystem or network access), so they are shared by the WebUI detail view
-// and the agent MCP's get_entry without duplication.
+// The pure functions operate on []byte/string inputs with no filesystem or
+// network access, so they are shared by the WebUI detail view and the agent
+// MCP's get_entry. PopulateEntry reads body files to hydrate an entry's
+// display fields and lives here because the hydration logic is shared.
 package bodyview
 
 import (
@@ -358,4 +360,108 @@ func ReadRawPreview(path string, limit int) (string, bool) {
 func ReadBodyFile(dir, bodyFile string, limit int) string {
 	preview, _ := ReadBodyPreview(filepath.Join(dir, "bin", bodyFile), limit)
 	return preview
+}
+
+// HexDumpMaxLines is the default line cap for hex dumps rendered alongside
+// binary or multipart entries in both the WebUI detail view and the agent MCP.
+const HexDumpMaxLines = 20
+
+// PopulateEntry hydrates an entry's display fields from raw body data on disk.
+// It decompresses inline RawBody → Body, truncates bodies to maxBodyLen, parses
+// multipart and protobuf payloads from file-backed bodies, and generates hex
+// dumps for binary content. binDir is the directory containing the body files
+// (history root + "/bin").
+func PopulateEntry(entry *history.Entry, binDir string, maxBodyLen int) {
+	decompressRecord := func(raw string, headers map[string][]string, current string) string {
+		if raw == "" || current != "" {
+			return current
+		}
+		return DecodeBody(raw, headers)
+	}
+
+	entry.Request.Body = decompressRecord(entry.Request.RawBody, entry.Request.Headers, entry.Request.Body)
+
+	if entry.Response != nil {
+		entry.Response.Body = decompressRecord(entry.Response.RawBody, entry.Response.Headers, entry.Response.Body)
+	}
+	if entry.ServerResponse != nil {
+		entry.ServerResponse.Body = decompressRecord(entry.ServerResponse.RawBody, entry.ServerResponse.Headers, entry.ServerResponse.Body)
+	}
+
+	truncate := func(s string) string {
+		if len(s) > maxBodyLen {
+			return s[:maxBodyLen] + "\n... [truncated - body too large]"
+		}
+		return s
+	}
+	entry.Request.Body = truncate(entry.Request.Body)
+	if entry.Response != nil {
+		entry.Response.Body = truncate(entry.Response.Body)
+	}
+	if entry.ServerResponse != nil {
+		entry.ServerResponse.Body = truncate(entry.ServerResponse.Body)
+	}
+
+	if entry.Request.BodyFile != "" {
+		reqCT := firstContentType(entry.Request.Headers)
+		if strings.Contains(strings.ToLower(reqCT), "multipart/form-data") {
+			if boundary := ExtractBoundary(reqCT); boundary != "" {
+				if data, err := os.ReadFile(filepath.Join(binDir, entry.Request.BodyFile)); err == nil {
+					entry.Request.ParsedMultipart = ParseMultipartBody(data, boundary)
+				}
+			}
+		}
+		if IsProtobufContentType(reqCT) {
+			if data, err := os.ReadFile(filepath.Join(binDir, entry.Request.BodyFile)); err == nil {
+				entry.Request.ParsedProtobuf = ParseProtobufWire(data)
+			}
+		}
+
+		needHex := entry.Request.IsBinaryBody
+		if !needHex {
+			for _, p := range entry.Request.ParsedMultipart {
+				if p.IsBinary {
+					needHex = true
+					break
+				}
+			}
+		}
+		if needHex {
+			if data, err := os.ReadFile(filepath.Join(binDir, entry.Request.BodyFile)); err == nil {
+				entry.Request.BodyHex = GenerateHexDump(data, HexDumpMaxLines)
+			}
+		}
+	}
+
+	if entry.Response != nil && entry.Response.BodyFile != "" {
+		respCT := firstContentType(entry.Response.Headers)
+		if IsProtobufContentType(respCT) {
+			if data, err := os.ReadFile(filepath.Join(binDir, entry.Response.BodyFile)); err == nil {
+				entry.Response.ParsedProtobuf = ParseProtobufWire(data)
+			}
+		}
+		if entry.Response.IsBinaryBody {
+			if data, err := os.ReadFile(filepath.Join(binDir, entry.Response.BodyFile)); err == nil {
+				entry.Response.BodyHex = GenerateHexDump(data, HexDumpMaxLines)
+			}
+		}
+		if !entry.Response.IsBinaryBody && entry.Response.Body == "" {
+			if preview, ok := ReadBodyPreview(filepath.Join(binDir, entry.Response.BodyFile), maxBodyLen); ok {
+				entry.Response.Body = preview
+			}
+		}
+	}
+
+	if entry.ServerResponse != nil && entry.ServerResponse.BodyFile != "" && entry.ServerResponse.IsBinaryBody {
+		if data, err := os.ReadFile(filepath.Join(binDir, entry.ServerResponse.BodyFile)); err == nil {
+			entry.ServerResponse.BodyHex = GenerateHexDump(data, HexDumpMaxLines)
+		}
+	}
+}
+
+func firstContentType(headers map[string][]string) string {
+	if cts, ok := headers["Content-Type"]; ok && len(cts) > 0 {
+		return cts[0]
+	}
+	return ""
 }
