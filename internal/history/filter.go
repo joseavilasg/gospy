@@ -201,10 +201,10 @@ func RefererOrigin(referer string) string {
 }
 
 func processName(le *ListEntry) string {
-	if le.ClientDisplayName != "" {
-		return le.ClientDisplayName
+	if le.ClientProcess != "" {
+		return le.ClientProcess
 	}
-	return le.ClientProcess
+	return le.ClientDisplayName
 }
 
 func matchesText(le *ListEntry, text string) bool {
