@@ -374,6 +374,8 @@ header .stats {
   height: var(--ctrl-h);
   padding: 0 var(--sp-8);
   font-size: var(--fs-md);
+  min-width: 0;
+  overflow: hidden;
 }
 
 .filter-chip:hover {
