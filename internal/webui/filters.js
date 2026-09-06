@@ -310,7 +310,7 @@ const STEP2_RENDERERS = {
     const row = (label, id, value) => `<div class="filter-range-row">
                 <label>${label}</label>
                 <div class="filter-range-inputs">
-                    <input type="datetime-local" id="${id}" class="modal-filter-input" value="${escapeHtml(value || '')}">
+                    <input type="datetime-local" id="${id}" class="modal-filter-input" step="0.001" value="${escapeHtml(value || '')}">
                     <button type="button" class="filter-range-btn" data-now="${id}" title="Set to current time" aria-label="Now">${clockSVG}</button>
                     <button type="button" class="filter-range-btn filter-range-clear" data-clear="${id}" title="Clear this value" aria-label="Clear">${clearSVG}</button>
                 </div>
@@ -328,9 +328,9 @@ const STEP2_RENDERERS = {
 function setInputNow(id) {
   const input = document.getElementById(id);
   if (!input) return;
-  const pad = n => String(n).padStart(2, '0');
+  const pad = (n, w = 2) => String(n).padStart(w, '0');
   const d = new Date();
-  input.value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  input.value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
 }
 
 function showStep2(config) {
@@ -627,7 +627,7 @@ registerFilter({
     const fmt = v => {
       if (!v) return '∞';
       const d = new Date(v);
-      return isNaN(d) ? v : d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      return isNaN(d) ? v : d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
     };
     return `<span class="filter-chip grouped" data-type="date">
             <span class="filter-chip-label">Time:</span>

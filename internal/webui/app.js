@@ -1856,8 +1856,6 @@ function renderFilterChips() {
     return;
   }
 
-  closeOverflowPanel();
-
   if (chips.length > 1) {
     const chipCount = chips.filter(c => c.type !== 'connector').length;
     if (chipCount > 1) {

@@ -476,6 +476,12 @@ func TestParseFilterTime(t *testing.T) {
 	if _, err := ParseFilterTime("2026-08-02T14:30:00-03:00"); err != nil {
 		t.Errorf("RFC3339 with offset: %v", err)
 	}
+	if _, err := ParseFilterTime("2026-08-02T14:30:05"); err != nil {
+		t.Errorf("seconds format: %v", err)
+	}
+	if _, err := ParseFilterTime("2026-08-02T14:30:05.123"); err != nil {
+		t.Errorf("milliseconds format: %v", err)
+	}
 	if _, err := ParseFilterTime("bogus"); err == nil {
 		t.Error("malformed input must error")
 	}

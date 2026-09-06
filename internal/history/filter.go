@@ -1,6 +1,7 @@
 package history
 
 import (
+	"fmt"
 	"net/url"
 	"sort"
 	"strconv"
@@ -90,14 +91,27 @@ func (f *Filters) inTimeRange(ts time.Time) bool {
 }
 
 // ParseFilterTime parses a filter time bound. It accepts an RFC3339 instant
-// (any zone, e.g. what an agent sends) and falls back to a local wall-clock
-// "2006-01-02T15:04" (what the WebUI's datetime-local inputs send) interpreted
-// in the system time zone.
+// (any zone, e.g. what an agent sends) and falls back to local wall-clock
+// formats used by the WebUI's datetime-local inputs:
+//   - "2006-01-02T15:04:05.000" (with seconds and milliseconds)
+//   - "2006-01-02T15:04:05" (with seconds)
+//   - "2006-01-02T15:04" (minutes only)
+//
+// All local formats are interpreted in the system time zone.
 func ParseFilterTime(s string) (time.Time, error) {
 	if t, err := time.Parse(time.RFC3339, s); err == nil {
 		return t, nil
 	}
-	return time.ParseInLocation("2006-01-02T15:04", s, time.Local)
+	for _, layout := range []string{
+		"2006-01-02T15:04:05.000",
+		"2006-01-02T15:04:05",
+		"2006-01-02T15:04",
+	} {
+		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("parse filter time %q: unsupported format", s)
 }
 
 // Empty reports whether no filter criteria are active (used for the agent
