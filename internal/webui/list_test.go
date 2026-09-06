@@ -574,6 +574,61 @@ func TestSearchCommitsBodyIDs(t *testing.T) {
 	}
 }
 
+func TestSearchAllModeRestrictsScanToFilteredEntries(t *testing.T) {
+	s, _, _ := newTestServer(t)
+
+	mk := func(host, reqBody string) *history.Entry {
+		e := &history.Entry{
+			Request: history.RequestRecord{
+				Method:  "GET",
+				URL:     "http://" + host + "/path",
+				Host:    host,
+				Headers: map[string][]string{},
+				Body:    reqBody,
+			},
+		}
+		if err := s.hist().Save(e); err != nil {
+			t.Fatalf("Save: %v", err)
+		}
+		return e
+	}
+
+	mk("a.com", "needle in haystack")
+	mk("b.com", "another needle here")
+	mk("c.com", "needle is here too")
+
+	// Set host filter to only a.com, match mode "all".
+	s.filterStore.Set(history.Filters{
+		Host:      []string{"a.com"},
+		MatchMode: "all",
+	}, false)
+
+	req := httptest.NewRequest("POST", "/api/requests/search", bytes.NewBufferString(`{"q":"needle"}`))
+	w := httptest.NewRecorder()
+	s.handleSearch(w, req)
+
+	// In "all" mode, only a.com entry should match (needle + host=a.com).
+	f, _, _ := s.filterStore.Snapshot()
+	if len(f.Body) != 1 {
+		t.Fatalf("all mode: expected 1 body ID (a.com only), got %d: %v", len(f.Body), f.Body)
+	}
+
+	// Now switch to "any" mode — needle matches all three entries via body OR host.
+	s.filterStore.Set(history.Filters{
+		Host:      []string{"a.com"},
+		MatchMode: "any",
+	}, false)
+
+	req = httptest.NewRequest("POST", "/api/requests/search", bytes.NewBufferString(`{"q":"needle"}`))
+	w = httptest.NewRecorder()
+	s.handleSearch(w, req)
+
+	f, _, _ = s.filterStore.Snapshot()
+	if len(f.Body) != 3 {
+		t.Fatalf("any mode: expected 3 body IDs (all universe), got %d: %v", len(f.Body), f.Body)
+	}
+}
+
 func TestClearBodyFilter(t *testing.T) {
 	s, _, _ := newTestServer(t)
 	s.filterStore.SetBodyIDs([]string{"e1"}, 1)

@@ -1034,6 +1034,24 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	s.filterStore.SetBodyIDsFor(profile, nil, token)
 
 	entries := s.listSummary()
+
+	// In "all" match mode, restrict the scan to entries already matching all
+	// non-body filters — the final intersection is identical but avoids reading
+	// body files for entries that would be filtered out anyway. In "any" mode
+	// the body search is one independent OR-leg, so the full universe is needed.
+	if filters, focusEnabled, _ := s.filterStore.Snapshot(); filters.MatchMode != "any" {
+		bodyless := filters
+		bodyless.Body = nil
+		opts := s.matchOpts(focusEnabled)
+		kept := entries[:0]
+		for _, le := range entries {
+			if bodyless.Matches(le, opts) {
+				kept = append(kept, le)
+			}
+		}
+		entries = kept
+	}
+
 	enc := json.NewEncoder(w)
 	var ids []string
 	scanned := 0
